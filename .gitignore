@@ -1,0 +1,13 @@
+# Claude Code 配置目录
+.claude/
+
+# Claude 文档目录（仅本地使用）
+claudedocs/
+
+# Xray 官方文档目录（仅本地使用）
+/docs/
+
+AGENTS.md 
+DEVELOPMENT_GUIDE.md
+claude.md
+IMPLEMENTATION_PLAN.md

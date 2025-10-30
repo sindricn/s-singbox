@@ -4,10 +4,24 @@
 # Claude 文档目录（仅本地使用）
 claudedocs/
 
-# Xray 官方文档目录（仅本地使用）
-/docs/
-
-AGENTS.md 
+# 临时开发文档（不提交到仓库）
+AGENTS.md
 DEVELOPMENT_GUIDE.md
-claude.md
 IMPLEMENTATION_PLAN.md
+
+# 数据文件（包含敏感信息）
+data/*.json
+
+# 日志文件
+*.log
+logs/
+
+# 临时文件
+*.tmp
+*.swp
+*~
+
+# IDE配置
+.vscode/
+.idea/
+*.sublime-*

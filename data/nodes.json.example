@@ -1,0 +1,52 @@
+{
+  "nodes": [
+    {
+      "port": "443",
+      "protocol": "trojan",
+      "transport": "tcp",
+      "security": "tls",
+      "listen": "0.0.0.0",
+      "tag": "trojan-443",
+      "extra": {
+        "tls": {
+          "server_name": "example.com",
+          "certificate_path": "/usr/local/singbox/certs/example.com.crt",
+          "key_path": "/usr/local/singbox/certs/example.com.key"
+        }
+      },
+      "created_at": "2024-01-01T00:00:00Z"
+    },
+    {
+      "port": "8443",
+      "protocol": "hysteria2",
+      "transport": "udp",
+      "security": "tls",
+      "listen": "0.0.0.0",
+      "tag": "hysteria2-8443",
+      "extra": {
+        "tls": {
+          "server_name": "example.com",
+          "certificate_path": "/usr/local/singbox/certs/example.com.crt",
+          "key_path": "/usr/local/singbox/certs/example.com.key"
+        },
+        "obfs": {
+          "type": "salamander",
+          "password": "obfs-password"
+        }
+      },
+      "created_at": "2024-01-01T00:00:00Z"
+    },
+    {
+      "port": "1080",
+      "protocol": "shadowsocks",
+      "transport": "tcp",
+      "security": "none",
+      "listen": "0.0.0.0",
+      "tag": "ss-1080",
+      "extra": {
+        "method": "aes-128-gcm"
+      },
+      "created_at": "2024-01-01T00:00:00Z"
+    }
+  ]
+}

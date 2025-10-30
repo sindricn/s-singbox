@@ -1,43 +1,56 @@
-# sing-box Manager
+# s-singbox
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Shell](https://img.shields.io/badge/shell-bash-green.svg)](https://www.gnu.org/software/bash/)
 [![sing-box](https://img.shields.io/badge/sing--box-compatible-orange.svg)](https://sing-box.sagernet.org/)
 
-一个功能完整的 sing-box 服务管理工具，提供用户管理、节点配置、订阅服务、证书管理等功能。
+基于 sing-box 的代理服务管理工具 - 命令行界面，简单易用
 
-## ✨ 主要功能
+## ✨ 功能特性
 
-- 🔐 **用户管理** - 多用户支持，用户流量统计和限制
-- 🌐 **节点管理** - 支持多种协议（VLESS, Shadowsocks, Hysteria2, Naive, Tuic）
-- 📡 **订阅服务** - 自动生成订阅链接和配置文件
-- 🔒 **证书管理** - 自动申请和续期 SSL/TLS 证书
+### 协议支持
+
+支持 8 种主流代理协议：
+
+- **Shadowsocks** - 经典代理协议
+- **Trojan** - TLS 伪装协议
+- **Hysteria2** - 基于 QUIC 的高性能协议
+- **TUIC** - UDP 优化协议
+- **Naive** - 基于 Chromium 的抗检测协议
+- **VMess** - V2Ray 经典协议
+- **VLESS** - 轻量级高性能协议
+- **ShadowTLS** - TLS 流量伪装
+
+### 核心功能
+
+- 🔐 **用户管理** - 多用户支持，流量限制，到期时间管理
+- 🌐 **节点管理** - 添加/删除/修改节点，支持多种协议
+- 🔗 **用户绑定** - 灵活的用户-节点绑定关系
+- 🔒 **证书管理** - 自动申请和续期 SSL/TLS 证书（acme.sh）
+- 🌍 **域名管理** - 域名配置和证书关联
+- 📡 **订阅管理** - 从订阅链接导入节点
+- 📊 **流量监控** - 实时流量统计和用户监控
 - 🔥 **防火墙管理** - 自动配置防火墙规则
-- 📊 **流量监控** - 实时流量统计和监控
-- 🎯 **域名管理** - 域名配置和解析管理
-- ⚙️ **配置生成** - 智能配置文件生成和验证
+- ⚙️ **出站规则** - 路由规则和分流管理
+- 🔧 **配置管理** - 自动生成和验证配置文件
 
 ## 🚀 快速开始
 
 ### 一键安装
 
+**方式一：直接安装（推荐）**
+
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/sindricn/s-singbox/main/docs/installation/tools/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/sindricn/s-singbox/main/install.sh)
 ```
 
 或使用 wget：
 
 ```bash
-bash <(wget -qO- https://raw.githubusercontent.com/sindricn/s-singbox/main/docs/installation/tools/install.sh)
+bash <(wget -qO- https://raw.githubusercontent.com/sindricn/s-singbox/main/install.sh)
 ```
 
-### 系统要求
-
-- 操作系统: Linux (推荐 Ubuntu 20.04+, Debian 10+, CentOS 8+)
-- 权限: root 或 sudo
-- 依赖: `jq`, `systemctl`
-
-### 手动安装
+**方式二：克隆后安装**
 
 ```bash
 # 克隆仓库
@@ -45,273 +58,257 @@ git clone https://github.com/sindricn/s-singbox.git
 cd s-singbox
 
 # 运行安装脚本
-sudo bash docs/installation/tools/install.sh
+sudo bash install.sh
 ```
 
-### 发行版专用安装
+安装脚本会自动完成：
+- 安装系统依赖（curl, wget, tar, jq）
+- 下载并安装 sing-box 内核
+- 配置 systemd 服务
+- 初始化数据文件
 
-**Debian/Ubuntu**
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/sindricn/s-singbox/main/docs/installation/tools/deb-install.sh)
-```
+### 系统要求
 
-**RHEL/CentOS**
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/sindricn/s-singbox/main/docs/installation/tools/rpm-install.sh)
-```
+- **操作系统**: Linux (Ubuntu 20.04+, Debian 10+, CentOS 8+, Arch Linux)
+- **权限**: root 或 sudo
+- **依赖**: curl, wget, tar, jq, systemctl
 
-**Arch Linux**
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/sindricn/s-singbox/main/docs/installation/tools/arch-install.sh)
-```
+## 📖 使用方法
 
-### 基本使用
+### 启动管理工具
 
 ```bash
-# 启动管理工具
-sudo singbox-manager
+# 使用命令
+singbox-manager
 
 # 或直接运行脚本
-sudo /path/to/singbox-manager.sh
-
-# 主菜单选项：
-# 1. 用户管理
-# 2. 节点管理
-# 3. 订阅管理
-# 4. 证书管理
-# 5. 防火墙管理
-# 6. 流量监控
-# 7. 配置管理
-# 8. 系统设置
+./singbox-manager.sh
 ```
 
-## 📖 功能详解
+### 基本操作流程
 
-### 用户管理
+#### 1. 添加节点
 
-- ✅ 创建/删除用户
-- ✅ 设置流量限制
-- ✅ 查看用户流量统计
-- ✅ 用户与节点绑定
-- ✅ 批量用户操作
+进入管理工具主菜单：
 
-### 节点管理
+```
+主菜单 -> 节点管理 -> 添加节点
+```
 
-支持的协议：
+根据提示选择协议类型并配置参数：
+- 端口号
+- 传输协议
+- 加密方式
+- TLS 配置（如需要）
 
-| 协议 | 描述 | 特点 |
-|------|------|------|
-| **VLESS** | 基于 TLS 的轻量级协议 | 低延迟，高性能 |
-| **Shadowsocks** | 经典的代理协议 | 兼容性好，稳定 |
-| **Hysteria2** | 基于 QUIC 的高性能协议 | 拥塞控制优秀 |
-| **Naive** | 基于 Chromium 网络栈 | 抗检测能力强 |
-| **Tuic** | UDP 优化协议 | 低延迟传输 |
+#### 2. 添加用户
 
-### 订阅服务
+```
+主菜单 -> 用户管理 -> 添加用户
+```
 
-- 🔗 自动生成订阅链接
-- 📱 支持多种客户端格式
-- 🔐 订阅链接加密和保护
-- 🔄 一键更新订阅配置
+配置用户信息：
+- 用户名
+- 邮箱
+- 流量限制（可选）
+- 到期时间（可选）
+
+#### 3. 绑定用户到节点
+
+```
+主菜单 -> 绑定管理 -> 绑定用户
+```
+
+选择用户和节点进行绑定，用户只能使用已绑定的节点。
+
+#### 4. 生成配置并启动服务
+
+```
+主菜单 -> 配置管理 -> 生成配置
+主菜单 -> 服务控制 -> 启动服务
+```
+
+配置会自动生成并验证，然后启动 sing-box 服务。
 
 ### 证书管理
 
-- 🤖 ACME 自动证书申请
-- ⏰ 证书自动续期
-- ✅ 支持 Let's Encrypt
-- 🌐 域名验证管理
-
-## 🗂️ 项目结构
+#### 申请证书
 
 ```
-s-singbox/
-├── singbox-manager.sh          # 主入口脚本
-├── modules/                    # 功能模块
-│   ├── user.sh                # 用户管理
-│   ├── user_node_binding.sh   # 用户节点绑定
-│   ├── node.sh                # 节点管理
-│   ├── subscription.sh        # 订阅服务
-│   ├── cert.sh                # 证书管理
-│   ├── firewall.sh            # 防火墙管理
-│   ├── monitor.sh             # 流量监控
-│   ├── domain.sh              # 域名管理
-│   ├── config_generator.sh    # 配置生成
-│   ├── outbound.sh            # 出站配置
-│   └── singbox_api.sh         # API 接口
-├── templates/                  # 配置模板
-│   ├── base_config.json       # 基础配置
-│   └── protocols/             # 协议模板
-│       ├── hysteria2.json
-│       ├── naive.json
-│       ├── shadowsocks.json
-│       ├── tuic.json
-│       └── vless.json
-├── data/                       # 数据文件
-│   ├── users.json             # 用户数据
-│   ├── nodes.json             # 节点数据
-│   └── domains.json           # 域名数据
-├── docs/                       # 文档
-│   └── installation/          # 安装脚本
-│       └── tools/
-│           ├── install.sh     # 通用安装
-│           ├── deb-install.sh # Debian/Ubuntu
-│           ├── rpm-install.sh # RHEL/CentOS
-│           └── arch-install.sh # Arch Linux
-└── uninstall.sh               # 卸载脚本
+主菜单 -> 证书管理 -> 申请证书
 ```
 
-## ⚙️ 配置说明
+支持两种验证方式：
+- **HTTP-01** - 适用于单域名，需要开放 80 端口
+- **DNS API** - 适用于通配符域名，支持 Cloudflare、阿里云等
 
-### 默认路径
+#### 自动续期
 
-```bash
-配置目录: /usr/local/singbox/
-配置文件: /usr/local/singbox/config.json
-可执行文件: /usr/local/bin/sing-box
-日志文件: /var/log/singbox/singbox.log
-数据目录: ./data/
+证书会自动检测并续期，无需手动操作。
+
+### 订阅管理
+
+#### 添加订阅
+
+```
+主菜单 -> 订阅管理 -> 添加订阅
 ```
 
-### 配置文件
+输入订阅链接，系统会自动：
+- 拉取订阅内容
+- 解析节点信息
+- 添加到节点列表
 
-主配置文件位于 `/usr/local/singbox/config.json`，由配置生成器自动生成和管理。
+#### 更新订阅
 
-支持的配置项：
-- 日志级别和输出
-- DNS 服务器配置
-- 入站/出站规则
-- 路由策略
-- 协议参数
+```
+主菜单 -> 订阅管理 -> 更新订阅
+```
 
-## 🔧 高级功能
-
-### API 调用
-
-项目包含 sing-box API 模块，支持：
-- 📊 流量统计查询
-- 🔌 连接状态监控
-- ⚙️ 动态配置更新
-- 👥 用户在线状态
-
-### 防火墙规则
-
-自动配置防火墙规则：
-- 🔓 开放必要端口
-- 🔄 配置 NAT 转发
-- 🛡️ IP 黑白名单管理
-- 🚫 DDoS 防护
+重新拉取订阅并更新节点配置。
 
 ### 流量监控
 
-实时监控功能：
-- 📈 用户流量统计
-- 🌐 节点流量分析
-- 💻 系统资源监控
-- ⏱️ 实时速率显示
+```
+主菜单 -> 监控统计 -> 查看流量统计
+```
 
-## 🛠️ 故障排除
+查看：
+- 用户流量使用情况
+- 节点流量统计
+- 在线用户列表
 
-### 常见问题
+### 配置备份与恢复
 
-**1. sing-box 服务无法启动**
+#### 创建备份
+
 ```bash
-# 检查配置文件语法
-sing-box check -c /usr/local/singbox/config.json
+./scripts/backup.sh create
+```
 
-# 查看服务状态
+#### 恢复备份
+
+```bash
+./scripts/backup.sh restore
+```
+
+### 系统诊断
+
+```bash
+./scripts/diagnose.sh
+```
+
+检查：
+- 系统环境和依赖
+- sing-box 安装状态
+- 配置文件有效性
+- 服务运行状态
+- 网络和防火墙
+
+## 🛠️ 常用命令
+
+### 服务管理
+
+```bash
+# 启动服务
+systemctl start sing-box
+
+# 停止服务
+systemctl stop sing-box
+
+# 重启服务
+systemctl restart sing-box
+
+# 查看状态
 systemctl status sing-box
 
 # 查看日志
 journalctl -u sing-box -f
 ```
 
-**2. 证书申请失败**
-- ✅ 检查域名解析是否正确
-- ✅ 确保 80/443 端口开放
-- ✅ 验证域名所有权
-- ✅ 检查防火墙规则
-
-**3. 流量统计不准确**
-```bash
-# 重启监控服务
-systemctl restart sing-box
-
-# 清除缓存
-rm -f /tmp/singbox_stats.cache
-```
-
-**4. 订阅链接无法访问**
-- ✅ 检查订阅服务是否启用
-- ✅ 验证域名和端口配置
-- ✅ 检查 SSL 证书有效性
-
-### 卸载
+### 配置验证
 
 ```bash
-# 运行卸载脚本
-sudo bash /path/to/s-singbox/uninstall.sh
-
-# 或一键卸载
-bash <(curl -fsSL https://raw.githubusercontent.com/sindricn/s-singbox/main/uninstall.sh)
+# 验证配置文件
+sing-box check -c /usr/local/singbox/config.json
 ```
 
-## 📝 开发计划
+### 防火墙管理
 
-- [ ] Web 管理界面
-- [ ] 多服务器集群管理
-- [ ] 更多协议支持（Trojan, VMess）
-- [ ] 数据库后端支持（MySQL, PostgreSQL）
-- [ ] Docker 容器化部署
-- [ ] 用户自助面板
-- [ ] 多语言支持
+```bash
+# Ubuntu/Debian (UFW)
+ufw allow 端口号/tcp
+ufw allow 端口号/udp
 
-## 🤝 贡献
+# CentOS/RHEL (firewalld)
+firewall-cmd --permanent --add-port=端口号/tcp
+firewall-cmd --permanent --add-port=端口号/udp
+firewall-cmd --reload
+```
 
-欢迎贡献代码、报告问题或提出新功能建议！
+## 🐛 故障排除
 
-### 贡献流程
+### 服务无法启动
 
-1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 开启 Pull Request
+```bash
+# 1. 检查配置文件
+sing-box check -c /usr/local/singbox/config.json
 
-### 代码规范
+# 2. 查看详细日志
+journalctl -u sing-box -n 50 --no-pager
 
-- 使用 Bash 编写，遵循 ShellCheck 规范
-- 添加必要的注释和文档
-- 保持代码简洁和可读性
-- 测试后再提交
+# 3. 运行诊断脚本
+./scripts/diagnose.sh
+```
+
+### 端口被占用
+
+```bash
+# 查看端口占用
+ss -tuln | grep :端口号
+
+# 或
+netstat -tuln | grep :端口号
+```
+
+### 证书问题
+
+- 确保域名解析正确指向服务器
+- 检查 80 端口是否开放（HTTP-01 验证）
+- 查看 acme.sh 日志：`~/.acme.sh/acme.sh.log`
+
+### 配置文件损坏
+
+```bash
+# 恢复最近的备份
+./scripts/backup.sh restore
+```
+
+## 🗑️ 卸载
+
+```bash
+sudo bash uninstall.sh
+```
+
+卸载过程会询问是否保留配置和数据文件。
+
+## 📚 更多资源
+
+- **sing-box 官方文档**: https://sing-box.sagernet.org/
+- **项目 Issues**: https://github.com/sindricn/s-singbox/issues
+- **项目 Discussions**: https://github.com/sindricn/s-singbox/discussions
 
 ## 📄 许可证
 
-本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
+MIT License - 详见 [LICENSE](LICENSE)
 
 ## ⚠️ 免责声明
 
 本工具仅供学习和研究使用。使用者需遵守当地法律法规，开发者不对使用本工具产生的任何后果负责。
 
-## 🙏 致谢
-
-- [sing-box](https://sing-box.sagernet.org/) - 核心代理工具
-- 所有贡献者和用户的支持
-
-## 📮 联系方式
-
-- **Issues**: [GitHub Issues](https://github.com/sindricn/s-singbox/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/sindricn/s-singbox/discussions)
-- **项目主页**: [https://github.com/sindricn/s-singbox](https://github.com/sindricn/s-singbox)
-
-## 📊 Star History
-
-如果这个项目对你有帮助，请给一个 ⭐️ Star 支持一下！
-
 ---
 
 <div align="center">
-
-**[快速开始](#-快速开始)** • **[功能详解](#-功能详解)** • **[故障排除](#-故障排除)** • **[贡献指南](#-贡献)**
 
 Made with ❤️ by [sindricn](https://github.com/sindricn)
 

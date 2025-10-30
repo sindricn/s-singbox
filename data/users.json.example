@@ -1,0 +1,26 @@
+{
+  "users": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "username": "admin",
+      "email": "admin@local",
+      "password": "strong-password-here",
+      "level": 0,
+      "enabled": true,
+      "created_at": "2024-01-01T00:00:00Z",
+      "traffic_limit": 0,
+      "expire_time": ""
+    },
+    {
+      "id": "660e8400-e29b-41d4-a716-446655440001",
+      "username": "user1",
+      "email": "user1@example.com",
+      "password": "user1-password",
+      "level": 1,
+      "enabled": true,
+      "created_at": "2024-01-01T00:00:00Z",
+      "traffic_limit": 107374182400,
+      "expire_time": "2024-12-31T23:59:59Z"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "type": "vless",
+  "tag": "",
+  "listen": "0.0.0.0",
+  "listen_port": 0,
+  "users": [],
+  "tls": null,
+  "transport": null
+}

@@ -1,0 +1,13 @@
+{
+  "type": "shadowtls",
+  "tag": "",
+  "listen": "0.0.0.0",
+  "listen_port": 0,
+  "version": 3,
+  "users": [],
+  "handshake": {
+    "server": "",
+    "server_port": 443
+  },
+  "strict_mode": false
+}

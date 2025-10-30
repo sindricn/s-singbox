@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/code/s-xray/**)",
+      "mcp__sequential-thinking__sequentialthinking",
+      "Bash(mkdir:*)",
+      "Bash(chmod:*)",
+      "Bash(icacls:*)",
+      "Bash(xargs basename:*)",
+      "Bash(bash:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

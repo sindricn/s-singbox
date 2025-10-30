@@ -1,0 +1,536 @@
+#!/bin/bash
+
+# =============================================================================
+# sing-box 用户-节点绑定关系管理模块
+# 功能：管理用户和节点之间的绑定关系
+# =============================================================================
+
+DATA_DIR="./data"
+USERS_FILE="${DATA_DIR}/users.json"
+NODES_FILE="${DATA_DIR}/nodes.json"
+BINDINGS_FILE="${DATA_DIR}/node_users.json"
+
+# =============================================================================
+# 绑定操作函数
+# =============================================================================
+
+# 绑定用户到节点
+bind_user_to_node() {
+    print_info "绑定用户到节点"
+
+    # 列出所有用户
+    source modules/user.sh
+    list_users
+
+    # 选择用户
+    read -p "请输入用户名: " username
+
+    if [[ -z "$username" ]]; then
+        print_error "用户名不能为空"
+        return 1
+    fi
+
+    # 检查用户是否存在
+    local user=$(jq -r --arg username "$username" '.users[] | select(.username == $username)' "$USERS_FILE" 2>/dev/null)
+
+    if [[ -z "$user" ]]; then
+        print_error "用户不存在: $username"
+        return 1
+    fi
+
+    local uuid=$(echo "$user" | jq -r '.id')
+
+    # 列出所有节点
+    echo ""
+    source modules/node.sh
+    list_nodes
+
+    # 选择节点
+    read -p "请输入节点端口 (多个用空格分隔): " ports
+
+    if [[ -z "$ports" ]]; then
+        print_error "未选择节点"
+        return 1
+    fi
+
+    # 遍历端口并绑定
+    local success_count=0
+
+    for port in $ports; do
+        # 获取节点信息
+        local node=$(jq -r --arg port "$port" '.nodes[] | select(.port == $port)' "$NODES_FILE" 2>/dev/null)
+
+        if [[ -z "$node" ]]; then
+            print_warn "节点不存在: 端口 $port, 跳过"
+            continue
+        fi
+
+        local protocol=$(echo "$node" | jq -r '.protocol')
+
+        # 检查是否已绑定
+        if is_user_bound_to_node "$uuid" "$port" "$protocol"; then
+            print_warn "用户已绑定到节点 $protocol:$port, 跳过"
+            continue
+        fi
+
+        # 执行绑定
+        if add_binding "$uuid" "$port" "$protocol"; then
+            print_success "已绑定用户 $username 到节点 $protocol:$port"
+            ((success_count++))
+        else
+            print_error "绑定失败: $protocol:$port"
+        fi
+    done
+
+    if [[ $success_count -gt 0 ]]; then
+        # 重新生成配置
+        print_info "重新生成 sing-box 配置..."
+        source modules/config_generator.sh
+        generate_singbox_config
+
+        # 重载服务
+        read -p "是否重载 sing-box 服务? [Y/n]: " reload_service
+        reload_service=${reload_service:-Y}
+
+        if [[ "$reload_service" =~ ^[Yy]$ ]]; then
+            systemctl reload sing-box 2>/dev/null || print_warn "服务重载失败或服务未运行"
+        fi
+    fi
+
+    return 0
+}
+
+# 解绑用户与节点
+unbind_user_from_node() {
+    print_info "解绑用户与节点"
+
+    # 列出所有绑定关系
+    list_all_bindings
+
+    # 选择用户
+    read -p "请输入用户名: " username
+
+    if [[ -z "$username" ]]; then
+        print_error "用户名不能为空"
+        return 1
+    fi
+
+    # 获取用户 UUID
+    local uuid=$(jq -r --arg username "$username" '.users[] | select(.username == $username) | .id' "$USERS_FILE" 2>/dev/null)
+
+    if [[ -z "$uuid" ]]; then
+        print_error "用户不存在: $username"
+        return 1
+    fi
+
+    # 列出该用户的绑定
+    print_info "用户 $username 的绑定节点:"
+    local user_bindings=$(jq -r --arg uuid "$uuid" '.bindings[] | select(.users[] == $uuid)' "$BINDINGS_FILE" 2>/dev/null)
+
+    if [[ -z "$user_bindings" ]]; then
+        print_warn "用户无绑定节点"
+        return 0
+    fi
+
+    echo "$user_bindings" | jq -r '"\(.protocol):\(.port)"'
+
+    echo ""
+    read -p "请输入要解绑的节点端口: " port
+
+    if [[ -z "$port" ]]; then
+        print_error "端口不能为空"
+        return 1
+    fi
+
+    # 获取节点协议
+    local protocol=$(jq -r --arg port "$port" '.nodes[] | select(.port == $port) | .protocol' "$NODES_FILE" 2>/dev/null)
+
+    if [[ -z "$protocol" ]]; then
+        print_error "节点不存在: 端口 $port"
+        return 1
+    fi
+
+    # 执行解绑
+    if remove_binding "$uuid" "$port" "$protocol"; then
+        print_success "已解绑用户 $username 与节点 $protocol:$port"
+
+        # 重新生成配置
+        print_info "重新生成 sing-box 配置..."
+        source modules/config_generator.sh
+        generate_singbox_config
+
+        # 重载服务
+        read -p "是否重载 sing-box 服务? [Y/n]: " reload_service
+        reload_service=${reload_service:-Y}
+
+        if [[ "$reload_service" =~ ^[Yy]$ ]]; then
+            systemctl reload sing-box 2>/dev/null || print_warn "服务重载失败或服务未运行"
+        fi
+    else
+        print_error "解绑失败"
+        return 1
+    fi
+
+    return 0
+}
+
+# 批量绑定用户到节点
+batch_bind_users() {
+    print_info "批量绑定用户到节点"
+
+    # 选择节点
+    source modules/node.sh
+    list_nodes
+
+    read -p "请输入节点端口: " port
+
+    if [[ -z "$port" ]]; then
+        print_error "端口不能为空"
+        return 1
+    fi
+
+    # 获取节点信息
+    local node=$(jq -r --arg port "$port" '.nodes[] | select(.port == $port)' "$NODES_FILE" 2>/dev/null)
+
+    if [[ -z "$node" ]]; then
+        print_error "节点不存在: 端口 $port"
+        return 1
+    fi
+
+    local protocol=$(echo "$node" | jq -r '.protocol')
+
+    # 列出所有用户
+    source modules/user.sh
+    list_users
+
+    read -p "请输入要绑定的用户名 (多个用空格分隔, 输入 'all' 绑定所有用户): " usernames
+
+    if [[ -z "$usernames" ]]; then
+        print_error "未选择用户"
+        return 1
+    fi
+
+    # 如果是 all, 获取所有用户
+    if [[ "$usernames" == "all" ]]; then
+        usernames=$(jq -r '.users[].username' "$USERS_FILE")
+    fi
+
+    # 遍历用户并绑定
+    local success_count=0
+
+    for username in $usernames; do
+        local uuid=$(jq -r --arg username "$username" '.users[] | select(.username == $username) | .id' "$USERS_FILE" 2>/dev/null)
+
+        if [[ -z "$uuid" ]]; then
+            print_warn "用户不存在: $username, 跳过"
+            continue
+        fi
+
+        # 检查是否已绑定
+        if is_user_bound_to_node "$uuid" "$port" "$protocol"; then
+            print_warn "用户 $username 已绑定到节点 $protocol:$port, 跳过"
+            continue
+        fi
+
+        # 执行绑定
+        if add_binding "$uuid" "$port" "$protocol"; then
+            print_success "已绑定用户 $username 到节点 $protocol:$port"
+            ((success_count++))
+        fi
+    done
+
+    if [[ $success_count -gt 0 ]]; then
+        print_info "成功绑定 $success_count 个用户"
+
+        # 重新生成配置
+        print_info "重新生成 sing-box 配置..."
+        source modules/config_generator.sh
+        generate_singbox_config
+
+        # 重载服务
+        read -p "是否重载 sing-box 服务? [Y/n]: " reload_service
+        reload_service=${reload_service:-Y}
+
+        if [[ "$reload_service" =~ ^[Yy]$ ]]; then
+            systemctl reload sing-box 2>/dev/null || print_warn "服务重载失败或服务未运行"
+        fi
+    fi
+
+    return 0
+}
+
+# =============================================================================
+# 查询函数
+# =============================================================================
+
+# 列出所有绑定关系
+list_all_bindings() {
+    print_info "所有绑定关系:"
+
+    local bindings=$(jq -r '.bindings[]' "$BINDINGS_FILE" 2>/dev/null)
+
+    if [[ -z "$bindings" ]]; then
+        print_warn "暂无绑定关系"
+        return 0
+    fi
+
+    # 遍历绑定
+    local binding_count=$(jq '.bindings | length' "$BINDINGS_FILE")
+
+    for ((i=0; i<binding_count; i++)); do
+        local binding=$(jq -r ".bindings[$i]" "$BINDINGS_FILE")
+        local port=$(echo "$binding" | jq -r '.port')
+        local protocol=$(echo "$binding" | jq -r '.protocol')
+        local users=$(echo "$binding" | jq -r '.users[]')
+
+        echo ""
+        print_info "节点: $protocol:$port"
+
+        if [[ -z "$users" ]]; then
+            print_warn "  无绑定用户"
+            continue
+        fi
+
+        # 列出绑定的用户
+        while IFS= read -r uuid; do
+            local username=$(jq -r --arg uuid "$uuid" '.users[] | select(.id == $uuid) | .username' "$USERS_FILE" 2>/dev/null)
+
+            if [[ -n "$username" ]]; then
+                echo "  - $username ($uuid)"
+            else
+                echo "  - [已删除用户] ($uuid)"
+            fi
+        done <<< "$users"
+    done
+
+    echo ""
+}
+
+# 列出指定用户的绑定
+list_user_bindings() {
+    read -p "请输入用户名: " username
+
+    if [[ -z "$username" ]]; then
+        print_error "用户名不能为空"
+        return 1
+    fi
+
+    # 获取用户 UUID
+    local uuid=$(jq -r --arg username "$username" '.users[] | select(.username == $username) | .id' "$USERS_FILE" 2>/dev/null)
+
+    if [[ -z "$uuid" ]]; then
+        print_error "用户不存在: $username"
+        return 1
+    fi
+
+    print_info "用户 $username 的绑定节点:"
+
+    # 查找绑定
+    local bindings=$(jq -r --arg uuid "$uuid" '.bindings[] | select(.users[] == $uuid)' "$BINDINGS_FILE" 2>/dev/null)
+
+    if [[ -z "$bindings" ]]; then
+        print_warn "  无绑定节点"
+        return 0
+    fi
+
+    # 遍历绑定
+    echo "$bindings" | jq -r '"  - \(.protocol):\(.port)"'
+
+    echo ""
+}
+
+# 列出指定节点的绑定用户
+list_node_users() {
+    read -p "请输入节点端口: " port
+
+    if [[ -z "$port" ]]; then
+        print_error "端口不能为空"
+        return 1
+    fi
+
+    # 获取节点协议
+    local protocol=$(jq -r --arg port "$port" '.nodes[] | select(.port == $port) | .protocol' "$NODES_FILE" 2>/dev/null)
+
+    if [[ -z "$protocol" ]]; then
+        print_error "节点不存在: 端口 $port"
+        return 1
+    fi
+
+    print_info "节点 $protocol:$port 的绑定用户:"
+
+    # 查找绑定
+    local binding=$(jq -r --arg port "$port" --arg protocol "$protocol" \
+        '.bindings[] | select(.port == $port and .protocol == $protocol)' "$BINDINGS_FILE" 2>/dev/null)
+
+    if [[ -z "$binding" ]]; then
+        print_warn "  无绑定用户"
+        return 0
+    fi
+
+    # 获取用户列表
+    local users=$(echo "$binding" | jq -r '.users[]')
+
+    if [[ -z "$users" ]]; then
+        print_warn "  无绑定用户"
+        return 0
+    fi
+
+    # 遍历用户
+    while IFS= read -r uuid; do
+        local username=$(jq -r --arg uuid "$uuid" '.users[] | select(.id == $uuid) | .username' "$USERS_FILE" 2>/dev/null)
+        local email=$(jq -r --arg uuid "$uuid" '.users[] | select(.id == $uuid) | .email' "$USERS_FILE" 2>/dev/null)
+
+        if [[ -n "$username" ]]; then
+            echo "  - $username ($email)"
+        else
+            echo "  - [已删除用户] ($uuid)"
+        fi
+    done <<< "$users"
+
+    echo ""
+}
+
+# =============================================================================
+# 内部辅助函数
+# =============================================================================
+
+# 检查用户是否已绑定到节点
+is_user_bound_to_node() {
+    local uuid=$1
+    local port=$2
+    local protocol=$3
+
+    local existing=$(jq -r --arg port "$port" --arg protocol "$protocol" --arg uuid "$uuid" \
+        '.bindings[] | select(.port == $port and .protocol == $protocol) | .users[] | select(. == $uuid)' \
+        "$BINDINGS_FILE" 2>/dev/null)
+
+    if [[ -n "$existing" ]]; then
+        return 0  # 已绑定
+    else
+        return 1  # 未绑定
+    fi
+}
+
+# 添加绑定
+add_binding() {
+    local uuid=$1
+    local port=$2
+    local protocol=$3
+
+    # 检查绑定是否已存在
+    local existing=$(jq -r --arg port "$port" --arg protocol "$protocol" \
+        '.bindings[] | select(.port == $port and .protocol == $protocol)' "$BINDINGS_FILE" 2>/dev/null)
+
+    local bindings_data=$(cat "$BINDINGS_FILE")
+
+    if [[ -n "$existing" ]]; then
+        # 更新现有绑定
+        bindings_data=$(echo "$bindings_data" | jq --arg port "$port" --arg protocol "$protocol" --arg uuid "$uuid" \
+            '(.bindings[] | select(.port == $port and .protocol == $protocol) | .users) += [$uuid] | .bindings[].users |= unique')
+    else
+        # 创建新绑定
+        local new_binding=$(jq -n \
+            --arg port "$port" \
+            --arg protocol "$protocol" \
+            --arg uuid "$uuid" \
+            '{port: $port, protocol: $protocol, users: [$uuid]}')
+
+        bindings_data=$(echo "$bindings_data" | jq --argjson binding "$new_binding" '.bindings += [$binding]')
+    fi
+
+    echo "$bindings_data" | jq '.' > "$BINDINGS_FILE"
+
+    return 0
+}
+
+# 删除绑定
+remove_binding() {
+    local uuid=$1
+    local port=$2
+    local protocol=$3
+
+    local bindings_data=$(cat "$BINDINGS_FILE")
+
+    # 从指定节点的用户列表中删除该用户
+    bindings_data=$(echo "$bindings_data" | jq --arg port "$port" --arg protocol "$protocol" --arg uuid "$uuid" \
+        '(.bindings[] | select(.port == $port and .protocol == $protocol) | .users) -= [$uuid]')
+
+    echo "$bindings_data" | jq '.' > "$BINDINGS_FILE"
+
+    return 0
+}
+
+# 清理空绑定（没有用户的绑定关系）
+cleanup_empty_bindings() {
+    print_info "清理空绑定关系..."
+
+    local bindings_data=$(cat "$BINDINGS_FILE")
+
+    # 删除用户列表为空的绑定
+    bindings_data=$(echo "$bindings_data" | jq '.bindings = [.bindings[] | select(.users | length > 0)]')
+
+    echo "$bindings_data" | jq '.' > "$BINDINGS_FILE"
+
+    print_success "清理完成"
+}
+
+# 验证绑定数据完整性
+validate_bindings() {
+    print_info "验证绑定数据完整性..."
+
+    local issues=0
+
+    # 检查绑定中引用的用户是否存在
+    local bindings=$(jq -r '.bindings[]' "$BINDINGS_FILE" 2>/dev/null)
+    local binding_count=$(jq '.bindings | length' "$BINDINGS_FILE")
+
+    for ((i=0; i<binding_count; i++)); do
+        local binding=$(jq -r ".bindings[$i]" "$BINDINGS_FILE")
+        local port=$(echo "$binding" | jq -r '.port')
+        local protocol=$(echo "$binding" | jq -r '.protocol')
+        local users=$(echo "$binding" | jq -r '.users[]')
+
+        # 检查节点是否存在
+        local node_exists=$(jq -r --arg port "$port" '.nodes[] | select(.port == $port)' "$NODES_FILE" 2>/dev/null)
+
+        if [[ -z "$node_exists" ]]; then
+            print_warn "绑定引用了不存在的节点: $protocol:$port"
+            ((issues++))
+        fi
+
+        # 检查用户是否存在
+        while IFS= read -r uuid; do
+            local user_exists=$(jq -r --arg uuid "$uuid" '.users[] | select(.id == $uuid)' "$USERS_FILE" 2>/dev/null)
+
+            if [[ -z "$user_exists" ]]; then
+                print_warn "绑定引用了不存在的用户: $uuid (节点 $protocol:$port)"
+                ((issues++))
+            fi
+        done <<< "$users"
+    done
+
+    if [[ $issues -eq 0 ]]; then
+        print_success "绑定数据完整性验证通过"
+    else
+        print_warn "发现 $issues 个数据完整性问题"
+    fi
+
+    return 0
+}
+
+# 通用打印函数
+print_info() {
+    echo -e "\033[34m[INFO]\033[0m $1"
+}
+
+print_success() {
+    echo -e "\033[32m[SUCCESS]\033[0m $1"
+}
+
+print_error() {
+    echo -e "\033[31m[ERROR]\033[0m $1"
+}
+
+print_warn() {
+    echo -e "\033[33m[WARN]\033[0m $1"
+}

@@ -10,7 +10,9 @@
       "Bash(bash:*)",
       "Bash(rm:*)",
       "Bash(for file in modules/*.sh)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(do bash -n \"$file\")",
+      "Bash(echo:*)"
     ],
     "deny": [],
     "ask": []

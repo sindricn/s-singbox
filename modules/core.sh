@@ -118,7 +118,7 @@ detect_architecture() {
 
 # 检测操作系统
 detect_os() {
-    local os=$(uname -s | to_lower)
+    local os=$(uname -s | tr '[:upper:]' '[:lower:]')
     case $os in
         linux)
             echo "linux"

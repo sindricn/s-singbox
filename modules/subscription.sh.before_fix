@@ -378,7 +378,7 @@ update_subscription() {
     # 重新生成配置
     if [[ $node_count -gt 0 ]]; then
         print_info "重新生成 sing-box 配置..."
-        # NOTE: config_generator.sh 已在主文件中加载
+        source modules/config_generator.sh
         generate_singbox_config
 
         read -p "是否重载 sing-box 服务? [Y/n]: " reload_service
@@ -497,68 +497,8 @@ update_all_subscriptions() {
 }
 
 # =============================================================================
-# 订阅管理菜单
-# =============================================================================
-
-subscription_menu() {
-    while true; do
-        clear
-        print_header "订阅管理"
-
-        echo "1)  添加订阅源"
-        echo "2)  更新指定订阅"
-        echo "3)  更新所有订阅"
-        echo "4)  列出订阅"
-        echo "5)  删除订阅"
-        echo ""
-        echo "0)  返回主菜单"
-        echo ""
-
-        read -p "请选择: " choice
-
-        case "$choice" in
-            1)
-                add_subscription
-                read -p "按回车键继续..."
-                ;;
-            2)
-                update_subscription ""
-                read -p "按回车键继续..."
-                ;;
-            3)
-                update_all_subscriptions
-                read -p "按回车键继续..."
-                ;;
-            4)
-                list_subscriptions
-                read -p "按回车键继续..."
-                ;;
-            5)
-                delete_subscription
-                read -p "按回车键继续..."
-                ;;
-            0)
-                return
-                ;;
-            *)
-                print_error "无效选择"
-                sleep 1
-                ;;
-        esac
-    done
-}
-
-# =============================================================================
 # 通用打印函数
 # =============================================================================
-
-print_header() {
-    echo ""
-    echo -e "\033[32m======================================\033[0m"
-    echo -e "\033[32m  $1\033[0m"
-    echo -e "\033[32m======================================\033[0m"
-    echo ""
-}
 
 print_info() {
     echo -e "\033[34m[INFO]\033[0m $1"

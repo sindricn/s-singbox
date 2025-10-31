@@ -200,7 +200,7 @@ batch_bind_users() {
     local protocol=$(echo "$node" | jq -r '.protocol')
 
     # 列出所有用户
-    # NOTE: user.sh 已在主文件中加载
+    source modules/user.sh
     list_users
 
     read -p "请输入要绑定的用户名 (多个用空格分隔, 输入 'all' 绑定所有用户): " usernames

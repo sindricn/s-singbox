@@ -271,212 +271,75 @@ show_main_menu() {
 # 节点管理菜单
 show_node_menu() {
     clear
+    print_header "节点管理"
 
-    # 使用增强UI（如果可用）
-    if declare -f draw_title_box &>/dev/null; then
-        draw_title_box "节点管理" 68
-        local nodes_count=$(get_nodes_count 2>/dev/null || echo "0")
-        echo -e "${CYAN}当前节点数:${NC} ${YELLOW}${nodes_count}${NC} 个"
-        echo ""
-        if declare -f show_menu_item &>/dev/null; then
-            show_menu_item "1" "➕" "添加节点" "配置新的代理节点"
-            show_menu_item "2" "🗑️" "删除节点" "移除现有节点"
-            show_menu_item "3" "📋" "列出节点" "查看所有节点"
-            echo ""
-            draw_separator 68
-            show_menu_item "0" "↩️" "返回主菜单"
-            echo ""
-        else
-            echo "1)  添加节点"
-            echo "2)  删除节点"
-            echo "3)  列出节点"
-            echo ""
-            echo "0)  返回主菜单"
-            echo ""
-        fi
-    else
-        print_header "节点管理"
-        echo "1)  添加节点"
-        echo "2)  删除节点"
-        echo "3)  列出节点"
-        echo ""
-        echo "0)  返回主菜单"
-        echo ""
-    fi
+    echo "1)  添加节点"
+    echo "2)  删除节点"
+    echo "3)  列出节点"
+    echo ""
+    echo "0)  返回主菜单"
+    echo ""
 }
 
 # 用户管理菜单
 show_user_menu() {
     clear
+    print_header "用户管理"
 
-    # 使用增强UI（如果可用）
-    if declare -f draw_title_box &>/dev/null; then
-        draw_title_box "用户管理" 68
-        local users_count=$(get_users_count 2>/dev/null || echo "0")
-        local enabled_count=$(get_enabled_users_count 2>/dev/null || echo "0")
-        echo -e "${CYAN}当前用户数:${NC} ${YELLOW}${users_count}${NC} 个 ${CYAN}(启用:${NC} ${GREEN}${enabled_count}${NC}${CYAN})${NC}"
-        echo ""
-        if declare -f show_menu_item &>/dev/null; then
-            show_menu_item "1" "👤" "添加用户" "创建新用户账号"
-            show_menu_item "2" "🗑️" "删除用户" "移除用户账号"
-            show_menu_item "3" "📋" "列出用户" "查看所有用户"
-            show_menu_item "4" "✏️" "修改用户" "编辑用户信息"
-            show_menu_item "5" "🔍" "查看用户详情" "查看完整信息"
-            echo ""
-            draw_separator 68
-            show_menu_item "0" "↩️" "返回主菜单"
-            echo ""
-        else
-            echo "1)  添加用户"
-            echo "2)  删除用户"
-            echo "3)  列出用户"
-            echo "4)  修改用户"
-            echo "5)  查看用户详情"
-            echo ""
-            echo "0)  返回主菜单"
-            echo ""
-        fi
-    else
-        print_header "用户管理"
-        echo "1)  添加用户"
-        echo "2)  删除用户"
-        echo "3)  列出用户"
-        echo "4)  修改用户"
-        echo "5)  查看用户详情"
-        echo ""
-        echo "0)  返回主菜单"
-        echo ""
-    fi
+    echo "1)  添加用户"
+    echo "2)  删除用户"
+    echo "3)  列出用户"
+    echo "4)  修改用户"
+    echo "5)  查看用户详情"
+    echo ""
+    echo "0)  返回主菜单"
+    echo ""
 }
 
 # 绑定管理菜单
 show_binding_menu() {
     clear
+    print_header "绑定管理"
 
-    # 使用增强UI（如果可用）
-    if declare -f draw_title_box &>/dev/null; then
-        draw_title_box "绑定管理" 68
-        local bindings_count=$(get_bindings_count 2>/dev/null || echo "0")
-        echo -e "${CYAN}当前绑定数:${NC} ${YELLOW}${bindings_count}${NC} 个"
-        echo ""
-        if declare -f show_menu_item &>/dev/null; then
-            show_menu_item "1" "🔗" "绑定用户到节点"
-            show_menu_item "2" "🔓" "解绑用户与节点"
-            show_menu_item "3" "📦" "批量绑定用户"
-            show_menu_item "4" "📋" "列出所有绑定"
-            show_menu_item "5" "👤" "列出用户的绑定"
-            show_menu_item "6" "📡" "列出节点的用户"
-            show_menu_item "7" "🧹" "清理空绑定"
-            show_menu_item "8" "✔️" "验证绑定完整性"
-            echo ""
-            draw_separator 68
-            show_menu_item "0" "↩️" "返回主菜单"
-            echo ""
-        else
-            echo "1)  绑定用户到节点"
-            echo "2)  解绑用户与节点"
-            echo "3)  批量绑定用户"
-            echo "4)  列出所有绑定"
-            echo "5)  列出用户的绑定"
-            echo "6)  列出节点的用户"
-            echo "7)  清理空绑定"
-            echo "8)  验证绑定完整性"
-            echo ""
-            echo "0)  返回主菜单"
-            echo ""
-        fi
-    else
-        print_header "绑定管理"
-        echo "1)  绑定用户到节点"
-        echo "2)  解绑用户与节点"
-        echo "3)  批量绑定用户"
-        echo "4)  列出所有绑定"
-        echo "5)  列出用户的绑定"
-        echo "6)  列出节点的用户"
-        echo "7)  清理空绑定"
-        echo "8)  验证绑定完整性"
-        echo ""
-        echo "0)  返回主菜单"
-        echo ""
-    fi
+    echo "1)  绑定用户到节点"
+    echo "2)  解绑用户与节点"
+    echo "3)  批量绑定用户"
+    echo "4)  列出所有绑定"
+    echo "5)  列出用户的绑定"
+    echo "6)  列出节点的用户"
+    echo "7)  清理空绑定"
+    echo "8)  验证绑定完整性"
+    echo ""
+    echo "0)  返回主菜单"
+    echo ""
 }
 
 # 配置管理菜单
 show_config_menu() {
     clear
+    print_header "配置管理"
 
-    # 使用增强UI（如果可用）
-    if declare -f draw_title_box &>/dev/null; then
-        draw_title_box "配置管理" 68
-        echo ""
-        if declare -f show_menu_item &>/dev/null; then
-            show_menu_item "1" "⚙️" "生成配置" "根据节点和用户生成"
-            show_menu_item "2" "📄" "查看配置" "查看当前配置文件"
-            show_menu_item "3" "✔️" "验证配置" "检查配置有效性"
-            show_menu_item "4" "💾" "恢复备份" "从备份恢复配置"
-            echo ""
-            draw_separator 68
-            show_menu_item "0" "↩️" "返回主菜单"
-            echo ""
-        else
-            echo "1)  生成配置"
-            echo "2)  查看配置"
-            echo "3)  验证配置"
-            echo "4)  恢复备份"
-            echo ""
-            echo "0)  返回主菜单"
-            echo ""
-        fi
-    else
-        print_header "配置管理"
-        echo "1)  生成配置"
-        echo "2)  查看配置"
-        echo "3)  验证配置"
-        echo "4)  恢复备份"
-        echo ""
-        echo "0)  返回主菜单"
-        echo ""
-    fi
+    echo "1)  生成配置"
+    echo "2)  查看配置"
+    echo "3)  验证配置"
+    echo "4)  恢复备份"
+    echo ""
+    echo "0)  返回主菜单"
+    echo ""
 }
 
 # 服务控制菜单
 show_service_menu() {
     clear
+    print_header "服务控制"
 
-    # 使用增强UI（如果可用）
-    if declare -f draw_title_box &>/dev/null; then
-        draw_title_box "服务控制" 68
-        local service_status=$(get_service_status_display 2>/dev/null || echo "未知")
-        echo -e "${CYAN}服务状态:${NC} $service_status"
-        echo ""
-        if declare -f show_menu_item &>/dev/null; then
-            show_menu_item "1" "▶️" "启动服务" "启动 sing-box"
-            show_menu_item "2" "⏹️" "停止服务" "停止 sing-box"
-            show_menu_item "3" "🔄" "重启服务" "重启 sing-box"
-            show_menu_item "4" "♻️" "重载配置" "重新加载配置文件"
-            echo ""
-            draw_separator 68
-            show_menu_item "0" "↩️" "返回主菜单"
-            echo ""
-        else
-            echo "1)  启动服务"
-            echo "2)  停止服务"
-            echo "3)  重启服务"
-            echo "4)  重载配置"
-            echo ""
-            echo "0)  返回主菜单"
-            echo ""
-        fi
-    else
-        print_header "服务控制"
-        echo "1)  启动服务"
-        echo "2)  停止服务"
-        echo "3)  重启服务"
-        echo "4)  重载配置"
-        echo ""
-        echo "0)  返回主菜单"
-        echo ""
-    fi
+    echo "1)  启动服务"
+    echo "2)  停止服务"
+    echo "3)  重启服务"
+    echo "4)  重载配置"
+    echo ""
+    echo "0)  返回主菜单"
+    echo ""
 }
 
 # =============================================================================
@@ -723,24 +586,6 @@ load_modules() {
         log_debug "已加载: selector.sh"
     fi
 
-    # UI增强模块
-    if [[ -f "${MODULES_DIR}/ui_helper.sh" ]]; then
-        source "${MODULES_DIR}/ui_helper.sh"
-        log_debug "已加载: ui_helper.sh"
-    fi
-
-    # 快速部署向导模块
-    if [[ -f "${MODULES_DIR}/quick_wizard.sh" ]]; then
-        source "${MODULES_DIR}/quick_wizard.sh"
-        log_debug "已加载: quick_wizard.sh"
-    fi
-
-    # 智能提示系统模块
-    if [[ -f "${MODULES_DIR}/smart_tips.sh" ]]; then
-        source "${MODULES_DIR}/smart_tips.sh"
-        log_debug "已加载: smart_tips.sh"
-    fi
-
     # 第四优先级：业务模块
     local business_modules=(
         "core.sh"
@@ -789,24 +634,10 @@ main() {
 
     # 主循环
     while true; do
-        # 使用增强版主菜单（如果ui_helper模块已加载）
-        if declare -f show_enhanced_main_menu &>/dev/null; then
-            show_enhanced_main_menu
-        else
-            show_main_menu
-        fi
-        read -p "$(echo -e ${CYAN}请选择${NC}: )" choice
+        show_main_menu
+        read -p "请选择: " choice
 
         case "$choice" in
-            [Qq])
-                # 快速部署向导
-                if declare -f run_quick_wizard &>/dev/null; then
-                    run_quick_wizard
-                else
-                    print_error "快速部署向导模块未加载"
-                    sleep 2
-                fi
-                ;;
             1)
                 handle_node_menu
                 ;;
@@ -827,40 +658,44 @@ main() {
                 cert_management_menu
                 ;;
             7)
-                source "${MODULES_DIR}/domain.sh"
-                domain_menu
+                source "${MODULES_DIR}/subscription.sh"
+                echo ""
+                echo "1) 添加订阅"
+                echo "2) 更新订阅"
+                echo "3) 删除订阅"
+                echo "4) 列出订阅"
+                echo "5) 更新所有订阅"
+                echo "0) 返回"
+                echo ""
+                read -p "请选择: " sub_choice
+                case "$sub_choice" in
+                    1) add_subscription ;;
+                    2) update_subscription "" ;;
+                    3) delete_subscription ;;
+                    4) list_subscriptions ;;
+                    5) update_all_subscriptions ;;
+                esac
+                read -p "按回车键继续..."
                 ;;
             8)
-                source "${MODULES_DIR}/subscription.sh"
-                subscription_menu
-                ;;
-            9)
                 source "${MODULES_DIR}/monitor.sh"
                 monitor_menu
                 ;;
-            10)
+            9)
                 source "${MODULES_DIR}/firewall.sh"
                 firewall_menu
                 ;;
-            11)
+            10)
                 source "${MODULES_DIR}/singbox_api.sh"
                 api_menu
                 ;;
-            12)
+            11)
                 status_singbox
                 read -p "按回车键继续..."
                 ;;
-            13)
+            12)
                 view_logs
                 read -p "按回车键继续..."
-                ;;
-            14)
-                if declare -f smart_tips_menu &>/dev/null; then
-                    smart_tips_menu
-                else
-                    print_error "智能提示系统模块未加载"
-                    sleep 2
-                fi
                 ;;
             0)
                 print_info "退出程序"

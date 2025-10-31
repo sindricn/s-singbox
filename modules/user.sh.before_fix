@@ -262,7 +262,7 @@ delete_user() {
 
     # 重新生成配置
     print_info "重新生成 sing-box 配置..."
-    # NOTE: config_generator.sh 已在主文件中加载
+    source modules/config_generator.sh
     generate_singbox_config
 
     # 重载服务
@@ -442,7 +442,7 @@ modify_user() {
 
     # 重新生成配置
     print_info "重新生成 sing-box 配置..."
-    # NOTE: config_generator.sh 已在主文件中加载
+    source modules/config_generator.sh
     generate_singbox_config
 
     # 重载服务
@@ -498,7 +498,7 @@ bind_user_to_nodes() {
     local uuid=$1
 
     # 列出所有可用节点
-    # NOTE: node.sh 已在主文件中加载
+    source modules/node.sh
     list_nodes
 
     read -p "请输入要绑定的节点端口 (多个用空格分隔): " ports
@@ -545,7 +545,7 @@ bind_user_to_nodes() {
 
     # 重新生成配置
     print_info "重新生成 sing-box 配置..."
-    # NOTE: config_generator.sh 已在主文件中加载
+    source modules/config_generator.sh
     generate_singbox_config
 }
 

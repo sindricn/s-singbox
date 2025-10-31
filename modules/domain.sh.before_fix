@@ -101,7 +101,7 @@ add_domain() {
     assoc_nodes=${assoc_nodes:-N}
 
     if [[ "$assoc_nodes" =~ ^[Yy]$ ]]; then
-        # NOTE: node.sh 已在主文件中加载
+        source modules/node.sh
         list_nodes
 
         read -p "请输入节点端口 (多个用空格分隔): " ports
@@ -317,7 +317,7 @@ associate_domain_to_node() {
     fi
 
     # 列出节点
-    # NOTE: node.sh 已在主文件中加载
+    source modules/node.sh
     list_nodes
 
     read -p "请输入节点端口: " port
@@ -387,7 +387,7 @@ batch_request_certs() {
             print_info "为域名申请证书: $domain"
 
             # 调用证书管理模块
-            # NOTE: cert.sh 已在主文件中加载
+            source modules/cert.sh
 
             echo "请选择验证方式:"
             echo "1) HTTP-01"

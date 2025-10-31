@@ -19,7 +19,7 @@ bind_user_to_node() {
     print_info "绑定用户到节点"
 
     # 列出所有用户
-    # NOTE: user.sh 已在主文件中加载
+    source modules/user.sh
     list_users
 
     # 选择用户
@@ -42,7 +42,7 @@ bind_user_to_node() {
 
     # 列出所有节点
     echo ""
-    # NOTE: node.sh 已在主文件中加载
+    source modules/node.sh
     list_nodes
 
     # 选择节点
@@ -85,7 +85,7 @@ bind_user_to_node() {
     if [[ $success_count -gt 0 ]]; then
         # 重新生成配置
         print_info "重新生成 sing-box 配置..."
-        # NOTE: config_generator.sh 已在主文件中加载
+        source modules/config_generator.sh
         generate_singbox_config
 
         # 重载服务
@@ -156,7 +156,7 @@ unbind_user_from_node() {
 
         # 重新生成配置
         print_info "重新生成 sing-box 配置..."
-        # NOTE: config_generator.sh 已在主文件中加载
+        source modules/config_generator.sh
         generate_singbox_config
 
         # 重载服务
@@ -179,7 +179,7 @@ batch_bind_users() {
     print_info "批量绑定用户到节点"
 
     # 选择节点
-    # NOTE: node.sh 已在主文件中加载
+    source modules/node.sh
     list_nodes
 
     read -p "请输入节点端口: " port
@@ -200,7 +200,7 @@ batch_bind_users() {
     local protocol=$(echo "$node" | jq -r '.protocol')
 
     # 列出所有用户
-    # NOTE: user.sh 已在主文件中加载
+    source modules/user.sh
     list_users
 
     read -p "请输入要绑定的用户名 (多个用空格分隔, 输入 'all' 绑定所有用户): " usernames
@@ -244,7 +244,7 @@ batch_bind_users() {
 
         # 重新生成配置
         print_info "重新生成 sing-box 配置..."
-        # NOTE: config_generator.sh 已在主文件中加载
+        source modules/config_generator.sh
         generate_singbox_config
 
         # 重载服务

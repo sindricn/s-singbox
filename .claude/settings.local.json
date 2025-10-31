@@ -12,7 +12,12 @@
       "Bash(for file in modules/*.sh)",
       "Bash(done)",
       "Bash(do bash -n \"$file\")",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "Bash(tree:*)",
+      "Bash(for:*)",
+      "Bash(do echo \"=== 检查 $file ===\")",
+      "Bash(ls:*)",
+      "Bash(awk:*)"
     ],
     "deny": [],
     "ask": []

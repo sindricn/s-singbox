@@ -902,7 +902,7 @@ add_node() {
     # 添加成功后重新生成配置
     if [[ $? -eq 0 ]]; then
         print_info "重新生成 sing-box 配置..."
-        # NOTE: config_generator.sh 已在主文件中加载
+        source modules/config_generator.sh
         generate_singbox_config
 
         # 询问是否重载服务
@@ -963,7 +963,7 @@ delete_node() {
 
     # 重新生成配置
     print_info "重新生成 sing-box 配置..."
-    # NOTE: config_generator.sh 已在主文件中加载
+    source modules/config_generator.sh
     generate_singbox_config
 
     # 重载服务

@@ -31,10 +31,30 @@ else
     GREEN='\033[0;32m'
     YELLOW='\033[1;33m'
     BLUE='\033[0;34m'
+    CYAN='\033[0;36m'
     NC='\033[0m'
 
     print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-    print_error "找不到 common.sh 模块，部分功能可能不可用"
+    print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+    print_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+    print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+    print_header() {
+        echo ""
+        echo -e "${GREEN}======================================${NC}"
+        echo -e "${GREEN}  $1${NC}"
+        echo -e "${GREEN}======================================${NC}"
+        echo ""
+    }
+
+    # 日志函数（备用版本，仅输出到控制台）
+    log_error() { print_error "$1"; }
+    log_success() { print_success "$1"; }
+    log_warn() { print_warn "$1"; }
+    log_info() { print_info "$1"; }
+    log_debug() { : ; }  # 空操作
+
+    print_error "找不到 common.sh 模块: ${MODULES_DIR}/common.sh"
+    print_warn "使用备用打印函数，部分功能可能不可用"
 fi
 
 # =============================================================================

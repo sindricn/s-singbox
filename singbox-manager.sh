@@ -75,30 +75,26 @@ fi
 
 # 加载UI增强模块
 if [[ -f "${MODULES_DIR}/ui_helper.sh" ]]; then
-    if source "${MODULES_DIR}/ui_helper.sh" 2>/dev/null; then
-        log_debug "ui_helper.sh 已加载"
-        # 验证关键函数
-        if declare -f show_enhanced_main_menu &>/dev/null; then
-            log_debug "show_enhanced_main_menu 函数可用"
-        else
-            log_warn "ui_helper.sh 加载但 show_enhanced_main_menu 函数不可用"
-        fi
+    source "${MODULES_DIR}/ui_helper.sh"
+    # 验证关键函数是否加载成功
+    if declare -f show_enhanced_main_menu &>/dev/null; then
+        log_debug "ui_helper.sh 已加载，增强菜单可用"
     else
-        log_warn "ui_helper.sh 加载失败，将使用简化版菜单"
+        log_warn "ui_helper.sh 已加载但函数不可用，将使用简化版菜单"
     fi
 else
-    log_warn "ui_helper.sh 不存在: ${MODULES_DIR}/ui_helper.sh"
+    log_warn "ui_helper.sh 不存在，将使用简化版菜单"
 fi
 
 # 加载智能提示模块
 if [[ -f "${MODULES_DIR}/smart_tips.sh" ]]; then
-    source "${MODULES_DIR}/smart_tips.sh" 2>/dev/null
+    source "${MODULES_DIR}/smart_tips.sh"
     log_debug "smart_tips.sh 已加载"
 fi
 
 # 加载快速向导模块
 if [[ -f "${MODULES_DIR}/quick_wizard.sh" ]]; then
-    source "${MODULES_DIR}/quick_wizard.sh" 2>/dev/null
+    source "${MODULES_DIR}/quick_wizard.sh"
     log_debug "quick_wizard.sh 已加载"
 fi
 

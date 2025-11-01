@@ -57,6 +57,13 @@ else
     print_warn "使用备用打印函数，部分功能可能不可用"
 fi
 
+# 加载核心增强模块（UI、输入验证、安全JSON）
+[[ -f "${MODULES_DIR}/input-validation.sh" ]] && source "${MODULES_DIR}/input-validation.sh"
+[[ -f "${MODULES_DIR}/safe_json.sh" ]] && source "${MODULES_DIR}/safe_json.sh"
+[[ -f "${MODULES_DIR}/ui_helper.sh" ]] && source "${MODULES_DIR}/ui_helper.sh"
+[[ -f "${MODULES_DIR}/smart_tips.sh" ]] && source "${MODULES_DIR}/smart_tips.sh"
+[[ -f "${MODULES_DIR}/quick_wizard.sh" ]] && source "${MODULES_DIR}/quick_wizard.sh"
+
 # =============================================================================
 # 环境检查
 # =============================================================================
@@ -269,34 +276,26 @@ view_logs() {
 
 show_main_menu() {
     clear
-    print_header "sing-box Manager"
+    print_header "sing-box Manager V2.0.0"
 
-    echo "【部署中心】"
-    echo "1)  快速搭建 - Reality 一键部署"
-    echo "2)  节点管理 - 节点配置维护"
-    echo "3)  用户管理 - 用户账号管理"
-    echo "4)  绑定管理 - 用户节点绑定"
+    echo "【功能菜单】"
+    echo "1)  节点管理"
+    echo "2)  用户管理"
+    echo "3)  绑定管理"
+    echo "4)  订阅管理"
+    echo "5)  配置管理"
+    echo "6)  内核管理"
+    echo "7)  出站规则"
+    echo "8)  域名管理"
+    echo "9)  证书管理"
+    echo "10) 防火墙管理"
     echo ""
-    echo "【运营中心】"
-    echo "5)  订阅管理 - 多格式订阅"
-    echo "6)  出站管理 - 规则与策略"
-    echo "9)  监控统计 - 流量状态面板"
+    echo "【系统工具】"
+    echo "11) 服务控制"
+    echo "12) API 管理"
+    echo "13) 智能提示"
     echo ""
-    echo "【系统中心】"
-    echo "7)  配置管理 - 配置生成校验"
-    echo "8)  内核管理 - 内核生命周期"
-    echo "10) API 管理 - 零停机操作"
-    echo ""
-    echo "【辅助工具】"
-    echo "S)  服务控制"
-    echo "D)  域名管理"
-    echo "C)  证书管理"
-    echo "F)  防火墙管理"
-    echo "V)  查看状态"
-    echo "L)  查看日志"
-    echo "T)  智能提示"
-    echo ""
-    echo "0)  退出"
+    echo "0)  退出脚本"
     echo ""
 }
 
@@ -831,24 +830,19 @@ main() {
 
         case "$choice" in
             1)
-                # 快速搭建
-                if declare -f run_quick_wizard &>/dev/null; then
-                    run_quick_wizard
-                else
-                    print_error "快速部署向导模块未加载"
-                    sleep 2
-                fi
-                ;;
-            2)
+                # 节点管理
                 handle_node_menu
                 ;;
-            3)
+            2)
+                # 用户管理
                 handle_user_menu
                 ;;
-            4)
+            3)
+                # 绑定管理
                 handle_binding_menu
                 ;;
-            5)
+            4)
+                # 订阅管理
                 if declare -f subscription_menu &>/dev/null; then
                     subscription_menu
                 else
@@ -856,18 +850,12 @@ main() {
                     subscription_menu
                 fi
                 ;;
-            6)
-                if declare -f outbound_menu &>/dev/null; then
-                    outbound_menu
-                else
-                    source "${MODULES_DIR}/outbound.sh"
-                    outbound_menu
-                fi
-                ;;
-            7)
+            5)
+                # 配置管理
                 handle_config_menu
                 ;;
-            8)
+            6)
+                # 内核管理
                 if declare -f core_management_menu &>/dev/null; then
                     core_management_menu
                 else
@@ -875,26 +863,17 @@ main() {
                     core_management_menu
                 fi
                 ;;
-            9)
-                if declare -f monitor_menu &>/dev/null; then
-                    monitor_menu
+            7)
+                # 出站规则
+                if declare -f outbound_menu &>/dev/null; then
+                    outbound_menu
                 else
-                    source "${MODULES_DIR}/monitor.sh"
-                    monitor_menu
+                    source "${MODULES_DIR}/outbound.sh"
+                    outbound_menu
                 fi
                 ;;
-            10)
-                if declare -f api_menu &>/dev/null; then
-                    api_menu
-                else
-                    source "${MODULES_DIR}/singbox_api.sh"
-                    api_menu
-                fi
-                ;;
-            [Ss])
-                handle_service_menu
-                ;;
-            [Dd])
+            8)
+                # 域名管理
                 if declare -f domain_menu &>/dev/null; then
                     domain_menu
                 else
@@ -902,7 +881,8 @@ main() {
                     domain_menu
                 fi
                 ;;
-            [Cc])
+            9)
+                # 证书管理
                 if declare -f cert_management_menu &>/dev/null; then
                     cert_management_menu
                 else
@@ -910,7 +890,8 @@ main() {
                     cert_management_menu
                 fi
                 ;;
-            [Ff])
+            10)
+                # 防火墙管理
                 if declare -f firewall_menu &>/dev/null; then
                     firewall_menu
                 else
@@ -918,15 +899,21 @@ main() {
                     firewall_menu
                 fi
                 ;;
-            [Vv])
-                status_singbox
-                read -p "按回车键继续..."
+            11)
+                # 服务控制
+                handle_service_menu
                 ;;
-            [Ll])
-                view_logs
-                read -p "按回车键继续..."
+            12)
+                # API 管理
+                if declare -f api_menu &>/dev/null; then
+                    api_menu
+                else
+                    source "${MODULES_DIR}/singbox_api.sh"
+                    api_menu
+                fi
                 ;;
-            [Tt])
+            13)
+                # 智能提示
                 if declare -f smart_tips_menu &>/dev/null; then
                     smart_tips_menu
                 else

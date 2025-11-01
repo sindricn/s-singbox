@@ -10,10 +10,8 @@ if [[ -z "${SCRIPT_DIR}" ]]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fi
 
-# 加载依赖模块
-if ! declare -f print_error &>/dev/null; then
-    source "${SCRIPT_DIR}/modules/common.sh"
-fi
+# NOTE: 依赖模块已在主文件中加载
+# 依赖: common.sh (print_error, print_info, print_success 等函数)
 
 # =============================================================================
 # 提示级别定义

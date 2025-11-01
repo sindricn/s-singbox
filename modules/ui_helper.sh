@@ -10,10 +10,8 @@ if [[ -z "${SCRIPT_DIR}" ]]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fi
 
-# 加载依赖模块
-if ! declare -f print_error &>/dev/null; then
-    source "${SCRIPT_DIR}/modules/common.sh"
-fi
+# NOTE: 依赖模块已在主文件中加载
+# 依赖: common.sh (print_error, log_debug 等函数)
 
 # =============================================================================
 # 颜色和样式定义
@@ -35,7 +33,7 @@ readonly STATUS_WARNING="▲"
 readonly STATUS_ERROR="✖"
 readonly STATUS_OK="✔"
 
-# 框线字符
+# 框线字符 - 单线框
 readonly BOX_H="─"
 readonly BOX_V="│"
 readonly BOX_TL="┌"
@@ -47,6 +45,14 @@ readonly BOX_MR="┤"
 readonly BOX_MT="┬"
 readonly BOX_MB="┴"
 readonly BOX_MC="┼"
+
+# 框线字符 - 双线框
+readonly DBOX_H="═"
+readonly DBOX_V="║"
+readonly DBOX_TL="╔"
+readonly DBOX_TR="╗"
+readonly DBOX_BL="╚"
+readonly DBOX_BR="╝"
 
 # =============================================================================
 # 状态获取函数
@@ -323,48 +329,68 @@ show_menu_group() {
 show_enhanced_main_menu() {
     clear
 
-    # 显示标题
-    draw_title_box "S-Xray 控制台" 72
-
-    # 显示状态面板
-    show_status_panel
-    show_resource_panel
-
-    # 核心功能区
-    show_menu_section "部署中心" \
-        "1|🚀|快速搭建|Reality 一键部署流程" \
-        "2|📦|节点管理|节点配置与分享" \
-        "3|👥|用户管理|账号与权限管理" \
-        "4|🔗|绑定管理|节点用户绑定关系"
-
-    show_menu_section "运营中心" \
-        "5|📮|订阅管理|多格式订阅生成" \
-        "6|🛰️|出站管理|规则链与默认策略" \
-        "9|📊|监控统计|流量与状态面板"
-
-    show_menu_section "系统中心" \
-        "7|⚙️|配置管理|配置生成与校验" \
-        "8|🧠|内核管理|内核生命周期管理" \
-        "10|🔌|API管理|零停机动态操作"
-
-    echo ""
-    draw_separator 68
-    echo -e "${CYAN}${BOLD}▶ 辅助工具${NC}"
-    echo ""
-    show_menu_item "S" "🧰" "服务控制" "启动/停止/重载核心服务"
-    show_menu_item "D" "🌐" "域名管理" "域名优选与绑定"
-    show_menu_item "C" "🔐" "证书管理" "证书签发与导入"
-    show_menu_item "F" "🛡️" "防火墙管理" "端口策略与放通"
-    show_menu_item "V" "📈" "查看状态" "systemctl 服务状态"
-    show_menu_item "L" "📋" "查看日志" "最近 50 行运行日志"
-    if declare -f smart_tips_menu &>/dev/null; then
-        show_menu_item "T" "💡" "智能提示" "健康巡检与建议"
+    # 获取状态信息
+    local service_status=$(get_service_status)
+    local status_display
+    if [[ "$service_status" == "running" ]]; then
+        status_display="${GREEN}${STATUS_RUNNING} 运行中${NC}    "
+    else
+        status_display="${RED}${STATUS_STOPPED} 已停止${NC}    "
     fi
-    show_menu_item "0" "🚪" "退出程序"
-    draw_separator 68
 
-    # 显示快捷提示
-    show_quick_tips
+    local nodes_count=$(get_nodes_count)
+    local users_count=$(get_users_count)
+    local enabled_users=$(get_enabled_users_count)
+    local bindings_count=$(get_bindings_count)
+
+    # 获取内核版本（如果安装）
+    local version="未安装"
+    if [[ -x "$SINGBOX_BINARY" ]]; then
+        version=$($SINGBOX_BINARY version 2>/dev/null | head -1 | awk '{print $3}' || echo "未知")
+    fi
+
+    # 标题栏
+    echo -e "${CYAN}${DBOX_TL}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_TR}${NC}"
+    echo -e "${CYAN}${DBOX_V}${NC}   ${YELLOW}sing-box 一键管理脚本 V2.0.0${NC}    ${CYAN}${DBOX_V}${NC}"
+    echo -e "${CYAN}${DBOX_BL}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_H}${DBOX_BR}${NC}"
+    echo ""
+
+    # 系统状态区
+    echo -e "${CYAN}${BOX_TL}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_TR}${NC}"
+    echo -e "${CYAN}${BOX_V}${NC}  ${YELLOW}系统状态${NC}                            ${CYAN}${BOX_V}${NC}"
+    echo -e "${CYAN}${BOX_ML}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_MR}${NC}"
+    printf "${CYAN}${BOX_V}${NC}  内核版本: ${YELLOW}%-22s${NC} ${CYAN}${BOX_V}${NC}\n" "$version"
+    printf "${CYAN}${BOX_V}${NC}  运行状态: %-22s ${CYAN}${BOX_V}${NC}\n" "$status_display"
+    printf "${CYAN}${BOX_V}${NC}  节点数量: ${BLUE}%-22s${NC} ${CYAN}${BOX_V}${NC}\n" "$nodes_count"
+    printf "${CYAN}${BOX_V}${NC}  用户总数: ${BLUE}%-22s${NC} ${CYAN}${BOX_V}${NC}\n" "$users_count"
+    printf "${CYAN}${BOX_V}${NC}  启用用户: ${GREEN}%-2s${NC}/${BLUE}%-18s${NC} ${CYAN}${BOX_V}${NC}\n" "$enabled_users" "$users_count"
+    printf "${CYAN}${BOX_V}${NC}  绑定总数: ${BLUE}%-22s${NC} ${CYAN}${BOX_V}${NC}\n" "$bindings_count"
+    echo -e "${CYAN}${BOX_BL}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_BR}${NC}"
+    echo ""
+
+    # 功能菜单区
+    echo -e "${CYAN}${BOX_TL}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_TR}${NC}"
+    echo -e "${CYAN}${BOX_V}${NC}  ${YELLOW}功能菜单${NC}                            ${CYAN}${BOX_V}${NC}"
+    echo -e "${CYAN}${BOX_ML}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_MR}${NC}"
+    echo -e "${CYAN}${BOX_V}${NC}  ${GREEN}1.${NC}  节点管理                      ${CYAN}${BOX_V}${NC}"
+    echo -e "${CYAN}${BOX_V}${NC}  ${GREEN}2.${NC}  用户管理                      ${CYAN}${BOX_V}${NC}"
+    echo -e "${CYAN}${BOX_V}${NC}  ${GREEN}3.${NC}  绑定管理                      ${CYAN}${BOX_V}${NC}"
+    echo -e "${CYAN}${BOX_V}${NC}  ${GREEN}4.${NC}  订阅管理                      ${CYAN}${BOX_V}${NC}"
+    echo -e "${CYAN}${BOX_V}${NC}  ${GREEN}5.${NC}  配置管理                      ${CYAN}${BOX_V}${NC}"
+    echo -e "${CYAN}${BOX_V}${NC}  ${GREEN}6.${NC}  内核管理                      ${CYAN}${BOX_V}${NC}"
+    echo -e "${CYAN}${BOX_V}${NC}  ${GREEN}7.${NC}  出站规则                      ${CYAN}${BOX_V}${NC}"
+    echo -e "${CYAN}${BOX_V}${NC}  ${GREEN}8.${NC}  域名管理                      ${CYAN}${BOX_V}${NC}"
+    echo -e "${CYAN}${BOX_V}${NC}  ${GREEN}9.${NC}  证书管理                      ${CYAN}${BOX_V}${NC}"
+    echo -e "${CYAN}${BOX_V}${NC}  ${GREEN}10.${NC} 防火墙管理                    ${CYAN}${BOX_V}${NC}"
+    echo -e "${CYAN}${BOX_ML}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_MR}${NC}"
+    echo -e "${CYAN}${BOX_V}${NC}  ${GREEN}11.${NC} 服务控制                      ${CYAN}${BOX_V}${NC}"
+    echo -e "${CYAN}${BOX_V}${NC}  ${GREEN}12.${NC} API 管理                      ${CYAN}${BOX_V}${NC}"
+    if declare -f smart_tips_menu &>/dev/null; then
+        echo -e "${CYAN}${BOX_V}${NC}  ${GREEN}13.${NC} 智能提示                      ${CYAN}${BOX_V}${NC}"
+    fi
+    echo -e "${CYAN}${BOX_V}${NC}  ${GREEN}0.${NC}  退出脚本                      ${CYAN}${BOX_V}${NC}"
+    echo -e "${CYAN}${BOX_BL}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_BR}${NC}"
+    echo ""
 }
 
 # =============================================================================

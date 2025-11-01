@@ -17,7 +17,14 @@
       "Bash(for:*)",
       "Bash(do echo \"=== 检查 $file ===\")",
       "Bash(ls:*)",
-      "Bash(awk:*)"
+      "Bash(awk:*)",
+      "Bash(do echo \"=== 检查 $file 的依赖 ===\")",
+      "Bash(do echo \"=== $module ===\")",
+      "Bash(do echo \"=== $file ===\")",
+      "Bash(do if [[ -f \"modules/$module.sh\" ]])",
+      "Bash(then echo \"✅ modules/$module.sh 存在\")",
+      "Bash(else echo \"❌ modules/$module.sh 缺失\")",
+      "Bash(fi)"
     ],
     "deny": [],
     "ask": []

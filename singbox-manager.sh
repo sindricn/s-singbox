@@ -57,12 +57,50 @@ else
     print_warn "使用备用打印函数，部分功能可能不可用"
 fi
 
-# 加载核心增强模块（UI、输入验证、安全JSON）
-[[ -f "${MODULES_DIR}/input-validation.sh" ]] && source "${MODULES_DIR}/input-validation.sh"
-[[ -f "${MODULES_DIR}/safe_json.sh" ]] && source "${MODULES_DIR}/safe_json.sh"
-[[ -f "${MODULES_DIR}/ui_helper.sh" ]] && source "${MODULES_DIR}/ui_helper.sh"
-[[ -f "${MODULES_DIR}/smart_tips.sh" ]] && source "${MODULES_DIR}/smart_tips.sh"
-[[ -f "${MODULES_DIR}/quick_wizard.sh" ]] && source "${MODULES_DIR}/quick_wizard.sh"
+# =============================================================================
+# 加载核心增强模块
+# =============================================================================
+
+# 加载输入验证模块
+if [[ -f "${MODULES_DIR}/input-validation.sh" ]]; then
+    source "${MODULES_DIR}/input-validation.sh"
+    log_debug "input-validation.sh 已加载"
+fi
+
+# 加载安全JSON模块
+if [[ -f "${MODULES_DIR}/safe_json.sh" ]]; then
+    source "${MODULES_DIR}/safe_json.sh"
+    log_debug "safe_json.sh 已加载"
+fi
+
+# 加载UI增强模块
+if [[ -f "${MODULES_DIR}/ui_helper.sh" ]]; then
+    if source "${MODULES_DIR}/ui_helper.sh" 2>/dev/null; then
+        log_debug "ui_helper.sh 已加载"
+        # 验证关键函数
+        if declare -f show_enhanced_main_menu &>/dev/null; then
+            log_debug "show_enhanced_main_menu 函数可用"
+        else
+            log_warn "ui_helper.sh 加载但 show_enhanced_main_menu 函数不可用"
+        fi
+    else
+        log_warn "ui_helper.sh 加载失败，将使用简化版菜单"
+    fi
+else
+    log_warn "ui_helper.sh 不存在: ${MODULES_DIR}/ui_helper.sh"
+fi
+
+# 加载智能提示模块
+if [[ -f "${MODULES_DIR}/smart_tips.sh" ]]; then
+    source "${MODULES_DIR}/smart_tips.sh" 2>/dev/null
+    log_debug "smart_tips.sh 已加载"
+fi
+
+# 加载快速向导模块
+if [[ -f "${MODULES_DIR}/quick_wizard.sh" ]]; then
+    source "${MODULES_DIR}/quick_wizard.sh" 2>/dev/null
+    log_debug "quick_wizard.sh 已加载"
+fi
 
 # =============================================================================
 # 环境检查

@@ -19,6 +19,15 @@ fi
 # 颜色和样式定义
 # =============================================================================
 
+# 字体样式与灰色
+if [[ -z "${BOLD:-}" ]]; then
+    readonly BOLD='\033[1m'
+fi
+
+if [[ -z "${GRAY:-}" ]]; then
+    readonly GRAY='\033[0;37m'
+fi
+
 # 状态指示器
 readonly STATUS_RUNNING="●"
 readonly STATUS_STOPPED="○"
@@ -282,6 +291,23 @@ show_menu_item() {
     fi
 }
 
+# 显示菜单分组标题
+show_menu_section() {
+    local title=$1
+    shift
+    local items=("$@")
+
+    echo ""
+    echo -e "${CYAN}${BOLD}▶ ${title}${NC}"
+    echo ""
+
+    for entry in "${items[@]}"; do
+        local number icon label description
+        IFS='|' read -r number icon label description <<< "$entry"
+        show_menu_item "$number" "$icon" "$label" "$description"
+    done
+}
+
 # 显示分组标题
 show_menu_group() {
     local title=$1
@@ -298,43 +324,43 @@ show_enhanced_main_menu() {
     clear
 
     # 显示标题
-    draw_title_box "sing-box Manager v2.0" 68
+    draw_title_box "S-Xray 控制台" 72
 
     # 显示状态面板
     show_status_panel
+    show_resource_panel
 
-    # 显示快捷工具（如果快速向导可用）
-    if declare -f run_quick_wizard &>/dev/null; then
-        show_menu_group "快捷工具"
-        show_menu_item "Q" "🚀" "快速部署向导" "5分钟快速配置"
-    fi
+    # 核心功能区
+    show_menu_section "部署中心" \
+        "1|🚀|快速搭建|Reality 一键部署流程" \
+        "2|📦|节点管理|节点配置与分享" \
+        "3|👥|用户管理|账号与权限管理" \
+        "4|🔗|绑定管理|节点用户绑定关系"
 
-    # 显示菜单分组
-    show_menu_group "核心管理"
-    show_menu_item "1" "🔧" "内核管理" "安装/更新/卸载内核"
-    show_menu_item "2" "📦" "节点管理" "配置代理节点"
-    show_menu_item "3" "👥" "用户管理" "管理用户账号"
-    show_menu_item "4" "🔗" "绑定管理" "用户节点绑定"
-    show_menu_item "5" "⚙️" "配置管理" "生成和管理配置"
-    show_menu_item "6" "🚀" "服务控制" "启动/停止服务"
+    show_menu_section "运营中心" \
+        "5|📮|订阅管理|多格式订阅生成" \
+        "6|🛰️|出站管理|规则链与默认策略" \
+        "9|📊|监控统计|流量与状态面板"
 
-    show_menu_group "高级功能"
-    show_menu_item "7" "🔐" "证书管理" "SSL/TLS证书"
-    show_menu_item "8" "🌐" "域名管理" "域名配置和关联"
-    show_menu_item "9" "📡" "订阅管理" "订阅链接管理"
-    show_menu_item "10" "📊" "监控统计" "流量和性能监控"
-    show_menu_item "11" "🛡️" "防火墙管理" "端口和规则配置"
-    show_menu_item "12" "🔌" "API管理" "API接口配置"
-
-    show_menu_group "系统工具"
-    show_menu_item "13" "🔍" "查看状态" "服务运行状态"
-    show_menu_item "14" "📋" "查看日志" "系统运行日志"
-    show_menu_item "15" "💡" "智能提示" "系统健康检查"
+    show_menu_section "系统中心" \
+        "7|⚙️|配置管理|配置生成与校验" \
+        "8|🧠|内核管理|内核生命周期管理" \
+        "10|🔌|API管理|零停机动态操作"
 
     echo ""
     draw_separator 68
-    show_menu_item "0" "🚪" "退出程序"
+    echo -e "${CYAN}${BOLD}▶ 辅助工具${NC}"
     echo ""
+    show_menu_item "S" "🧰" "服务控制" "启动/停止/重载核心服务"
+    show_menu_item "D" "🌐" "域名管理" "域名优选与绑定"
+    show_menu_item "C" "🔐" "证书管理" "证书签发与导入"
+    show_menu_item "F" "🛡️" "防火墙管理" "端口策略与放通"
+    show_menu_item "V" "📈" "查看状态" "systemctl 服务状态"
+    show_menu_item "L" "📋" "查看日志" "最近 50 行运行日志"
+    if declare -f smart_tips_menu &>/dev/null; then
+        show_menu_item "T" "💡" "智能提示" "健康巡检与建议"
+    fi
+    show_menu_item "0" "🚪" "退出程序"
     draw_separator 68
 
     # 显示快捷提示

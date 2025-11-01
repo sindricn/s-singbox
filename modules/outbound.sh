@@ -698,20 +698,48 @@ set_default_outbound() {
 outbound_menu() {
     while true; do
         clear
-        print_header "出站规则管理"
-
-        echo "== 出站管理 =="
-        echo "1)  添加出站"
-        echo "2)  删除出站"
-        echo "3)  列出出站"
-        echo ""
-        echo "== 路由规则 =="
-        echo "4)  添加路由规则"
-        echo "5)  列出路由规则"
-        echo "6)  设置默认出站"
-        echo ""
-        echo "0)  返回主菜单"
-        echo ""
+        if declare -f draw_title_box &>/dev/null; then
+            draw_title_box "出站管理" 68
+            echo ""
+            if declare -f show_menu_item &>/dev/null; then
+                show_menu_item "1" "➕" "添加出站" "新增上游出站线路"
+                show_menu_item "2" "🗑️" "删除出站" "移除已存在的出站"
+                show_menu_item "3" "📋" "列出出站" "查看全部出站列表"
+                echo ""
+                show_menu_item "4" "🧭" "添加路由规则" "为流量添加匹配策略"
+                show_menu_item "5" "🗂️" "列出路由规则" "浏览已配置的规则"
+                show_menu_item "6" "⭐" "设置默认出站" "调整默认出口策略"
+                echo ""
+                draw_separator 68
+                show_menu_item "0" "↩️" "返回主菜单"
+                echo ""
+            else
+                echo "1)  添加出站"
+                echo "2)  删除出站"
+                echo "3)  列出出站"
+                echo ""
+                echo "4)  添加路由规则"
+                echo "5)  列出路由规则"
+                echo "6)  设置默认出站"
+                echo ""
+                echo "0)  返回主菜单"
+                echo ""
+            fi
+        else
+            print_header "出站规则管理"
+            echo "== 出站管理 =="
+            echo "1)  添加出站"
+            echo "2)  删除出站"
+            echo "3)  列出出站"
+            echo ""
+            echo "== 路由规则 =="
+            echo "4)  添加路由规则"
+            echo "5)  列出路由规则"
+            echo "6)  设置默认出站"
+            echo ""
+            echo "0)  返回主菜单"
+            echo ""
+        fi
 
         read -p "请选择: " choice
 

@@ -271,23 +271,31 @@ show_main_menu() {
     clear
     print_header "sing-box Manager"
 
-    echo "1)  内核管理"
-    echo "2)  节点管理"
-    echo "3)  用户管理"
-    echo "4)  绑定管理"
-    echo "5)  配置管理"
-    echo "6)  服务控制"
-    echo "7)  证书管理"
-    echo "8)  域名管理"
-    echo "9)  订阅管理"
-    echo "10) 监控统计"
-    echo "11) 防火墙管理"
-    echo "12) API 管理"
-    echo "13) 查看状态"
-    echo "14) 查看日志"
-    echo "15) 智能提示"
+    echo "【部署中心】"
+    echo "1)  快速搭建 - Reality 一键部署"
+    echo "2)  节点管理 - 节点配置维护"
+    echo "3)  用户管理 - 用户账号管理"
+    echo "4)  绑定管理 - 用户节点绑定"
     echo ""
-    echo "Q)  快速部署向导"
+    echo "【运营中心】"
+    echo "5)  订阅管理 - 多格式订阅"
+    echo "6)  出站管理 - 规则与策略"
+    echo "9)  监控统计 - 流量状态面板"
+    echo ""
+    echo "【系统中心】"
+    echo "7)  配置管理 - 配置生成校验"
+    echo "8)  内核管理 - 内核生命周期"
+    echo "10) API 管理 - 零停机操作"
+    echo ""
+    echo "【辅助工具】"
+    echo "S)  服务控制"
+    echo "D)  域名管理"
+    echo "C)  证书管理"
+    echo "F)  防火墙管理"
+    echo "V)  查看状态"
+    echo "L)  查看日志"
+    echo "T)  智能提示"
+    echo ""
     echo "0)  退出"
     echo ""
 }
@@ -822,22 +830,13 @@ main() {
         read -p "$(echo -e ${CYAN}请选择${NC}: )" choice
 
         case "$choice" in
-            [Qq])
-                # 快速部署向导
+            1)
+                # 快速搭建
                 if declare -f run_quick_wizard &>/dev/null; then
                     run_quick_wizard
                 else
                     print_error "快速部署向导模块未加载"
                     sleep 2
-                fi
-                ;;
-            1)
-                # 内核管理
-                if declare -f core_management_menu &>/dev/null; then
-                    core_management_menu
-                else
-                    source "${MODULES_DIR}/core.sh"
-                    core_management_menu
                 fi
                 ;;
             2)
@@ -850,44 +849,84 @@ main() {
                 handle_binding_menu
                 ;;
             5)
-                handle_config_menu
+                if declare -f subscription_menu &>/dev/null; then
+                    subscription_menu
+                else
+                    source "${MODULES_DIR}/subscription.sh"
+                    subscription_menu
+                fi
                 ;;
             6)
-                handle_service_menu
+                if declare -f outbound_menu &>/dev/null; then
+                    outbound_menu
+                else
+                    source "${MODULES_DIR}/outbound.sh"
+                    outbound_menu
+                fi
                 ;;
             7)
-                source "${MODULES_DIR}/cert.sh"
-                cert_management_menu
+                handle_config_menu
                 ;;
             8)
-                source "${MODULES_DIR}/domain.sh"
-                domain_menu
+                if declare -f core_management_menu &>/dev/null; then
+                    core_management_menu
+                else
+                    source "${MODULES_DIR}/core.sh"
+                    core_management_menu
+                fi
                 ;;
             9)
-                source "${MODULES_DIR}/subscription.sh"
-                subscription_menu
+                if declare -f monitor_menu &>/dev/null; then
+                    monitor_menu
+                else
+                    source "${MODULES_DIR}/monitor.sh"
+                    monitor_menu
+                fi
                 ;;
             10)
-                source "${MODULES_DIR}/monitor.sh"
-                monitor_menu
+                if declare -f api_menu &>/dev/null; then
+                    api_menu
+                else
+                    source "${MODULES_DIR}/singbox_api.sh"
+                    api_menu
+                fi
                 ;;
-            11)
-                source "${MODULES_DIR}/firewall.sh"
-                firewall_menu
+            [Ss])
+                handle_service_menu
                 ;;
-            12)
-                source "${MODULES_DIR}/singbox_api.sh"
-                api_menu
+            [Dd])
+                if declare -f domain_menu &>/dev/null; then
+                    domain_menu
+                else
+                    source "${MODULES_DIR}/domain.sh"
+                    domain_menu
+                fi
                 ;;
-            13)
+            [Cc])
+                if declare -f cert_management_menu &>/dev/null; then
+                    cert_management_menu
+                else
+                    source "${MODULES_DIR}/cert.sh"
+                    cert_management_menu
+                fi
+                ;;
+            [Ff])
+                if declare -f firewall_menu &>/dev/null; then
+                    firewall_menu
+                else
+                    source "${MODULES_DIR}/firewall.sh"
+                    firewall_menu
+                fi
+                ;;
+            [Vv])
                 status_singbox
                 read -p "按回车键继续..."
                 ;;
-            14)
+            [Ll])
                 view_logs
                 read -p "按回车键继续..."
                 ;;
-            15)
+            [Tt])
                 if declare -f smart_tips_menu &>/dev/null; then
                     smart_tips_menu
                 else

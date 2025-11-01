@@ -672,6 +672,94 @@ show_singbox_info() {
 }
 
 # =============================================================================
+# 内核管理菜单
+# =============================================================================
+
+# 显示内核管理菜单
+show_core_menu() {
+    clear
+
+    # 使用增强UI（如果可用）
+    if declare -f draw_title_box &>/dev/null; then
+        draw_title_box "内核管理" 68
+
+        # 显示当前状态
+        local version=$(get_installed_version 2>/dev/null || echo "未安装")
+        local status=$(get_service_status_display 2>/dev/null || echo "${RED}未安装${NC}")
+
+        echo -e "${CYAN}当前版本:${NC} ${YELLOW}${version}${NC}"
+        echo -e "${CYAN}服务状态:${NC} $status"
+        echo ""
+
+        if declare -f show_menu_item &>/dev/null; then
+            show_menu_item "1" "⬇️" "安装内核" "下载并安装最新版本"
+            show_menu_item "2" "🔄" "更新内核" "检查并更新到最新版本"
+            show_menu_item "3" "🗑️" "卸载内核" "完全卸载 sing-box 内核"
+            show_menu_item "4" "ℹ️" "查看信息" "查看内核详细信息"
+            echo ""
+            if declare -f draw_separator &>/dev/null; then
+                draw_separator 68
+            else
+                echo "----------------------------------------"
+            fi
+            show_menu_item "0" "↩️" "返回主菜单"
+            echo ""
+        else
+            echo "1)  安装内核"
+            echo "2)  更新内核"
+            echo "3)  卸载内核"
+            echo "4)  查看信息"
+            echo ""
+            echo "0)  返回主菜单"
+            echo ""
+        fi
+    else
+        print_header "内核管理"
+        echo "1)  安装内核"
+        echo "2)  更新内核"
+        echo "3)  卸载内核"
+        echo "4)  查看信息"
+        echo ""
+        echo "0)  返回主菜单"
+        echo ""
+    fi
+}
+
+# 内核管理菜单主循环
+core_management_menu() {
+    while true; do
+        show_core_menu
+        read -p "$(echo -e ${CYAN}请选择${NC}: )" choice
+
+        case "$choice" in
+            1)
+                install_singbox
+                read -p "按回车键继续..."
+                ;;
+            2)
+                update_singbox
+                read -p "按回车键继续..."
+                ;;
+            3)
+                uninstall_singbox
+                read -p "按回车键继续..."
+                ;;
+            4)
+                show_singbox_info
+                read -p "按回车键继续..."
+                ;;
+            0)
+                break
+                ;;
+            *)
+                print_error "无效选择"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# =============================================================================
 # 模块初始化
 # =============================================================================
 

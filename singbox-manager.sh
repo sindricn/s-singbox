@@ -271,19 +271,23 @@ show_main_menu() {
     clear
     print_header "sing-box Manager"
 
-    echo "1)  节点管理"
-    echo "2)  用户管理"
-    echo "3)  绑定管理"
-    echo "4)  配置管理"
-    echo "5)  服务控制"
-    echo "6)  证书管理"
-    echo "7)  订阅管理"
-    echo "8)  监控统计"
-    echo "9)  防火墙管理"
-    echo "10) API 管理"
-    echo "11) 查看状态"
-    echo "12) 查看日志"
+    echo "1)  内核管理"
+    echo "2)  节点管理"
+    echo "3)  用户管理"
+    echo "4)  绑定管理"
+    echo "5)  配置管理"
+    echo "6)  服务控制"
+    echo "7)  证书管理"
+    echo "8)  域名管理"
+    echo "9)  订阅管理"
+    echo "10) 监控统计"
+    echo "11) 防火墙管理"
+    echo "12) API 管理"
+    echo "13) 查看状态"
+    echo "14) 查看日志"
+    echo "15) 智能提示"
     echo ""
+    echo "Q)  快速部署向导"
     echo "0)  退出"
     echo ""
 }
@@ -828,53 +832,62 @@ main() {
                 fi
                 ;;
             1)
-                handle_node_menu
+                # 内核管理
+                if declare -f core_management_menu &>/dev/null; then
+                    core_management_menu
+                else
+                    source "${MODULES_DIR}/core.sh"
+                    core_management_menu
+                fi
                 ;;
             2)
-                handle_user_menu
+                handle_node_menu
                 ;;
             3)
-                handle_binding_menu
+                handle_user_menu
                 ;;
             4)
-                handle_config_menu
+                handle_binding_menu
                 ;;
             5)
-                handle_service_menu
+                handle_config_menu
                 ;;
             6)
+                handle_service_menu
+                ;;
+            7)
                 source "${MODULES_DIR}/cert.sh"
                 cert_management_menu
                 ;;
-            7)
+            8)
                 source "${MODULES_DIR}/domain.sh"
                 domain_menu
                 ;;
-            8)
+            9)
                 source "${MODULES_DIR}/subscription.sh"
                 subscription_menu
                 ;;
-            9)
+            10)
                 source "${MODULES_DIR}/monitor.sh"
                 monitor_menu
                 ;;
-            10)
+            11)
                 source "${MODULES_DIR}/firewall.sh"
                 firewall_menu
                 ;;
-            11)
+            12)
                 source "${MODULES_DIR}/singbox_api.sh"
                 api_menu
                 ;;
-            12)
+            13)
                 status_singbox
                 read -p "按回车键继续..."
                 ;;
-            13)
+            14)
                 view_logs
                 read -p "按回车键继续..."
                 ;;
-            14)
+            15)
                 if declare -f smart_tips_menu &>/dev/null; then
                     smart_tips_menu
                 else

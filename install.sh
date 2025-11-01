@@ -202,35 +202,6 @@ EOF
     print_success "数据目录初始化完成"
 }
 
-# 安装 sing-box 内核
-install_singbox_core() {
-    print_header "安装 sing-box 内核"
-
-    # 加载 common.sh 模块
-    if [[ -f "${SCRIPT_DIR}/modules/common.sh" ]]; then
-        source "${SCRIPT_DIR}/modules/common.sh"
-    else
-        print_error "找不到 common.sh 模块"
-        exit 1
-    fi
-
-    # 加载 core.sh 模块
-    if [[ -f "${SCRIPT_DIR}/modules/core.sh" ]]; then
-        source "${SCRIPT_DIR}/modules/core.sh"
-    else
-        print_error "找不到 core.sh 模块"
-        exit 1
-    fi
-
-    # 调用安装函数
-    if install_singbox; then
-        print_success "sing-box 内核安装完成"
-    else
-        print_error "sing-box 内核安装失败"
-        exit 1
-    fi
-}
-
 # 创建命令链接
 create_symlink() {
     print_header "创建命令链接"
@@ -281,12 +252,18 @@ show_completion() {
     echo -e "     或"
     echo -e "     ${YELLOW}${SCRIPT_DIR}/singbox-manager.sh${NC}"
     echo ""
-    echo -e "  2. 首次使用建议："
-    echo -e "     - 添加节点"
-    echo -e "     - 添加用户"
-    echo -e "     - 绑定用户到节点"
-    echo -e "     - 生成配置"
-    echo -e "     - 启动服务"
+    echo -e "  2. 首次使用步骤："
+    echo -e "     ${YELLOW}第一步: 安装 sing-box 内核${NC}"
+    echo -e "       进入管理脚本后,选择 ${GREEN}[内核管理] -> [安装内核]${NC}"
+    echo ""
+    echo -e "     ${YELLOW}第二步: 配置节点和用户${NC}"
+    echo -e "       - 添加节点"
+    echo -e "       - 添加用户"
+    echo -e "       - 绑定用户到节点"
+    echo -e "       - 生成配置"
+    echo ""
+    echo -e "     ${YELLOW}第三步: 启动服务${NC}"
+    echo -e "       - 启动 sing-box 服务"
     echo ""
     echo -e "${CYAN}卸载方式：${NC}"
     echo -e "  ${YELLOW}bash ${SCRIPT_DIR}/uninstall.sh${NC}"
@@ -430,9 +407,6 @@ main() {
 
     # 初始化数据目录
     init_data_directory
-
-    # 安装 sing-box 内核
-    install_singbox_core
 
     # 创建命令链接
     create_symlink

@@ -180,21 +180,42 @@ install_binary() {
     local archive_path=$1
     local extract_dir=$(dirname "$archive_path")
 
-    log_info "解压文件..."
+    log_info "解压文件: $(basename "$archive_path")"
+
+    # 检查压缩文件是否存在
+    if [[ ! -f "$archive_path" ]]; then
+        log_error "压缩文件不存在: $archive_path"
+        return 1
+    fi
+
+    # 检查文件是否为有效的 tar.gz 文件
+    if ! file "$archive_path" 2>/dev/null | grep -q "gzip compressed"; then
+        log_error "文件不是有效的 gzip 压缩文件"
+        log_info "文件类型: $(file "$archive_path" 2>/dev/null || echo '未知')"
+        return 1
+    fi
 
     # 解压
-    if ! tar -xzf "$archive_path" -C "$extract_dir"; then
+    if ! tar -xzf "$archive_path" -C "$extract_dir" 2>&1; then
         log_error "解压失败"
+        log_info "压缩文件路径: $archive_path"
+        log_info "目标目录: $extract_dir"
+        log_info "请检查文件是否完整下载"
         return 1
     fi
 
     # 查找二进制文件
-    local binary=$(find "$extract_dir" -name "sing-box" -type f | head -1)
+    log_info "查找 sing-box 二进制文件..."
+    local binary=$(find "$extract_dir" -name "sing-box" -type f -executable 2>/dev/null | head -1)
 
     if [[ -z "$binary" ]]; then
         log_error "未找到 sing-box 二进制文件"
+        log_info "解压目录内容:"
+        ls -la "$extract_dir" 2>/dev/null || true
         return 1
     fi
+
+    log_info "找到二进制文件: $binary"
 
     # 安装二进制文件
     log_info "安装二进制文件到 $SINGBOX_BINARY"
@@ -203,7 +224,7 @@ install_binary() {
         log_success "安装成功"
         return 0
     else
-        log_error "安装失败"
+        log_error "安装失败: 无法复制文件或设置权限"
         return 1
     fi
 }

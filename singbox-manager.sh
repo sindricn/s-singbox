@@ -120,7 +120,7 @@ start_singbox() {
             return 1
         fi
     else
-        print_warn "sing-box 服务已在运行"
+        print_warning "sing-box 服务已在运行"
     fi
 }
 
@@ -137,7 +137,7 @@ stop_singbox() {
             return 1
         fi
     else
-        print_warn "sing-box 服务未运行"
+        print_warning "sing-box 服务未运行"
     fi
 }
 
@@ -168,7 +168,7 @@ reload_singbox() {
             return 1
         fi
     else
-        print_warn "sing-box 服务未运行，无法重载"
+        print_warning "sing-box 服务未运行，无法重载"
         return 1
     fi
 }
@@ -268,14 +268,11 @@ show_main_menu() {
     # 获取用户数量
     local user_count=$(get_users_count 2>/dev/null || echo "0")
 
-    # 获取启用的用户数量
-    local enabled_count=$(get_enabled_users_count 2>/dev/null || echo "0")
-
     # 获取在线用户数量
     local online_count=$(get_online_users_count 2>/dev/null || echo "0")
 
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║   sing-box Manager V2.0.0           ║${NC}"
+    echo -e "${CYAN}║   sing-box 一键管理脚本 V2.0.0      ║${NC}"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
     echo -e "${CYAN}┌─────────────────────────────────────┐${NC}"
@@ -283,7 +280,7 @@ show_main_menu() {
     echo -e "${CYAN}├─────────────────────────────────────┤${NC}"
     echo -e "${CYAN}│${NC}  内核版本: ${YELLOW}${version}${NC}"
     echo -e "${CYAN}│${NC}  运行状态: ${status}"
-    echo -e "${CYAN}│${NC}  用户数量: ${BLUE}${user_count}${NC} ${CYAN}(启用:${NC} ${GREEN}${enabled_count}${NC}${CYAN})${NC}"
+    echo -e "${CYAN}│${NC}  用户数量: ${BLUE}${user_count}${NC}"
     echo -e "${CYAN}│${NC}  节点总数: ${BLUE}${node_count}${NC}"
     echo -e "${CYAN}│${NC}  在线用户: ${GREEN}${online_count}${NC}/${BLUE}${user_count}${NC}"
     echo -e "${CYAN}└─────────────────────────────────────┘${NC}"
@@ -291,20 +288,17 @@ show_main_menu() {
     echo -e "${CYAN}┌─────────────────────────────────────┐${NC}"
     echo -e "${CYAN}│${NC}  ${YELLOW}功能菜单${NC}                           ${CYAN}│${NC}"
     echo -e "${CYAN}├─────────────────────────────────────┤${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}1.${NC}  节点管理                       ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}1.${NC}  sing-box 管理                  ${CYAN}│${NC}"
     echo -e "${CYAN}│${NC}  ${GREEN}2.${NC}  用户管理                       ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}3.${NC}  绑定管理                       ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}3.${NC}  节点管理                       ${CYAN}│${NC}"
     echo -e "${CYAN}│${NC}  ${GREEN}4.${NC}  订阅管理                       ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}5.${NC}  配置管理                       ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}6.${NC}  内核管理                       ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}5.${NC}  域名管理                       ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}6.${NC}  证书管理                       ${CYAN}│${NC}"
     echo -e "${CYAN}│${NC}  ${GREEN}7.${NC}  出站规则                       ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}8.${NC}  域名管理                       ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}9.${NC}  证书管理                       ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}10.${NC} 防火墙管理                     ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}8.${NC}  防火墙管理                     ${CYAN}│${NC}"
     echo -e "${CYAN}├─────────────────────────────────────┤${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}11.${NC} 服务控制                       ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}12.${NC} API 管理                       ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}13.${NC} 智能提示                       ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}9.${NC}  脚本管理                       ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}10.${NC} 关于脚本                       ${CYAN}│${NC}"
     echo -e "${CYAN}│${NC}  ${GREEN}0.${NC}  退出脚本                       ${CYAN}│${NC}"
     echo -e "${CYAN}└─────────────────────────────────────┘${NC}"
     echo ""
@@ -646,6 +640,119 @@ handle_service_menu() {
 }
 
 # =============================================================================
+# 脚本管理和关于信息
+# =============================================================================
+
+# 关于脚本
+show_about() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║          关于脚本                    ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${YELLOW}脚本名称：${NC}sing-box 一键管理脚本"
+    echo -e "${YELLOW}脚本版本：${NC}V2.0.0"
+    echo ""
+    echo -e "${YELLOW}功能简介：${NC}"
+    echo -e "  • sing-box 内核安装、更新、卸载"
+    echo -e "  • 多协议节点管理（VLESS、VMess、Trojan、Shadowsocks、Hysteria2等）"
+    echo -e "  • 用户管理与流量统计"
+    echo -e "  • 订阅链接生成（支持Base64、Clash、SingBox格式）"
+    echo -e "  • 域名与证书管理（自动申请SSL证书）"
+    echo -e "  • 出站规则管理（代理链、分流规则）"
+    echo -e "  • 防火墙与端口管理"
+    echo ""
+    echo -e "${YELLOW}项目地址：${NC}${BLUE}https://github.com/sindricn/s-singbox${NC}"
+    echo -e "${YELLOW}作者博客：${NC}${BLUE}blog.nbvil.com${NC}"
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    read -p "按 Enter 键返回主菜单..."
+}
+
+# 脚本管理菜单
+menu_script() {
+    while true; do
+        clear
+        echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║          脚本管理                    ║${NC}"
+        echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+        echo ""
+        echo -e "${GREEN}1.${NC} 更新脚本"
+        echo -e "${GREEN}2.${NC} 卸载管理"
+        echo -e "${GREEN}0.${NC} 返回主菜单"
+        echo ""
+        read -p "请选择操作 [0-2]: " choice
+
+        case $choice in
+            1)
+                # 更新脚本
+                clear
+                echo -e "${CYAN}正在更新脚本...${NC}"
+
+                local script_path="${BASH_SOURCE[0]}"
+                if [[ -L "$script_path" ]]; then
+                    script_path="$(readlink -f "$script_path")"
+                fi
+                local script_dir="$(cd "$(dirname "$script_path")" && pwd)"
+
+                cd "$script_dir" || {
+                    log_error "无法进入脚本目录"
+                    read -p "按 Enter 键继续..."
+                    continue
+                }
+
+                if [[ -d ".git" ]]; then
+                    git pull || log_error "更新失败"
+                    log_info "脚本更新完成"
+                else
+                    log_warn "当前不是Git仓库，无法自动更新"
+                    echo -e "${YELLOW}请手动下载最新版本${NC}"
+                fi
+                read -p "按 Enter 键继续..."
+                ;;
+            2)
+                # 卸载管理
+                clear
+                echo -e "${RED}╔═══════════════════════════════════════╗${NC}"
+                echo -e "${RED}║          卸载管理                    ║${NC}"
+                echo -e "${RED}╚═══════════════════════════════════════╝${NC}"
+                echo ""
+                echo -e "${YELLOW}卸载选项：${NC}"
+                echo -e "  ${CYAN}1.${NC} 仅卸载管理脚本（保留 sing-box 核心与配置）"
+                echo -e "  ${CYAN}2.${NC} 仅卸载 sing-box 核心与配置文件（保留管理脚本）"
+                echo -e "  ${CYAN}3.${NC} 完全卸载（同时卸载脚本和 sing-box）"
+                echo ""
+                read -p "请选择卸载方式 [1-3] (0 取消): " uninstall_choice
+
+                case $uninstall_choice in
+                    1)
+                        log_warn "仅卸载管理脚本功能尚未实现"
+                        ;;
+                    2)
+                        log_warn "仅卸载 sing-box 核心功能尚未实现"
+                        ;;
+                    3)
+                        log_warn "完全卸载功能尚未实现"
+                        ;;
+                    0|*)
+                        log_info "已取消卸载"
+                        ;;
+                esac
+                read -p "按 Enter 键继续..."
+                ;;
+            0)
+                break
+                ;;
+            *)
+                log_error "无效选择"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# =============================================================================
 # 主程序
 # =============================================================================
 
@@ -671,16 +778,21 @@ main() {
 
         case "$choice" in
             1)
-                # 节点管理
-                handle_node_menu
+                # sing-box 管理
+                if declare -f core_management_menu &>/dev/null; then
+                    core_management_menu
+                else
+                    source "${MODULES_DIR}/core.sh"
+                    core_management_menu
+                fi
                 ;;
             2)
                 # 用户管理
                 handle_user_menu
                 ;;
             3)
-                # 绑定管理
-                handle_binding_menu
+                # 节点管理
+                handle_node_menu
                 ;;
             4)
                 # 订阅管理
@@ -692,16 +804,21 @@ main() {
                 fi
                 ;;
             5)
-                # 配置管理
-                handle_config_menu
+                # 域名管理
+                if declare -f domain_menu &>/dev/null; then
+                    domain_menu
+                else
+                    source "${MODULES_DIR}/domain.sh"
+                    domain_menu
+                fi
                 ;;
             6)
-                # 内核管理
-                if declare -f core_management_menu &>/dev/null; then
-                    core_management_menu
+                # 证书管理
+                if declare -f cert_management_menu &>/dev/null; then
+                    cert_management_menu
                 else
-                    source "${MODULES_DIR}/core.sh"
-                    core_management_menu
+                    source "${MODULES_DIR}/cert.sh"
+                    cert_management_menu
                 fi
                 ;;
             7)
@@ -714,24 +831,6 @@ main() {
                 fi
                 ;;
             8)
-                # 域名管理
-                if declare -f domain_menu &>/dev/null; then
-                    domain_menu
-                else
-                    source "${MODULES_DIR}/domain.sh"
-                    domain_menu
-                fi
-                ;;
-            9)
-                # 证书管理
-                if declare -f cert_management_menu &>/dev/null; then
-                    cert_management_menu
-                else
-                    source "${MODULES_DIR}/cert.sh"
-                    cert_management_menu
-                fi
-                ;;
-            10)
                 # 防火墙管理
                 if declare -f firewall_menu &>/dev/null; then
                     firewall_menu
@@ -740,34 +839,22 @@ main() {
                     firewall_menu
                 fi
                 ;;
-            11)
-                # 服务控制
-                handle_service_menu
+            9)
+                # 脚本管理
+                menu_script
                 ;;
-            12)
-                # API 管理
-                if declare -f api_menu &>/dev/null; then
-                    api_menu
-                else
-                    source "${MODULES_DIR}/singbox_api.sh"
-                    api_menu
-                fi
-                ;;
-            13)
-                # 智能提示
-                if declare -f smart_tips_menu &>/dev/null; then
-                    smart_tips_menu
-                else
-                    print_error "智能提示系统模块未加载"
-                    sleep 2
-                fi
+            10)
+                # 关于脚本
+                show_about
                 ;;
             0)
-                print_info "退出程序"
+                log_info "用户退出程序"
+                echo -e "${GREEN}感谢使用 sing-box 管理脚本！${NC}"
                 exit 0
                 ;;
             *)
-                print_error "无效选择"
+                log_warn "无效选择: $choice"
+                echo -e "${RED}无效选择，请重新输入${NC}"
                 sleep 1
                 ;;
         esac

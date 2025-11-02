@@ -304,6 +304,105 @@ show_main_menu() {
     echo ""
 }
 
+# sing-box 管理菜单
+menu_core() {
+    while true; do
+        clear
+        echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║          sing-box 管理               ║${NC}"
+        echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+        echo ""
+        echo -e "${GREEN}1.${NC} 安装 sing-box"
+        echo -e "${GREEN}2.${NC} 启动 sing-box"
+        echo -e "${GREEN}3.${NC} 停止 sing-box"
+        echo -e "${GREEN}4.${NC} 重启 sing-box"
+        echo -e "${GREEN}5.${NC} 卸载 sing-box"
+        echo -e "${GREEN}6.${NC} 更新 sing-box"
+        echo -e "${GREEN}7.${NC} 查看日志"
+        echo -e "${GREEN}8.${NC} 查看版本"
+        echo -e "${GREEN}0.${NC} 返回主菜单"
+        echo ""
+        read -p "请选择操作 [0-8]: " choice
+
+        case $choice in
+            1)
+                install_sing-box
+                read -p "按回车键继续..."
+                ;;
+            2)
+                start_sing-box
+                read -p "按回车键继续..."
+                ;;
+            3)
+                stop_sing-box
+                read -p "按回车键继续..."
+                ;;
+            4)
+                restart_sing-box
+                read -p "按回车键继续..."
+                ;;
+            5)
+                uninstall_sing-box
+                read -p "按回车键继续..."
+                ;;
+            6)
+                update_sing-box
+                read -p "按回车键继续..."
+                ;;
+            7)
+                # 查看日志
+                clear
+                echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+                echo -e "${CYAN}║          sing-box 日志               ║${NC}"
+                echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+                echo ""
+                echo -e "${GREEN}1.${NC} 实时日志（最新50行）"
+                echo -e "${GREEN}2.${NC} 完整日志"
+                echo -e "${GREEN}3.${NC} 错误日志"
+                echo -e "${GREEN}0.${NC} 返回"
+                echo ""
+                read -p "请选择 [0-3]: " log_choice
+
+                case $log_choice in
+                    1)
+                        echo ""
+                        echo -e "${CYAN}实时日志（Ctrl+C退出）:${NC}"
+                        echo ""
+                        journalctl -u sing-box -f -n 50
+                        ;;
+                    2)
+                        echo ""
+                        echo -e "${CYAN}完整日志:${NC}"
+                        echo ""
+                        journalctl -u sing-box --no-pager | less
+                        ;;
+                    3)
+                        echo ""
+                        echo -e "${CYAN}错误日志:${NC}"
+                        echo ""
+                        journalctl -u sing-box -p err --no-pager | less
+                        ;;
+                    0) ;;
+                    *) print_error "无效选择" ;;
+                esac
+                read -p "按回车键继续..."
+                ;;
+            8)
+                # 查看版本
+                show_version
+                read -p "按回车键继续..."
+                ;;
+            0)
+                return
+                ;;
+            *)
+                print_error "无效选择"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
 # 节点管理菜单
 show_node_menu() {
     clear
@@ -437,17 +536,16 @@ handle_node_menu() {
 
         case "$choice" in
             1)
-                source "${MODULES_DIR}/node.sh"
-                add_node
-                read -p "按回车键继续..."
+                # 添加节点（显示协议选择菜单）
+                menu_node_add
                 ;;
             2)
-                source "${MODULES_DIR}/node.sh"
+                # 删除节点
                 delete_node
                 read -p "按回车键继续..."
                 ;;
             3)
-                source "${MODULES_DIR}/node.sh"
+                # 列出节点
                 list_nodes
                 read -p "按回车键继续..."
                 ;;
@@ -462,6 +560,39 @@ handle_node_menu() {
     done
 }
 
+# 添加节点菜单（协议选择）
+menu_node_add() {
+    while true; do
+        clear
+        echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║          添加节点                    ║${NC}"
+        echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+        echo ""
+        echo -e "${GREEN}1.${NC} VLESS 节点（支持 Reality/TLS/TCP）"
+        echo -e "${GREEN}2.${NC} VMess 节点"
+        echo -e "${GREEN}3.${NC} Trojan 节点"
+        echo -e "${GREEN}4.${NC} Shadowsocks 节点"
+        echo -e "${GREEN}5.${NC} HTTP 入站节点"
+        echo -e "${GREEN}6.${NC} SOCKS 入站节点"
+        echo -e "${GREEN}0.${NC} 返回上级菜单"
+        echo ""
+        read -p "请选择协议 [0-6]: " choice
+
+        case $choice in
+            1) add_vless_node ;;
+            2) add_vmess_node ;;
+            3) add_trojan_node ;;
+            4) add_shadowsocks_node ;;
+            5) add_http_inbound_node ;;
+            6) add_socks_inbound_node ;;
+            0) break ;;
+            *) print_error "无效选择" ;;
+        esac
+
+        read -p "按 Enter 键继续..."
+    done
+}
+
 handle_user_menu() {
     while true; do
         show_user_menu
@@ -469,28 +600,28 @@ handle_user_menu() {
 
         case "$choice" in
             1)
-                source "${MODULES_DIR}/user.sh"
-                add_user
+                # 添加用户
+                add_global_user
                 read -p "按回车键继续..."
                 ;;
             2)
-                source "${MODULES_DIR}/user.sh"
-                delete_user
+                # 删除用户
+                delete_global_user
                 read -p "按回车键继续..."
                 ;;
             3)
-                source "${MODULES_DIR}/user.sh"
-                list_users
+                # 列出用户
+                list_global_users
                 read -p "按回车键继续..."
                 ;;
             4)
-                source "${MODULES_DIR}/user.sh"
-                modify_user
+                # 修改用户
+                show_user_detail
                 read -p "按回车键继续..."
                 ;;
             5)
-                source "${MODULES_DIR}/user.sh"
-                show_user_info
+                # 查看用户详情
+                show_user_detail
                 read -p "按回车键继续..."
                 ;;
             0)
@@ -511,43 +642,43 @@ handle_binding_menu() {
 
         case "$choice" in
             1)
-                source "${MODULES_DIR}/user_node_binding.sh"
-                bind_user_to_node
+                # 绑定用户到节点
+                bind_users_to_node_smart
                 read -p "按回车键继续..."
                 ;;
             2)
-                source "${MODULES_DIR}/user_node_binding.sh"
+                # 解绑用户与节点
                 unbind_user_from_node
                 read -p "按回车键继续..."
                 ;;
             3)
-                source "${MODULES_DIR}/user_node_binding.sh"
-                batch_bind_users
+                # 批量绑定用户
+                batch_bind_users_to_node
                 read -p "按回车键继续..."
                 ;;
             4)
-                source "${MODULES_DIR}/user_node_binding.sh"
-                list_all_bindings
+                # 列出所有绑定
+                show_user_node_bindings
                 read -p "按回车键继续..."
                 ;;
             5)
-                source "${MODULES_DIR}/user_node_binding.sh"
-                list_user_bindings
+                # 列出用户的绑定
+                show_user_node_bindings
                 read -p "按回车键继续..."
                 ;;
             6)
-                source "${MODULES_DIR}/user_node_binding.sh"
-                list_node_users
+                # 列出节点的用户
+                show_user_node_bindings
                 read -p "按回车键继续..."
                 ;;
             7)
-                source "${MODULES_DIR}/user_node_binding.sh"
-                cleanup_empty_bindings
+                # 清理空绑定
+                log_info "清理空绑定功能待实现"
                 read -p "按回车键继续..."
                 ;;
             8)
-                source "${MODULES_DIR}/user_node_binding.sh"
-                validate_bindings
+                # 验证绑定完整性
+                log_info "验证绑定功能待实现"
                 read -p "按回车键继续..."
                 ;;
             0)
@@ -568,19 +699,20 @@ handle_config_menu() {
 
         case "$choice" in
             1)
-                source "${MODULES_DIR}/config_generator.sh"
-                generate_singbox_config
+                # 生成配置
+                generate_xray_config
                 read -p "按回车键继续..."
                 ;;
             2)
-                source "${MODULES_DIR}/config_generator.sh"
-                show_current_config
+                # 查看配置
+                show_config
                 read -p "按回车键继续..."
                 ;;
             3)
-                if [[ -f "$SINGBOX_CONFIG_FILE" ]] && command -v sing-box &>/dev/null; then
+                # 验证配置
+                if [[ -f "$SINGBOX_CONFIG" ]] && command -v sing-box &>/dev/null; then
                     print_info "验证配置文件..."
-                    if sing-box check -c "$SINGBOX_CONFIG_FILE"; then
+                    if sing-box check -c "$SINGBOX_CONFIG"; then
                         print_success "配置文件验证通过"
                     else
                         print_error "配置文件验证失败"
@@ -591,8 +723,8 @@ handle_config_menu() {
                 read -p "按回车键继续..."
                 ;;
             4)
-                source "${MODULES_DIR}/config_generator.sh"
-                restore_config_backup
+                # 恢复备份
+                restore_config
                 read -p "按回车键继续..."
                 ;;
             0)
@@ -779,12 +911,7 @@ main() {
         case "$choice" in
             1)
                 # sing-box 管理
-                if declare -f core_management_menu &>/dev/null; then
-                    core_management_menu
-                else
-                    source "${MODULES_DIR}/core.sh"
-                    core_management_menu
-                fi
+                menu_core
                 ;;
             2)
                 # 用户管理
@@ -796,48 +923,26 @@ main() {
                 ;;
             4)
                 # 订阅管理
-                if declare -f subscription_menu &>/dev/null; then
-                    subscription_menu
-                else
-                    source "${MODULES_DIR}/subscription.sh"
-                    subscription_menu
-                fi
+                print_warning "订阅管理功能开发中..."
+                read -p "按回车键继续..."
                 ;;
             5)
                 # 域名管理
-                if declare -f domain_menu &>/dev/null; then
-                    domain_menu
-                else
-                    source "${MODULES_DIR}/domain.sh"
-                    domain_menu
-                fi
+                domain_management_menu
                 ;;
             6)
                 # 证书管理
-                if declare -f cert_management_menu &>/dev/null; then
-                    cert_management_menu
-                else
-                    source "${MODULES_DIR}/cert.sh"
-                    cert_management_menu
-                fi
+                certificate_management_menu
                 ;;
             7)
                 # 出站规则
-                if declare -f outbound_menu &>/dev/null; then
-                    outbound_menu
-                else
-                    source "${MODULES_DIR}/outbound.sh"
-                    outbound_menu
-                fi
+                print_warning "出站规则功能开发中..."
+                read -p "按回车键继续..."
                 ;;
             8)
                 # 防火墙管理
-                if declare -f firewall_menu &>/dev/null; then
-                    firewall_menu
-                else
-                    source "${MODULES_DIR}/firewall.sh"
-                    firewall_menu
-                fi
+                print_warning "防火墙管理功能开发中..."
+                read -p "按回车键继续..."
                 ;;
             9)
                 # 脚本管理

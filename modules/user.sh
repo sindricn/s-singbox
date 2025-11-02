@@ -635,24 +635,24 @@ add_user_to_node() {
         shadowsocks)
             # Shadowsocks 不支持多用户，需要重新配置密码
             print_warning "Shadowsocks 节点需要更新密码配置"
-            if ! jq "(.inbounds[] | select(.port == $port) | .settings.password) = \"$id\"" "$XRAY_CONFIG" > "${XRAY_CONFIG}.tmp"; then
+            if ! jq "(.inbounds[] | select(.port == $port) | .settings.password) = \"$id\"" "$SINGBOX_CONFIG" > "${SINGBOX_CONFIG}.tmp"; then
                 print_error "更新Shadowsocks密码失败"
-                rm -f "${XRAY_CONFIG}.tmp"
+                rm -f "${SINGBOX_CONFIG}.tmp"
                 return 1
             fi
-            mv "${XRAY_CONFIG}.tmp" "$XRAY_CONFIG"
+            mv "${SINGBOX_CONFIG}.tmp" "$SINGBOX_CONFIG"
             return 0
             ;;
     esac
 
     # 添加到配置文件
     if [[ -n "$user_config" ]]; then
-        if ! jq "(.inbounds[] | select(.port == $port) | .settings.clients) += [$user_config]" "$XRAY_CONFIG" > "${XRAY_CONFIG}.tmp"; then
+        if ! jq "(.inbounds[] | select(.port == $port) | .settings.clients) += [$user_config]" "$SINGBOX_CONFIG" > "${SINGBOX_CONFIG}.tmp"; then
             print_error "添加用户配置失败"
-            rm -f "${XRAY_CONFIG}.tmp"
+            rm -f "${SINGBOX_CONFIG}.tmp"
             return 1
         fi
-        mv "${XRAY_CONFIG}.tmp" "$XRAY_CONFIG"
+        mv "${SINGBOX_CONFIG}.tmp" "$SINGBOX_CONFIG"
     fi
 }
 
@@ -683,12 +683,12 @@ update_user_email() {
     local new_email=$3
 
     # 更新配置文件
-    if ! jq "(.inbounds[] | select(.port == $port) | .settings.clients[] | select(.email == \"$old_email\") | .email) = \"$new_email\"" "$XRAY_CONFIG" > "${XRAY_CONFIG}.tmp"; then
+    if ! jq "(.inbounds[] | select(.port == $port) | .settings.clients[] | select(.email == \"$old_email\") | .email) = \"$new_email\"" "$SINGBOX_CONFIG" > "${SINGBOX_CONFIG}.tmp"; then
         print_error "更新配置文件邮箱失败"
-        rm -f "${XRAY_CONFIG}.tmp"
+        rm -f "${SINGBOX_CONFIG}.tmp"
         return 1
     fi
-    mv "${XRAY_CONFIG}.tmp" "$XRAY_CONFIG"
+    mv "${SINGBOX_CONFIG}.tmp" "$SINGBOX_CONFIG"
 
     # 更新数据库
     if ! jq "(.users[] | select(.port == \"$port\" and .email == \"$old_email\") | .email) = \"$new_email\"" "$USERS_FILE" > "${USERS_FILE}.tmp"; then
@@ -711,28 +711,28 @@ update_user_id() {
     # 更新配置文件
     case $protocol in
         vless|vmess)
-            if ! jq "(.inbounds[] | select(.port == $port) | .settings.clients[] | select(.email == \"$email\") | .id) = \"$new_id\"" "$XRAY_CONFIG" > "${XRAY_CONFIG}.tmp"; then
+            if ! jq "(.inbounds[] | select(.port == $port) | .settings.clients[] | select(.email == \"$email\") | .id) = \"$new_id\"" "$SINGBOX_CONFIG" > "${SINGBOX_CONFIG}.tmp"; then
                 print_error "更新配置文件ID失败"
-                rm -f "${XRAY_CONFIG}.tmp"
+                rm -f "${SINGBOX_CONFIG}.tmp"
                 return 1
             fi
             ;;
         trojan)
-            if ! jq "(.inbounds[] | select(.port == $port) | .settings.clients[] | select(.email == \"$email\") | .password) = \"$new_id\"" "$XRAY_CONFIG" > "${XRAY_CONFIG}.tmp"; then
+            if ! jq "(.inbounds[] | select(.port == $port) | .settings.clients[] | select(.email == \"$email\") | .password) = \"$new_id\"" "$SINGBOX_CONFIG" > "${SINGBOX_CONFIG}.tmp"; then
                 print_error "更新配置文件密码失败"
-                rm -f "${XRAY_CONFIG}.tmp"
+                rm -f "${SINGBOX_CONFIG}.tmp"
                 return 1
             fi
             ;;
         shadowsocks)
-            if ! jq "(.inbounds[] | select(.port == $port) | .settings.password) = \"$new_id\"" "$XRAY_CONFIG" > "${XRAY_CONFIG}.tmp"; then
+            if ! jq "(.inbounds[] | select(.port == $port) | .settings.password) = \"$new_id\"" "$SINGBOX_CONFIG" > "${SINGBOX_CONFIG}.tmp"; then
                 print_error "更新配置文件密码失败"
-                rm -f "${XRAY_CONFIG}.tmp"
+                rm -f "${SINGBOX_CONFIG}.tmp"
                 return 1
             fi
             ;;
     esac
-    mv "${XRAY_CONFIG}.tmp" "$XRAY_CONFIG"
+    mv "${SINGBOX_CONFIG}.tmp" "$SINGBOX_CONFIG"
 
     # 更新数据库
     if ! jq "(.users[] | select(.port == \"$port\" and .email == \"$email\") | .id) = \"$new_id\"" "$USERS_FILE" > "${USERS_FILE}.tmp"; then
@@ -750,12 +750,12 @@ update_user_level() {
     local new_level=$3
 
     # 更新配置文件
-    if ! jq "(.inbounds[] | select(.port == $port) | .settings.clients[] | select(.email == \"$email\") | .level) = $new_level" "$XRAY_CONFIG" > "${XRAY_CONFIG}.tmp"; then
+    if ! jq "(.inbounds[] | select(.port == $port) | .settings.clients[] | select(.email == \"$email\") | .level) = $new_level" "$SINGBOX_CONFIG" > "${SINGBOX_CONFIG}.tmp"; then
         print_error "更新用户等级失败"
-        rm -f "${XRAY_CONFIG}.tmp"
+        rm -f "${SINGBOX_CONFIG}.tmp"
         return 1
     fi
-    mv "${XRAY_CONFIG}.tmp" "$XRAY_CONFIG"
+    mv "${SINGBOX_CONFIG}.tmp" "$SINGBOX_CONFIG"
 }
 
 #================================================================
@@ -928,13 +928,13 @@ get_user_all_ports() {
 get_user_email_from_config() {
     local uuid=$1
 
-    if [[ ! -f "$XRAY_CONFIG" ]]; then
+    if [[ ! -f "$SINGBOX_CONFIG" ]]; then
         echo ""
         return
     fi
 
     # 首先尝试用UUID查找(适用于vless/vmess)
-    local email=$(jq -r ".inbounds[].settings.clients[]? | select(.id == \"$uuid\") | .email" "$XRAY_CONFIG" 2>/dev/null | head -n 1)
+    local email=$(jq -r ".inbounds[].settings.clients[]? | select(.id == \"$uuid\") | .email" "$SINGBOX_CONFIG" 2>/dev/null | head -n 1)
 
     # 如果没找到,可能是trojan/shadowsocks,需要用password查找
     if [[ -z "$email" || "$email" == "null" ]]; then
@@ -944,7 +944,7 @@ get_user_email_from_config() {
 
             if [[ -n "$password" && "$password" != "null" ]]; then
                 # 用password查找email
-                email=$(jq -r ".inbounds[].settings.clients[]? | select(.password == \"$password\") | .email" "$XRAY_CONFIG" 2>/dev/null | head -n 1)
+                email=$(jq -r ".inbounds[].settings.clients[]? | select(.password == \"$password\") | .email" "$SINGBOX_CONFIG" 2>/dev/null | head -n 1)
             fi
         fi
     fi

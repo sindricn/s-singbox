@@ -28,7 +28,10 @@
       "Bash(while read file)",
       "Bash(do if bash -n $file)",
       "Bash(then echo '✓ $file')",
-      "Bash(else echo '✗ $file')"
+      "Bash(else echo '✗ $file')",
+      "Bash(do)",
+      "Bash(if [ -f \"$file\" ])",
+      "Bash(then)"
     ],
     "deny": [],
     "ask": []

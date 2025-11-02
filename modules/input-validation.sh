@@ -524,10 +524,10 @@ validate_xray_config() {
     validate_json_file "$config_file" || return 1
 
     # 使用 Xray 内置验证
-    if [[ -f "$XRAY_BIN" ]]; then
-        if ! "$XRAY_BIN" test -c "$config_file" &>/dev/null; then
+    if [[ -f "$SINGBOX_BIN" ]]; then
+        if ! "$SINGBOX_BIN" test -c "$config_file" &>/dev/null; then
             log_error "Xray 配置文件验证失败: $config_file"
-            "$XRAY_BIN" test -c "$config_file"
+            "$SINGBOX_BIN" test -c "$config_file"
             return 1
         fi
     else

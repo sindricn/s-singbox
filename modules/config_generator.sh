@@ -13,7 +13,7 @@ generate_xray_config() {
     local nodes_file="$DATA_DIR/nodes.json"
     local users_file="$DATA_DIR/users.json"
     local node_users_file="$DATA_DIR/node_users.json"
-    local config_file="$XRAY_CONFIG"
+    local config_file="$SINGBOX_CONFIG"
 
     # 检查必需文件
     if [[ ! -f "$nodes_file" ]]; then
@@ -533,18 +533,18 @@ generate_stream_settings() {
 
 # 验证配置文件
 validate_xray_config() {
-    if [[ ! -f "$XRAY_BIN" ]]; then
+    if [[ ! -f "$SINGBOX_BIN" ]]; then
         print_error "Xray未安装"
         return 1
     fi
 
     print_info "验证配置文件..."
-    if "$XRAY_BIN" run -test -config "$XRAY_CONFIG" &>/dev/null; then
+    if "$SINGBOX_BIN" run -test -config "$SINGBOX_CONFIG" &>/dev/null; then
         print_success "配置文件验证通过"
         return 0
     else
         print_error "配置文件验证失败"
-        "$XRAY_BIN" run -test -config "$XRAY_CONFIG"
+        "$SINGBOX_BIN" run -test -config "$SINGBOX_CONFIG"
         return 1
     fi
 }

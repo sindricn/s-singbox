@@ -103,30 +103,30 @@ test_reality_keygen() {
 
     # 检查 Xray 路径
     echo -e "${YELLOW}1. 检查 Xray 安装：${NC}"
-    if [[ -f "$XRAY_BIN" ]]; then
-        print_success "Xray 已安装: $XRAY_BIN"
-        echo "   版本: $("$XRAY_BIN" version 2>&1 | head -1)"
+    if [[ -f "$SINGBOX_BIN" ]]; then
+        print_success "Xray 已安装: $SINGBOX_BIN"
+        echo "   版本: $("$SINGBOX_BIN" version 2>&1 | head -1)"
     else
-        print_error "Xray 未安装: $XRAY_BIN"
+        print_error "Xray 未安装: $SINGBOX_BIN"
         return 1
     fi
 
     # 检查执行权限
     echo ""
     echo -e "${YELLOW}2. 检查执行权限：${NC}"
-    if [[ -x "$XRAY_BIN" ]]; then
+    if [[ -x "$SINGBOX_BIN" ]]; then
         print_success "有执行权限"
     else
         print_error "没有执行权限"
-        echo "   修复命令: chmod +x $XRAY_BIN"
+        echo "   修复命令: chmod +x $SINGBOX_BIN"
     fi
 
     # 测试 x25519 命令
     echo ""
     echo -e "${YELLOW}3. 测试 x25519 命令：${NC}"
-    echo "   运行命令: $XRAY_BIN x25519"
+    echo "   运行命令: $SINGBOX_BIN x25519"
     echo ""
-    local output=$("$XRAY_BIN" x25519 2>&1)
+    local output=$("$SINGBOX_BIN" x25519 2>&1)
     local exit_code=$?
 
     if [[ $exit_code -eq 0 ]]; then
@@ -159,13 +159,13 @@ test_reality_keygen() {
 # 生成 Reality 密钥对
 generate_reality_keypair() {
     # 检查 Xray 是否安装
-    if [[ ! -f "$XRAY_BIN" ]]; then
+    if [[ ! -f "$SINGBOX_BIN" ]]; then
         print_error "Xray 未安装，请先安装 Xray 内核"
         return 1
     fi
 
     # 尝试生成密钥对
-    local output=$("$XRAY_BIN" x25519 2>&1)
+    local output=$("$SINGBOX_BIN" x25519 2>&1)
     local exit_code=$?
 
     # 检查是否成功
@@ -372,7 +372,7 @@ quick_add_vless_reality() {
     print_info "生成 Reality 密钥对..."
 
     # 先检查 Xray 是否安装
-    if [[ ! -f "$XRAY_BIN" ]]; then
+    if [[ ! -f "$SINGBOX_BIN" ]]; then
         print_error "Xray 未安装！请先通过菜单安装 Xray 内核"
         echo ""
         print_info "安装路径: 主菜单 -> 1. 内核管理 -> 1. 安装 Xray"
@@ -384,11 +384,11 @@ quick_add_vless_reality() {
         print_error "密钥生成失败"
         echo ""
         print_info "调试信息："
-        echo "  Xray 路径: $XRAY_BIN"
-        echo "  Xray 版本: $("$XRAY_BIN" version 2>&1 | head -1)"
+        echo "  Xray 路径: $SINGBOX_BIN"
+        echo "  Xray 版本: $("$SINGBOX_BIN" version 2>&1 | head -1)"
         echo ""
         print_info "尝试手动生成密钥："
-        echo "  运行命令: $XRAY_BIN x25519"
+        echo "  运行命令: $SINGBOX_BIN x25519"
         return 1
     fi
 
@@ -569,8 +569,8 @@ add_vless_node() {
         else
             print_info "将使用自签名证书"
             generate_self_signed_cert "$tls_domain"
-            tls_cert="${XRAY_DIR}/certs/${tls_domain}.crt"
-            tls_key="${XRAY_DIR}/certs/${tls_domain}.key"
+            tls_cert="${SINGBOX_DIR}/certs/${tls_domain}.crt"
+            tls_key="${SINGBOX_DIR}/certs/${tls_domain}.key"
         fi
     fi
 
@@ -747,8 +747,8 @@ add_trojan_node() {
         read -p "请输入密钥路径: " tls_key
     else
         generate_self_signed_cert "$tls_domain"
-        tls_cert="${XRAY_DIR}/certs/${tls_domain}.crt"
-        tls_key="${XRAY_DIR}/certs/${tls_domain}.key"
+        tls_cert="${SINGBOX_DIR}/certs/${tls_domain}.crt"
+        tls_key="${SINGBOX_DIR}/certs/${tls_domain}.key"
     fi
 
     # 回落配置
@@ -1106,9 +1106,9 @@ show_node_detail() {
     echo ""
 
     # 显示节点的Xray配置 (从config.json中提取)
-    if [[ -f "$XRAY_CONFIG" ]]; then
+    if [[ -f "$SINGBOX_CONFIG" ]]; then
         local inbound_tag="${protocol}-${port}"
-        local inbound_config=$(jq --arg tag "$inbound_tag" '.inbounds[] | select(.tag == $tag)' "$XRAY_CONFIG" 2>/dev/null)
+        local inbound_config=$(jq --arg tag "$inbound_tag" '.inbounds[] | select(.tag == $tag)' "$SINGBOX_CONFIG" 2>/dev/null)
 
         if [[ -n "$inbound_config" && "$inbound_config" != "null" ]]; then
             echo -e "${GREEN}节点Xray配置：${NC}"
@@ -1317,7 +1317,7 @@ delete_single_node() {
 # 生成自签名证书
 generate_self_signed_cert() {
     local domain=$1
-    local cert_dir="${XRAY_DIR}/certs"
+    local cert_dir="${SINGBOX_DIR}/certs"
 
     mkdir -p "$cert_dir"
 
@@ -1381,7 +1381,7 @@ remove_node_info() {
 add_inbound_to_config() {
     local inbound=$1
 
-    if ! update_json_file --argjson inbound "$inbound" '.inbounds += [$inbound]' "$XRAY_CONFIG"; then
+    if ! update_json_file --argjson inbound "$inbound" '.inbounds += [$inbound]' "$SINGBOX_CONFIG"; then
         print_error "添加入站信息失败"
         return 1
     fi
@@ -1390,7 +1390,7 @@ add_inbound_to_config() {
 # 从配置文件删除入站
 remove_inbound_from_config() {
     local port=$1
-    if ! update_json_file ".inbounds = [.inbounds[] | select(.port != $port)]" "$XRAY_CONFIG"; then
+    if ! update_json_file ".inbounds = [.inbounds[] | select(.port != $port)]" "$SINGBOX_CONFIG"; then
         print_error "移除入站信息失败"
         return 1
     fi

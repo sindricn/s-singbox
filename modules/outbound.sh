@@ -15,7 +15,6 @@ OUTBOUND_MODULE_LOADED=1
 
 # 全局变量
 OUTBOUND_FILE="${DATA_DIR}/outbounds.json"
-XRAY_CONFIG="${XRAY_DIR:-/usr/local/xray}/config.json"
 
 # 颜色定义（继承主脚本）
 readonly OUTBOUND_CYAN="${CYAN:-\033[0;36m}"
@@ -48,8 +47,8 @@ show_outbound_status() {
 
     # 3. 配置文件中的实际出站数量（排除系统默认的direct/block/api）
     local config_count=0
-    if [[ -f "$XRAY_CONFIG" ]]; then
-        config_count=$(jq '[.outbounds[] | select(.tag != "direct" and .tag != "block" and .tag != "api")] | length' "$XRAY_CONFIG" 2>/dev/null || echo "0")
+    if [[ -f "$SINGBOX_CONFIG" ]]; then
+        config_count=$(jq '[.outbounds[] | select(.tag != "direct" and .tag != "block" and .tag != "api")] | length' "$SINGBOX_CONFIG" 2>/dev/null || echo "0")
     fi
 
     echo -e "${OUTBOUND_CYAN}═══════════════════════════════════════${OUTBOUND_NC}"
@@ -69,7 +68,7 @@ check_outbound_consistency() {
     init_outbound_file
 
     # 检查配置文件是否存在
-    if [[ ! -f "$XRAY_CONFIG" ]]; then
+    if [[ ! -f "$SINGBOX_CONFIG" ]]; then
         print_warning "配置文件不存在，跳过一致性检查"
         return 0
     fi
@@ -85,7 +84,7 @@ check_outbound_consistency() {
     local system_tags=("direct" "block" "api")
 
     # 获取配置文件中的所有出站规则tag，排除系统默认的
-    local config_tags=$(jq -r '[.outbounds[].tag] | .[]' "$XRAY_CONFIG" 2>/dev/null | while read -r tag; do
+    local config_tags=$(jq -r '[.outbounds[].tag] | .[]' "$SINGBOX_CONFIG" 2>/dev/null | while read -r tag; do
         # 检查是否是系统tag
         local is_system=false
         for sys_tag in "${system_tags[@]}"; do
@@ -139,8 +138,8 @@ check_outbound_consistency() {
         [[ -z "$tag" ]] && continue
 
         # 获取该出站规则的详细信息
-        local protocol=$(jq -r --arg tag "$tag" '.outbounds[] | select(.tag == $tag) | .protocol' "$XRAY_CONFIG" 2>/dev/null)
-        local address=$(jq -r --arg tag "$tag" '.outbounds[] | select(.tag == $tag) | .settings.servers[0].address // .settings.vnext[0].address // "N/A"' "$XRAY_CONFIG" 2>/dev/null)
+        local protocol=$(jq -r --arg tag "$tag" '.outbounds[] | select(.tag == $tag) | .protocol' "$SINGBOX_CONFIG" 2>/dev/null)
+        local address=$(jq -r --arg tag "$tag" '.outbounds[] | select(.tag == $tag) | .settings.servers[0].address // .settings.vnext[0].address // "N/A"' "$SINGBOX_CONFIG" 2>/dev/null)
 
         echo -e "${OUTBOUND_YELLOW}[$index]${OUTBOUND_NC} 标签: $tag, 协议: $protocol, 地址: $address"
         ((index++))
@@ -188,7 +187,7 @@ sync_orphan_outbounds_to_library() {
         [[ -z "$tag" ]] && continue
 
         # 从配置文件中提取完整的出站规则
-        local outbound=$(jq --arg tag "$tag" '.outbounds[] | select(.tag == $tag)' "$XRAY_CONFIG" 2>/dev/null)
+        local outbound=$(jq --arg tag "$tag" '.outbounds[] | select(.tag == $tag)' "$SINGBOX_CONFIG" 2>/dev/null)
 
         if [[ -n "$outbound" && "$outbound" != "null" ]]; then
             # 添加到规则库
@@ -224,8 +223,8 @@ remove_orphan_outbounds_from_config() {
         [[ -z "$tag" ]] && continue
 
         # 从配置文件删除
-        jq --arg tag "$tag" '.outbounds = [.outbounds[] | select(.tag != $tag)]' "$XRAY_CONFIG" > "${XRAY_CONFIG}.tmp"
-        mv "${XRAY_CONFIG}.tmp" "$XRAY_CONFIG"
+        jq --arg tag "$tag" '.outbounds = [.outbounds[] | select(.tag != $tag)]' "$SINGBOX_CONFIG" > "${SINGBOX_CONFIG}.tmp"
+        mv "${SINGBOX_CONFIG}.tmp" "$SINGBOX_CONFIG"
         ((remove_count++))
         print_success "已删除: $tag"
     done <<< "$orphan_tags"

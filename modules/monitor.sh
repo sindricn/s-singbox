@@ -10,7 +10,7 @@ show_status() {
     clear
     echo -e "${CYAN}====== Xray 运行状态 ======${NC}\n"
 
-    if [[ ! -f "$XRAY_BIN" ]]; then
+    if [[ ! -f "$SINGBOX_BIN" ]]; then
         print_error "Xray 未安装"
         return 1
     fi
@@ -26,7 +26,7 @@ show_status() {
 
     # 版本信息
     echo -e "\n${CYAN}版本信息：${NC}"
-    "$XRAY_BIN" version | head -n1
+    "$SINGBOX_BIN" version | head -n1
 
     # 运行时长
     echo -e "\n${CYAN}运行时长：${NC}"
@@ -34,7 +34,7 @@ show_status() {
 
     # 内存使用
     echo -e "\n${CYAN}资源使用：${NC}"
-    local pid=$(pgrep -f "$XRAY_BIN")
+    local pid=$(pgrep -f "$SINGBOX_BIN")
     if [[ -n "$pid" ]]; then
         ps aux | grep "$pid" | grep -v grep | awk '{printf "CPU: %s%%  内存: %s%%\n", $3, $4}'
     fi
@@ -156,15 +156,15 @@ show_logs() {
             journalctl -u xray -f
             ;;
         2)
-            if [[ -f "${XRAY_DIR}/access.log" ]]; then
-                less +G "${XRAY_DIR}/access.log"
+            if [[ -f "${SINGBOX_DIR}/access.log" ]]; then
+                less +G "${SINGBOX_DIR}/access.log"
             else
                 print_warning "访问日志文件不存在"
             fi
             ;;
         3)
-            if [[ -f "${XRAY_DIR}/error.log" ]]; then
-                less +G "${XRAY_DIR}/error.log"
+            if [[ -f "${SINGBOX_DIR}/error.log" ]]; then
+                less +G "${SINGBOX_DIR}/error.log"
             else
                 print_warning "错误日志文件不存在"
             fi
@@ -203,7 +203,7 @@ monitor_realtime() {
         fi
 
         # CPU和内存
-        local pid=$(pgrep -f "$XRAY_BIN")
+        local pid=$(pgrep -f "$SINGBOX_BIN")
         if [[ -n "$pid" ]]; then
             echo ""
             echo -e "${CYAN}资源使用：${NC}"

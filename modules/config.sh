@@ -10,16 +10,16 @@ show_config() {
     clear
     echo -e "${CYAN}====== 当前配置 ======${NC}\n"
 
-    if [[ ! -f "$XRAY_CONFIG" ]]; then
+    if [[ ! -f "$SINGBOX_CONFIG" ]]; then
         print_error "配置文件不存在"
         return 1
     fi
 
     # 使用 jq 格式化显示
     if command -v jq &>/dev/null; then
-        jq . "$XRAY_CONFIG" | less
+        jq . "$SINGBOX_CONFIG" | less
     else
-        less "$XRAY_CONFIG"
+        less "$SINGBOX_CONFIG"
     fi
 }
 
@@ -28,7 +28,7 @@ edit_config() {
     clear
     echo -e "${CYAN}====== 编辑配置 ======${NC}\n"
 
-    if [[ ! -f "$XRAY_CONFIG" ]]; then
+    if [[ ! -f "$SINGBOX_CONFIG" ]]; then
         print_error "配置文件不存在"
         return 1
     fi
@@ -52,7 +52,7 @@ edit_config() {
     fi
 
     print_info "使用 $editor 编辑配置"
-    "$editor" "$XRAY_CONFIG"
+    "$editor" "$SINGBOX_CONFIG"
 
     # 验证配置
     if validate_config; then
@@ -76,8 +76,8 @@ backup_config() {
 
     local backup_file="${backup_dir}/config_$(date +%Y%m%d_%H%M%S).json"
 
-    if [[ -f "$XRAY_CONFIG" ]]; then
-        cp "$XRAY_CONFIG" "$backup_file"
+    if [[ -f "$SINGBOX_CONFIG" ]]; then
+        cp "$SINGBOX_CONFIG" "$backup_file"
         print_success "配置已备份到: $backup_file"
 
         # 保留最近10个备份
@@ -141,12 +141,12 @@ restore_config() {
     fi
 
     # 备份当前配置
-    if [[ -f "$XRAY_CONFIG" ]]; then
-        cp "$XRAY_CONFIG" "${XRAY_CONFIG}.before_restore"
+    if [[ -f "$SINGBOX_CONFIG" ]]; then
+        cp "$SINGBOX_CONFIG" "${SINGBOX_CONFIG}.before_restore"
     fi
 
     # 恢复配置
-    cp "$selected_backup" "$XRAY_CONFIG"
+    cp "$selected_backup" "$SINGBOX_CONFIG"
     print_success "配置已恢复"
 
     # 验证并重启
@@ -157,14 +157,14 @@ restore_config() {
         fi
     else
         print_error "恢复的配置无效，请检查"
-        cp "${XRAY_CONFIG}.before_restore" "$XRAY_CONFIG"
+        cp "${SINGBOX_CONFIG}.before_restore" "$SINGBOX_CONFIG"
         print_info "已回滚到恢复前的配置"
     fi
 }
 
 # 验证配置
 validate_config() {
-    if [[ ! -f "$XRAY_CONFIG" ]]; then
+    if [[ ! -f "$SINGBOX_CONFIG" ]]; then
         print_error "配置文件不存在"
         return 1
     fi
@@ -172,19 +172,19 @@ validate_config() {
     print_info "正在验证配置..."
 
     # JSON 语法验证
-    if ! jq empty "$XRAY_CONFIG" 2>/dev/null; then
+    if ! jq empty "$SINGBOX_CONFIG" 2>/dev/null; then
         print_error "JSON 格式错误"
         return 1
     fi
 
     # 使用 xray 内置验证
-    if [[ -f "$XRAY_BIN" ]]; then
-        if "$XRAY_BIN" test -config "$XRAY_CONFIG" >/dev/null 2>&1; then
+    if [[ -f "$SINGBOX_BIN" ]]; then
+        if "$SINGBOX_BIN" test -config "$SINGBOX_CONFIG" >/dev/null 2>&1; then
             print_success "配置验证通过"
             return 0
         else
             print_error "配置验证失败"
-            "$XRAY_BIN" test -config "$XRAY_CONFIG"
+            "$SINGBOX_BIN" test -config "$SINGBOX_CONFIG"
             return 1
         fi
     else
@@ -209,7 +209,7 @@ export_config() {
     local temp_dir=$(mktemp -d)
 
     # 复制配置文件
-    cp "$XRAY_CONFIG" "${temp_dir}/"
+    cp "$SINGBOX_CONFIG" "${temp_dir}/"
     cp "$USERS_FILE" "${temp_dir}/" 2>/dev/null
     cp "$NODES_FILE" "${temp_dir}/" 2>/dev/null
 
@@ -248,7 +248,7 @@ import_config() {
         tar -xzf "$import_file" -C "$temp_dir" 2>/dev/null
 
         if [[ -f "${temp_dir}/config.json" ]]; then
-            cp "${temp_dir}/config.json" "$XRAY_CONFIG"
+            cp "${temp_dir}/config.json" "$SINGBOX_CONFIG"
         fi
 
         if [[ -f "${temp_dir}/users.json" ]]; then
@@ -264,7 +264,7 @@ import_config() {
     elif [[ "$import_file" == *.json ]]; then
         # JSON 配置文件
         if jq empty "$import_file" 2>/dev/null; then
-            cp "$import_file" "$XRAY_CONFIG"
+            cp "$import_file" "$SINGBOX_CONFIG"
         else
             print_error "无效的 JSON 文件"
             return 1
@@ -326,7 +326,7 @@ config_suggestions() {
     clear
     echo -e "${CYAN}====== 配置优化建议 ======${NC}\n"
 
-    if [[ ! -f "$XRAY_CONFIG" ]]; then
+    if [[ ! -f "$SINGBOX_CONFIG" ]]; then
         print_error "配置文件不存在"
         return 1
     fi
@@ -334,25 +334,25 @@ config_suggestions() {
     echo -e "${CYAN}正在分析配置...${NC}\n"
 
     # 检查日志配置
-    local log_level=$(jq -r '.log.loglevel // "none"' "$XRAY_CONFIG")
+    local log_level=$(jq -r '.log.loglevel // "none"' "$SINGBOX_CONFIG")
     if [[ "$log_level" == "debug" ]]; then
         echo -e "${YELLOW}建议：${NC}日志级别为 debug，生产环境建议使用 warning"
     fi
 
     # 检查 stats 配置
-    local has_stats=$(jq -r '.stats // {} | length' "$XRAY_CONFIG")
+    local has_stats=$(jq -r '.stats // {} | length' "$SINGBOX_CONFIG")
     if [[ "$has_stats" -eq 0 ]]; then
         echo -e "${YELLOW}建议：${NC}未启用流量统计，无法查看流量信息"
     fi
 
     # 检查 sniffing 配置
-    local inbounds=$(jq -r '.inbounds[] | select(.sniffing.enabled != true) | .port' "$XRAY_CONFIG" 2>/dev/null)
+    local inbounds=$(jq -r '.inbounds[] | select(.sniffing.enabled != true) | .port' "$SINGBOX_CONFIG" 2>/dev/null)
     if [[ -n "$inbounds" ]]; then
         echo -e "${YELLOW}建议：${NC}以下端口未启用流量嗅探：$inbounds"
     fi
 
     # 检查 routing 规则
-    local routing_rules=$(jq -r '.routing.rules // [] | length' "$XRAY_CONFIG")
+    local routing_rules=$(jq -r '.routing.rules // [] | length' "$SINGBOX_CONFIG")
     if [[ "$routing_rules" -lt 2 ]]; then
         echo -e "${YELLOW}建议：${NC}路由规则较少，可能需要添加更多分流规则"
     fi

@@ -7,7 +7,7 @@
 
 # 全局变量
 DOMAIN_FILE="${DATA_DIR}/domains.json"
-CERT_DIR="${XRAY_DIR}/certs"
+CERT_DIR="${SINGBOX_DIR}/certs"
 DEFAULT_DOMAIN_FILE="${DATA_DIR}/default_domain.txt"
 
 # 初始化域名数据文件

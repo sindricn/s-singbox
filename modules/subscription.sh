@@ -869,7 +869,7 @@ EOF
         echo "#   1. Reality nodes missing public_key field" >&2
         echo "#   2. Trojan/SS nodes missing password field" >&2
         echo "#   3. Node data structure mismatch" >&2
-        echo "# Please check: /usr/local/xray/data/nodes.json" >&2
+        echo "# Please check: /usr/local/sing-box/data/nodes.json" >&2
         return 1
     fi
 

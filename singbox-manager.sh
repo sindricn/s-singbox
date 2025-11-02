@@ -88,7 +88,7 @@ source_modules() {
     log_info "所有模块加载完成"
 }
 
-# 初始化数据目录 (使用xray的数据结构规范)
+# 初始化数据目录 (数据结构规范)
 init_data_dir() {
     mkdir -p "$DATA_DIR"
     mkdir -p "$SUBSCRIPTION_DIR"
@@ -700,7 +700,7 @@ handle_config_menu() {
         case "$choice" in
             1)
                 # 生成配置
-                generate_xray_config
+                generate_singbox_config
                 read -p "按回车键继续..."
                 ;;
             2)

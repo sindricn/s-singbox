@@ -8,16 +8,16 @@
 # 查看运行状态
 show_status() {
     clear
-    echo -e "${CYAN}====== Xray 运行状态 ======${NC}\n"
+    echo -e "${CYAN}====== sing-box 运行状态 ======${NC}\n"
 
     if [[ ! -f "$SINGBOX_BIN" ]]; then
-        print_error "Xray 未安装"
+        print_error "sing-box 未安装"
         return 1
     fi
 
     # 服务状态
     echo -e "${CYAN}服务状态：${NC}"
-    if systemctl is-active --quiet xray; then
+    if systemctl is-active --quiet sing-box; then
         echo -e "${GREEN}● 运行中${NC}"
     else
         echo -e "${RED}● 已停止${NC}"
@@ -30,7 +30,7 @@ show_status() {
 
     # 运行时长
     echo -e "\n${CYAN}运行时长：${NC}"
-    systemctl show xray --property=ActiveEnterTimestamp --no-pager | cut -d'=' -f2
+    systemctl show sing-box --property=ActiveEnterTimestamp --no-pager | cut -d'=' -f2
 
     # 内存使用
     echo -e "\n${CYAN}资源使用：${NC}"
@@ -41,7 +41,7 @@ show_status() {
 
     # 端口监听
     echo -e "\n${CYAN}端口监听：${NC}"
-    ss -tlnp | grep xray | awk '{print $4}' | cut -d':' -f2 | sort -n | uniq | paste -sd ' '
+    ss -tlnp | grep sing-box | awk '{print $4}' | cut -d':' -f2 | sort -n | uniq | paste -sd ' '
 
     # 节点数量
     echo -e "\n${CYAN}节点统计：${NC}"
@@ -55,12 +55,12 @@ show_traffic() {
     clear
     echo -e "${CYAN}====== 流量统计 ======${NC}\n"
 
-    if ! systemctl is-active --quiet xray; then
-        print_error "Xray 未运行"
+    if ! systemctl is-active --quiet sing-box; then
+        print_error "sing-box 未运行"
         return 1
     fi
 
-    # 使用 xray API 获取统计信息
+    # 使用 sing-box API 获取统计信息
     local api_port=10085
     local api_addr="127.0.0.1:${api_port}"
 
@@ -103,13 +103,13 @@ show_connections() {
     clear
     echo -e "${CYAN}====== 当前连接 ======${NC}\n"
 
-    if ! systemctl is-active --quiet xray; then
-        print_error "Xray 未运行"
+    if ! systemctl is-active --quiet sing-box; then
+        print_error "sing-box 未运行"
         return 1
     fi
 
     # 获取监听端口
-    local ports=$(ss -tlnp | grep xray | awk '{print $4}' | cut -d':' -f2 | sort -n | uniq)
+    local ports=$(ss -tlnp | grep sing-box | awk '{print $4}' | cut -d':' -f2 | sort -n | uniq)
 
     echo -e "${CYAN}活动连接数：${NC}"
     echo "----------------------------------------"
@@ -139,7 +139,7 @@ show_connections() {
 # 查看日志
 show_logs() {
     clear
-    echo -e "${CYAN}====== Xray 日志 ======${NC}\n"
+    echo -e "${CYAN}====== sing-box 日志 ======${NC}\n"
 
     echo "1. 查看实时日志"
     echo "2. 查看访问日志"
@@ -153,7 +153,7 @@ show_logs() {
         1)
             print_info "按 Ctrl+C 退出日志查看"
             sleep 2
-            journalctl -u xray -f
+            journalctl -u sing-box -f
             ;;
         2)
             if [[ -f "${SINGBOX_DIR}/access.log" ]]; then
@@ -170,7 +170,7 @@ show_logs() {
             fi
             ;;
         4)
-            journalctl -u xray --no-pager -n 100
+            journalctl -u sing-box --no-pager -n 100
             ;;
         0)
             return 0
@@ -190,11 +190,11 @@ monitor_realtime() {
 
     while true; do
         clear
-        echo -e "${CYAN}====== Xray 实时监控 ======${NC}"
+        echo -e "${CYAN}====== sing-box 实时监控 ======${NC}"
         echo -e "${CYAN}更新时间: $(date '+%Y-%m-%d %H:%M:%S')${NC}\n"
 
         # 服务状态
-        if systemctl is-active --quiet xray; then
+        if systemctl is-active --quiet sing-box; then
             echo -e "${GREEN}● 服务运行中${NC}"
         else
             echo -e "${RED}● 服务已停止${NC}"
@@ -213,7 +213,7 @@ monitor_realtime() {
         # 连接数统计
         echo ""
         echo -e "${CYAN}连接统计：${NC}"
-        local ports=$(ss -tlnp | grep xray | awk '{print $4}' | cut -d':' -f2 | sort -n | uniq)
+        local ports=$(ss -tlnp | grep sing-box | awk '{print $4}' | cut -d':' -f2 | sort -n | uniq)
         local total_conn=0
 
         for port in $ports; do
@@ -240,7 +240,7 @@ monitor_realtime() {
         # 最新日志
         echo ""
         echo -e "${CYAN}最新日志（最近5条）：${NC}"
-        journalctl -u xray --no-pager -n 5 --output=short-precise | tail -5
+        journalctl -u sing-box --no-pager -n 5 --output=short-precise | tail -5
 
         sleep 3
     done
@@ -258,7 +258,7 @@ reset_traffic() {
     fi
 
     # 重启服务以重置统计
-    systemctl restart xray
+    systemctl restart sing-box
 
     print_success "流量统计已重置"
 }

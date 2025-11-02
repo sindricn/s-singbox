@@ -6,9 +6,9 @@
 # 架构：节点用户分离架构
 #================================================================
 
-# 生成Xray完整配置文件
-generate_xray_config() {
-    print_info "开始生成Xray配置..."
+# 生成sing-box完整配置文件
+generate_singbox_config() {
+    print_info "开始生成sing-box配置..."
 
     local nodes_file="$DATA_DIR/nodes.json"
     local users_file="$DATA_DIR/users.json"
@@ -167,8 +167,8 @@ generate_xray_config() {
         }
     ]')
 
-    # 注意: API outbound 由 Xray 自动创建，不需要手动添加
-    # 参考文档: "当 api 配置开启时，Xray 会自建一个和 tag 同名的出站代理"
+    # 注意: API outbound 由 sing-box 自动创建，不需要手动添加
+    # 参考文档: "当 api 配置开启时，sing-box 会自建一个和 tag 同名的出站代理"
 
     # 生成路由规则
     local routing_rules="[]"
@@ -480,8 +480,8 @@ generate_stream_settings() {
             ;;
 
         tls)
-            local cert_file=$(echo "$extra" | jq -r '.cert_file // "/usr/local/xray/certs/cert.pem"')
-            local key_file=$(echo "$extra" | jq -r '.key_file // "/usr/local/xray/certs/key.pem"')
+            local cert_file=$(echo "$extra" | jq -r '.cert_file // "/usr/local/sing-box/certs/cert.pem"')
+            local key_file=$(echo "$extra" | jq -r '.key_file // "/usr/local/sing-box/certs/key.pem"')
 
             stream_settings=$(echo "$stream_settings" | jq \
                 --arg security "tls" \
@@ -532,9 +532,9 @@ generate_stream_settings() {
 }
 
 # 验证配置文件
-validate_xray_config() {
+validate_singbox_config() {
     if [[ ! -f "$SINGBOX_BIN" ]]; then
-        print_error "Xray未安装"
+        print_error "sing-box未安装"
         return 1
     fi
 

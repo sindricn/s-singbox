@@ -8,7 +8,7 @@
 
 # API 配置
 if [[ -z "${SINGBOX_BIN:-}" ]]; then
-    SINGBOX_BIN="/usr/local/xray/xray"
+    SINGBOX_BIN="/usr/local/sing-box/sing-box"
 fi
 readonly API_ADDR="127.0.0.1:10085"
 

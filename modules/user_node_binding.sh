@@ -103,10 +103,10 @@ bind_user_to_node() {
     print_success "用户 $email 已绑定到端口 $port"
 
     # 重新生成配置
-    generate_xray_config
+    generate_sing-box_config
 
     # 重启服务
-    restart_xray
+    restart_sing-box
 
     print_success "配置已更新并重启服务"
 }
@@ -161,10 +161,10 @@ unbind_user_from_node() {
     print_success "用户 $email 已从端口 $port 解绑"
 
     # 重新生成配置
-    generate_xray_config
+    generate_sing-box_config
 
     # 重启服务
-    restart_xray
+    restart_sing-box
 
     print_success "配置已更新并重启服务"
 }
@@ -414,8 +414,8 @@ bind_single_node_to_user() {
 
     mv "${NODE_USERS_FILE}.tmp" "$NODE_USERS_FILE"
 
-    generate_xray_config
-    restart_xray
+    generate_sing-box_config
+    restart_sing-box
 
     print_success "用户 $username 已绑定到端口 $port"
 }
@@ -486,8 +486,8 @@ batch_bind_nodes_to_user() {
     print_info "批量绑定完成：成功 $success_count 个，失败 $fail_count 个"
 
     if [[ $success_count -gt 0 ]]; then
-        generate_xray_config
-        restart_xray
+        generate_sing-box_config
+        restart_sing-box
         print_success "配置已更新并重启服务"
     fi
 }
@@ -533,8 +533,8 @@ unbind_single_node_from_user() {
     fi
     mv "${NODE_USERS_FILE}.tmp" "$NODE_USERS_FILE"
 
-    generate_xray_config
-    restart_xray
+    generate_sing-box_config
+    restart_sing-box
 
     print_success "用户 $username 已从端口 $port 解绑"
 }
@@ -590,8 +590,8 @@ batch_unbind_nodes_from_user() {
     print_info "批量解绑完成：成功 $success_count 个"
 
     if [[ $success_count -gt 0 ]]; then
-        generate_xray_config
-        restart_xray
+        generate_sing-box_config
+        restart_sing-box
         print_success "配置已更新并重启服务"
     fi
 }
@@ -686,10 +686,10 @@ batch_bind_user_to_nodes() {
 
     if [[ $success_count -gt 0 ]]; then
         # 重新生成配置
-        generate_xray_config
+        generate_sing-box_config
 
         # 重启服务
-        restart_xray
+        restart_sing-box
 
         print_success "配置已更新并重启服务"
     fi
@@ -748,8 +748,8 @@ bind_single_user_to_node() {
 
     mv "${NODE_USERS_FILE}.tmp" "$NODE_USERS_FILE"
 
-    generate_xray_config
-    restart_xray
+    generate_sing-box_config
+    restart_sing-box
 
     print_success "用户 $username 已绑定到端口 $port"
 }
@@ -817,8 +817,8 @@ batch_bind_users_to_node() {
     print_info "批量绑定完成：成功 $success_count 个，失败 $fail_count 个"
 
     if [[ $success_count -gt 0 ]]; then
-        generate_xray_config
-        restart_xray
+        generate_sing-box_config
+        restart_sing-box
         print_success "配置已更新并重启服务"
     fi
 }
@@ -868,8 +868,8 @@ unbind_single_user_from_node() {
     fi
     mv "${NODE_USERS_FILE}.tmp" "$NODE_USERS_FILE"
 
-    generate_xray_config
-    restart_xray
+    generate_sing-box_config
+    restart_sing-box
 
     print_success "用户 $username 已从端口 $port 解绑"
 }
@@ -936,8 +936,8 @@ batch_unbind_users_from_node() {
     print_info "批量解绑完成：成功 $success_count 个"
 
     if [[ $success_count -gt 0 ]]; then
-        generate_xray_config
-        restart_xray
+        generate_sing-box_config
+        restart_sing-box
         print_success "配置已更新并重启服务"
     fi
 }
@@ -1151,8 +1151,8 @@ bind_nodes_to_user_smart() {
     fi
 
     if [[ $success_count -gt 0 ]]; then
-        generate_xray_config
-        restart_xray
+        generate_sing-box_config
+        restart_sing-box
         print_success "配置已更新并重启服务"
     fi
 }
@@ -1269,8 +1269,8 @@ unbind_nodes_from_user_smart() {
     fi
 
     if [[ $success_count -gt 0 ]]; then
-        generate_xray_config
-        restart_xray
+        generate_sing-box_config
+        restart_sing-box
         print_success "配置已更新并重启服务"
     fi
 }
@@ -1437,8 +1437,8 @@ bind_users_to_node_smart() {
     fi
 
     if [[ $success_count -gt 0 ]]; then
-        generate_xray_config
-        restart_xray
+        generate_sing-box_config
+        restart_sing-box
         print_success "配置已更新并重启服务"
     fi
 }
@@ -1510,8 +1510,8 @@ unbind_users_from_node_smart() {
     fi
 
     if [[ $success_count -gt 0 ]]; then
-        generate_xray_config
-        restart_xray
+        generate_sing-box_config
+        restart_sing-box
         print_success "配置已更新并重启服务"
     fi
 }

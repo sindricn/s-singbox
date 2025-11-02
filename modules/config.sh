@@ -58,7 +58,7 @@ edit_config() {
     if validate_config; then
         read -p "配置验证通过，是否重启服务使配置生效? [Y/n]: " restart_confirm
         if [[ "$restart_confirm" != "n" && "$restart_confirm" != "N" ]]; then
-            restart_xray
+            restart_sing-box
         fi
     else
         print_error "配置验证失败，请修正错误"
@@ -153,7 +153,7 @@ restore_config() {
     if validate_config; then
         read -p "配置验证通过，是否重启服务? [Y/n]: " restart_confirm
         if [[ "$restart_confirm" != "n" && "$restart_confirm" != "N" ]]; then
-            restart_xray
+            restart_sing-box
         fi
     else
         print_error "恢复的配置无效，请检查"
@@ -177,7 +177,7 @@ validate_config() {
         return 1
     fi
 
-    # 使用 xray 内置验证
+    # 使用 sing-box 内置验证
     if [[ -f "$SINGBOX_BIN" ]]; then
         if "$SINGBOX_BIN" test -config "$SINGBOX_CONFIG" >/dev/null 2>&1; then
             print_success "配置验证通过"
@@ -188,7 +188,7 @@ validate_config() {
             return 1
         fi
     else
-        print_warning "Xray 未安装，跳过内置验证"
+        print_warning "sing-box 未安装，跳过内置验证"
         return 0
     fi
 }
@@ -201,7 +201,7 @@ export_config() {
     local export_dir="${DATA_DIR}/exports"
     mkdir -p "$export_dir"
 
-    local export_file="${export_dir}/xray_config_$(date +%Y%m%d_%H%M%S).tar.gz"
+    local export_file="${export_dir}/singbox_config_$(date +%Y%m%d_%H%M%S).tar.gz"
 
     print_info "正在导出配置..."
 
@@ -279,7 +279,7 @@ import_config() {
         print_success "配置导入成功"
         read -p "是否重启服务? [Y/n]: " restart_confirm
         if [[ "$restart_confirm" != "n" && "$restart_confirm" != "N" ]]; then
-            restart_xray
+            restart_sing-box
         fi
     else
         print_error "导入的配置无效"
@@ -316,7 +316,7 @@ reset_config() {
     echo '{"users":[]}' > "$USERS_FILE"
     echo '{"nodes":[]}' > "$NODES_FILE"
 
-    restart_xray
+    restart_sing-box
 
     print_success "配置已重置为默认值"
 }

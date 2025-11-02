@@ -516,22 +516,22 @@ validate_json_file() {
     return 0
 }
 
-# Xray 配置文件验证
-validate_xray_config() {
+# sing-box 配置文件验证
+validate_sing-box_config() {
     local config_file=$1
 
     # JSON 格式验证
     validate_json_file "$config_file" || return 1
 
-    # 使用 Xray 内置验证
+    # 使用 sing-box 内置验证
     if [[ -f "$SINGBOX_BIN" ]]; then
         if ! "$SINGBOX_BIN" test -c "$config_file" &>/dev/null; then
-            log_error "Xray 配置文件验证失败: $config_file"
+            log_error "sing-box 配置文件验证失败: $config_file"
             "$SINGBOX_BIN" test -c "$config_file"
             return 1
         fi
     else
-        log_warn "Xray 未安装，跳过配置验证"
+        log_warn "sing-box 未安装，跳过配置验证"
     fi
 
     return 0
@@ -558,7 +558,7 @@ check_dangerous_operation() {
 # 检查生产环境
 is_production_env() {
     # 检查是否存在生产环境标记
-    if [[ -f "/etc/xray/production" ]] || [[ "$ENVIRONMENT" == "production" ]]; then
+    if [[ -f "/etc/sing-box/production" ]] || [[ "$ENVIRONMENT" == "production" ]]; then
         return 0
     fi
 

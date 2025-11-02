@@ -232,9 +232,9 @@ remove_orphan_outbounds_from_config() {
     echo ""
     print_success "成功删除 $remove_count 个出站规则"
 
-    # 重启Xray服务
-    print_info "正在重启Xray服务..."
-    restart_xray
+    # 重启sing-box服务
+    print_info "正在重启sing-box服务..."
+    restart_sing-box
 
     return 0
 }
@@ -906,8 +906,8 @@ prompt_bind_outbound_to_node() {
     if [[ "$node_indices" == "0" ]]; then
         jq --arg tag "$outbound_tag" '(.nodes[].outbound_tag) = $tag' "$NODES_FILE" > "${NODES_FILE}.tmp"
         mv "${NODES_FILE}.tmp" "$NODES_FILE"
-        generate_xray_config
-        restart_xray
+        generate_sing-box_config
+        restart_sing-box
         print_success "已将出站规则 '$outbound_tag' 应用到所有节点"
         return 0
     fi
@@ -930,8 +930,8 @@ prompt_bind_outbound_to_node() {
     done
 
     if [[ $success_count -gt 0 ]]; then
-        generate_xray_config
-        restart_xray
+        generate_sing-box_config
+        restart_sing-box
         print_success "成功将出站规则 '$outbound_tag' 应用到 $success_count 个节点"
     else
         print_error "未能应用出站规则到任何节点"
@@ -1032,8 +1032,8 @@ apply_outbound_to_node() {
     done
 
     if [[ $success_count -gt 0 ]]; then
-        generate_xray_config
-        restart_xray
+        generate_sing-box_config
+        restart_sing-box
         print_success "成功将出站规则 '$outbound_tag' 应用到 $success_count 个节点"
     else
         print_error "未能应用出站规则到任何节点"
@@ -1099,8 +1099,8 @@ disable_outbound_from_node() {
     if [[ "$node_indices" == "0" ]]; then
         jq '(.nodes[].outbound_tag) = null' "$NODES_FILE" > "${NODES_FILE}.tmp"
         mv "${NODES_FILE}.tmp" "$NODES_FILE"
-        generate_xray_config
-        restart_xray
+        generate_sing-box_config
+        restart_sing-box
         print_success "已禁用所有节点的出站规则"
         return 0
     fi
@@ -1123,8 +1123,8 @@ disable_outbound_from_node() {
     done
 
     if [[ $success_count -gt 0 ]]; then
-        generate_xray_config
-        restart_xray
+        generate_sing-box_config
+        restart_sing-box
         print_success "成功禁用 $success_count 个节点的出站规则"
     else
         print_error "未能禁用任何节点的出站规则"
@@ -1314,10 +1314,10 @@ delete_outbound() {
 
     print_success "出站规则已删除: $tag"
 
-    # 3. 重新生成 Xray 配置（无论是否有受影响节点都需要重新生成）
+    # 3. 重新生成 sing-box 配置（无论是否有受影响节点都需要重新生成）
     print_info "正在重新生成配置..."
-    generate_xray_config
-    restart_xray
+    generate_sing-box_config
+    restart_sing-box
     print_success "配置已更新并重启服务"
 }
 

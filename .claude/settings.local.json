@@ -31,7 +31,8 @@
       "Bash(else echo '✗ $file')",
       "Bash(do)",
       "Bash(if [ -f \"$file\" ])",
-      "Bash(then)"
+      "Bash(then)",
+      "Bash(curl:*)"
     ],
     "deny": [],
     "ask": []

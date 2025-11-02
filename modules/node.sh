@@ -101,13 +101,13 @@ test_reality_keygen() {
     echo -e "${CYAN}====== Reality 密钥生成测试 ======${NC}"
     echo ""
 
-    # 检查 Xray 路径
-    echo -e "${YELLOW}1. 检查 Xray 安装：${NC}"
+    # 检查 sing-box 路径
+    echo -e "${YELLOW}1. 检查 sing-box 安装：${NC}"
     if [[ -f "$SINGBOX_BIN" ]]; then
-        print_success "Xray 已安装: $SINGBOX_BIN"
+        print_success "sing-box 已安装: $SINGBOX_BIN"
         echo "   版本: $("$SINGBOX_BIN" version 2>&1 | head -1)"
     else
-        print_error "Xray 未安装: $SINGBOX_BIN"
+        print_error "sing-box 未安装: $SINGBOX_BIN"
         return 1
     fi
 
@@ -158,9 +158,9 @@ test_reality_keygen() {
 
 # 生成 Reality 密钥对
 generate_reality_keypair() {
-    # 检查 Xray 是否安装
+    # 检查 sing-box 是否安装
     if [[ ! -f "$SINGBOX_BIN" ]]; then
-        print_error "Xray 未安装，请先安装 Xray 内核"
+        print_error "sing-box 未安装，请先安装 sing-box 内核"
         return 1
     fi
 
@@ -371,11 +371,11 @@ quick_add_vless_reality() {
     # 生成 Reality 密钥对
     print_info "生成 Reality 密钥对..."
 
-    # 先检查 Xray 是否安装
+    # 先检查 sing-box 是否安装
     if [[ ! -f "$SINGBOX_BIN" ]]; then
-        print_error "Xray 未安装！请先通过菜单安装 Xray 内核"
+        print_error "sing-box 未安装！请先通过菜单安装 sing-box 内核"
         echo ""
-        print_info "安装路径: 主菜单 -> 1. 内核管理 -> 1. 安装 Xray"
+        print_info "安装路径: 主菜单 -> 1. 内核管理 -> 1. 安装 sing-box"
         return 1
     fi
 
@@ -384,8 +384,8 @@ quick_add_vless_reality() {
         print_error "密钥生成失败"
         echo ""
         print_info "调试信息："
-        echo "  Xray 路径: $SINGBOX_BIN"
-        echo "  Xray 版本: $("$SINGBOX_BIN" version 2>&1 | head -1)"
+        echo "  sing-box 路径: $SINGBOX_BIN"
+        echo "  sing-box 版本: $("$SINGBOX_BIN" version 2>&1 | head -1)"
         echo ""
         print_info "尝试手动生成密钥："
         echo "  运行命令: $SINGBOX_BIN x25519"
@@ -452,11 +452,11 @@ quick_add_vless_reality() {
 
     IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
 
-    # 重新生成Xray配置文件
-    generate_xray_config
+    # 重新生成sing-box配置文件
+    generate_sing-box_config
 
     # 重启服务
-    restart_xray
+    restart_sing-box
 
     echo ""
     echo -e "${GREEN}=====================================${NC}"
@@ -601,8 +601,8 @@ add_vless_node() {
     IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
 
     # 重新生成完整配置
-    generate_xray_config
-    restart_xray
+    generate_sing-box_config
+    restart_sing-box
 
     print_success "VLESS 节点创建成功！"
     print_info "端口: $port"
@@ -698,8 +698,8 @@ add_vmess_node() {
     IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
 
     # 重新生成完整配置
-    generate_xray_config
-    restart_xray
+    generate_sing-box_config
+    restart_sing-box
 
     print_success "VMess 节点创建成功！"
     print_info "端口: $port"
@@ -789,8 +789,8 @@ add_trojan_node() {
     IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
 
     # 重新生成完整配置
-    generate_xray_config
-    restart_xray
+    generate_sing-box_config
+    restart_sing-box
 
     print_success "Trojan 节点创建成功！"
     print_info "端口: $port"
@@ -861,8 +861,8 @@ add_shadowsocks_node() {
     IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
 
     # 重新生成完整配置
-    generate_xray_config
-    restart_xray
+    generate_sing-box_config
+    restart_sing-box
 
     print_success "Shadowsocks 节点创建成功！"
     print_info "端口: $port"
@@ -950,7 +950,7 @@ delete_node() {
     # 4. 从节点数据库中删除
     remove_node_info "$port"
 
-    restart_xray
+    restart_sing-box
     print_success "节点删除成功！"
 
     if [[ -f "$SUBSCRIPTION_META_FILE" ]] && [[ -n "$user_ids" ]]; then
@@ -1105,13 +1105,13 @@ show_node_detail() {
     fi
     echo ""
 
-    # 显示节点的Xray配置 (从config.json中提取)
+    # 显示节点的sing-box配置 (从config.json中提取)
     if [[ -f "$SINGBOX_CONFIG" ]]; then
         local inbound_tag="${protocol}-${port}"
         local inbound_config=$(jq --arg tag "$inbound_tag" '.inbounds[] | select(.tag == $tag)' "$SINGBOX_CONFIG" 2>/dev/null)
 
         if [[ -n "$inbound_config" && "$inbound_config" != "null" ]]; then
-            echo -e "${GREEN}节点Xray配置：${NC}"
+            echo -e "${GREEN}节点sing-box配置：${NC}"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "$inbound_config" | jq '.'
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -1182,8 +1182,8 @@ modify_node_config() {
 
                 # 更新配置文件
                 remove_inbound_from_config "$port"
-                generate_xray_config
-                restart_xray
+                generate_sing-box_config
+                restart_sing-box
 
                 print_success "端口已修改为 $new_port"
             fi
@@ -1218,8 +1218,8 @@ modify_node_config() {
                                 return 1
                             fi
                         fi
-                        generate_xray_config
-                        restart_xray
+                        generate_sing-box_config
+                        restart_sing-box
                         print_success "用户已绑定"
                     fi
                 fi
@@ -1248,8 +1248,8 @@ modify_node_config() {
                             print_error "解绑用户失败"
                             return 1
                         fi
-                        generate_xray_config
-                        restart_xray
+                        generate_sing-box_config
+                        restart_sing-box
                         print_success "用户已解绑"
                     fi
                 fi
@@ -1310,7 +1310,7 @@ delete_single_node() {
         fi
     fi
 
-    restart_xray
+    restart_sing-box
     print_success "节点删除成功！"
 }
 
@@ -1474,7 +1474,7 @@ batch_delete_nodes() {
     done
 
     # 重启服务
-    systemctl restart xray
+    systemctl restart sing-box
 
     echo ""
     print_success "批量删除完成！已删除 $success_count 个节点"
@@ -1616,8 +1616,8 @@ add_http_inbound_node() {
     fi
 
     # 生成配置并重启
-    generate_xray_config
-    restart_xray
+    generate_sing-box_config
+    restart_sing-box
 
     print_success "HTTP 入站节点添加成功！"
     echo ""
@@ -1676,8 +1676,8 @@ add_socks_inbound_node() {
     fi
 
     # 生成配置并重启
-    generate_xray_config
-    restart_xray
+    generate_sing-box_config
+    restart_sing-box
 
     print_success "SOCKS 入站节点添加成功！"
     echo ""

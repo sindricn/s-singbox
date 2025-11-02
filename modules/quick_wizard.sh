@@ -17,10 +17,7 @@ if ! declare -f print_error &>/dev/null; then
     fi
 fi
 
-# 加载UI模块（如果可用）
-if [[ -f "${SCRIPT_DIR:-}/modules/ui_helper.sh" ]]; then
-    source "${SCRIPT_DIR}/modules/ui_helper.sh"
-fi
+# UI 模块已移除，不再需要加载
 
 # =============================================================================
 # 向导步骤定义

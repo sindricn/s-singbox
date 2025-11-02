@@ -24,7 +24,7 @@ readonly LOG_LEVEL_FATAL=4
 LOG_LEVEL=${LOG_LEVEL:-$LOG_LEVEL_INFO}
 
 # 日志文件
-LOG_FILE="${LOG_FILE:-/var/log/xray-manager.log}"
+LOG_FILE="${LOG_FILE:-/var/log/singbox-manager.log}"
 LOG_DIR="$(dirname "$LOG_FILE")"
 
 # 初始化日志目录

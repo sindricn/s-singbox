@@ -427,10 +427,10 @@ delete_single_user() {
     print_success "用户删除成功"
 
     # 重新生成配置
-    generate_xray_config
+    generate_sing-box_config
 
     # 重启服务
-    restart_xray
+    restart_sing-box
 
     print_success "配置已更新并重启服务"
 }
@@ -512,10 +512,10 @@ delete_global_user() {
     print_success "用户删除成功"
 
     # 重新生成配置
-    generate_xray_config
+    generate_sing-box_config
 
     # 重启服务
-    restart_xray
+    restart_sing-box
 
     print_success "配置已更新并重启服务"
 }
@@ -591,7 +591,7 @@ add_user() {
     # 保存用户信息
     save_user_info "$port" "$node_protocol" "${uuid:-$password}" "$email"
 
-    restart_xray
+    restart_sing-box
     print_success "用户添加成功！"
 }
 
@@ -766,7 +766,7 @@ update_user_level() {
 check_user_has_traffic() {
     local email=$1
     local api_addr="127.0.0.1:10085"
-    local xray_bin="/usr/local/xray/xray"
+    local sing-box_bin="/usr/local/sing-box/sing-box"
 
     # 检查 API 端口是否在监听
     if ! ss -lnt 2>/dev/null | grep -q ":10085 " && ! netstat -lnt 2>/dev/null | grep -q ":10085 "; then
@@ -774,14 +774,14 @@ check_user_has_traffic() {
         return
     fi
 
-    # 检查 xray 命令是否可用
-    if [[ ! -x "$xray_bin" ]]; then
+    # 检查 sing-box 命令是否可用
+    if [[ ! -x "$sing-box_bin" ]]; then
         echo "unknown"
         return
     fi
 
     # 查询流量（使用 -pattern 参数返回 JSON，然后用 jq 解析）
-    local stats_json=$($xray_bin api statsquery --server=$api_addr -pattern "user>>>${email}>>>traffic" 2>/dev/null)
+    local stats_json=$($sing-box_bin api statsquery --server=$api_addr -pattern "user>>>${email}>>>traffic" 2>/dev/null)
 
     # 从 JSON 中提取上行流量
     local uplink=$(echo "$stats_json" | jq -r ".stat[]? | select(.name == \"user>>>${email}>>>traffic>>>uplink\") | .value // 0" 2>/dev/null)
@@ -886,7 +886,7 @@ get_user_online_status_with_port() {
     # 判断逻辑:
     # 1. 有流量 + 有连接 = 在线 (正在使用)
     # 2. 有流量 + 无连接 = 离线 (之前用过,现在断开了)
-    # 3. 无流量 + 有连接 = 离线 (可能是其他服务的连接,不是Xray用户连接)
+    # 3. 无流量 + 有连接 = 离线 (可能是其他服务的连接,不是sing-box用户连接)
     # 4. 无流量 + 无连接 = 离线
 
     if [[ "$has_traffic" == "yes" && "$has_connection" == true ]]; then
@@ -956,7 +956,7 @@ get_user_email_from_config() {
 get_user_traffic_summary() {
     local email=$1
     local api_addr="127.0.0.1:10085"
-    local xray_bin="/usr/local/xray/xray"
+    local sing-box_bin="/usr/local/sing-box/sing-box"
 
     # 检查 API 端口是否在监听
     if ! ss -lnt 2>/dev/null | grep -q ":10085 " && ! netstat -lnt 2>/dev/null | grep -q ":10085 "; then
@@ -964,14 +964,14 @@ get_user_traffic_summary() {
         return
     fi
 
-    # 检查 xray 命令是否可用
-    if [[ ! -x "$xray_bin" ]]; then
+    # 检查 sing-box 命令是否可用
+    if [[ ! -x "$sing-box_bin" ]]; then
         echo "N/A"
         return
     fi
 
     # 查询流量（使用 -pattern 参数返回 JSON，然后用 jq 解析）
-    local stats_json=$($xray_bin api statsquery --server=$api_addr -pattern "user>>>${email}>>>traffic" 2>/dev/null)
+    local stats_json=$($sing-box_bin api statsquery --server=$api_addr -pattern "user>>>${email}>>>traffic" 2>/dev/null)
 
     # 从 JSON 中提取上行流量
     local uplink=$(echo "$stats_json" | jq -r ".stat[]? | select(.name == \"user>>>${email}>>>traffic>>>uplink\") | .value // 0" 2>/dev/null)
@@ -1004,19 +1004,19 @@ update_user_traffic_usage() {
 
     # 从 Stats API 获取流量
     local api_addr="127.0.0.1:10085"
-    local xray_bin="/usr/local/xray/xray"
+    local sing-box_bin="/usr/local/sing-box/sing-box"
 
-    # 检查 API 和 xray 可用性
+    # 检查 API 和 sing-box 可用性
     if ! ss -lnt 2>/dev/null | grep -q ":10085 " && ! netstat -lnt 2>/dev/null | grep -q ":10085 "; then
         return 1
     fi
 
-    if [[ ! -x "$xray_bin" ]]; then
+    if [[ ! -x "$sing-box_bin" ]]; then
         return 1
     fi
 
     # 查询流量
-    local stats_json=$($xray_bin api statsquery --server=$api_addr -pattern "user>>>${config_email}>>>traffic" 2>/dev/null)
+    local stats_json=$($sing-box_bin api statsquery --server=$api_addr -pattern "user>>>${config_email}>>>traffic" 2>/dev/null)
 
     local uplink=$(echo "$stats_json" | jq -r ".stat[]? | select(.name == \"user>>>${config_email}>>>traffic>>>uplink\") | .value // 0" 2>/dev/null)
     uplink=${uplink:-0}
@@ -1132,7 +1132,7 @@ check_user_expiration() {
     echo ""
     if [[ $disabled_count -gt 0 ]]; then
         echo -e "${RED}共禁用 $disabled_count 个过期用户${NC}"
-        echo -e "${YELLOW}提示: 需要重新生成配置并重启 Xray 才能生效${NC}"
+        echo -e "${YELLOW}提示: 需要重新生成配置并重启 sing-box 才能生效${NC}"
     else
         echo -e "${GREEN}所有用户有效期正常${NC}"
     fi
@@ -1197,7 +1197,7 @@ check_traffic_limits() {
     echo ""
     if [[ $disabled_count -gt 0 ]]; then
         echo -e "${RED}共禁用 $disabled_count 个超限用户${NC}"
-        echo -e "${YELLOW}提示: 需要重新生成配置并重启 Xray 才能生效${NC}"
+        echo -e "${YELLOW}提示: 需要重新生成配置并重启 sing-box 才能生效${NC}"
     else
         echo -e "${GREEN}所有用户流量正常${NC}"
     fi
@@ -1220,7 +1220,7 @@ check_all_user_limits() {
     echo ""
 
     echo -e "${CYAN}═══════════════════════════════════════${NC}"
-    echo -e "${GREEN}提示: 用户已通过 API 动态禁用，立即生效，无需重启 Xray${NC}"
+    echo -e "${GREEN}提示: 用户已通过 API 动态禁用，立即生效，无需重启 sing-box${NC}"
 }
 
 # 查看在线用户

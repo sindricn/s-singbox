@@ -5,18 +5,20 @@
 # 帮助新用户快速完成初始配置
 # =============================================================================
 
-# 依赖检查
-if [[ -z "${SCRIPT_DIR}" ]]; then
+# 依赖检查（严格模式兼容）
+if [[ -z "${SCRIPT_DIR:-}" ]]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fi
 
 # 加载依赖模块
 if ! declare -f print_error &>/dev/null; then
-    source "${SCRIPT_DIR}/modules/common.sh"
+    if [[ -f "${SCRIPT_DIR}/modules/common.sh" ]]; then
+        source "${SCRIPT_DIR}/modules/common.sh"
+    fi
 fi
 
 # 加载UI模块（如果可用）
-if [[ -f "${SCRIPT_DIR}/modules/ui_helper.sh" ]]; then
+if [[ -f "${SCRIPT_DIR:-}/modules/ui_helper.sh" ]]; then
     source "${SCRIPT_DIR}/modules/ui_helper.sh"
 fi
 

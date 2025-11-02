@@ -305,31 +305,129 @@ view_logs() {
 }
 
 # =============================================================================
+# 状态信息获取函数
+# =============================================================================
+
+# 获取 sing-box 状态信息
+get_singbox_status() {
+    local version="未安装"
+    local status="${RED}未运行${NC}"
+
+    if [[ -f "$SINGBOX_BINARY" ]]; then
+        version=$("$SINGBOX_BINARY" version 2>/dev/null | head -1 | awk '{print $3}')
+        [[ -z "$version" ]] && version="unknown"
+
+        if systemctl is-active --quiet sing-box; then
+            status="${GREEN}运行中${NC}"
+        else
+            status="${RED}已停止${NC}"
+        fi
+    fi
+
+    echo "$version|$status"
+}
+
+# 获取节点数量
+get_nodes_count() {
+    local count=0
+    if [[ -f "${DATA_DIR}/nodes.json" ]]; then
+        count=$(jq -r '.nodes | length' "${DATA_DIR}/nodes.json" 2>/dev/null || echo "0")
+        if [[ -z "$count" || ! "$count" =~ ^[0-9]+$ ]]; then
+            count=0
+        fi
+    fi
+    echo "$count"
+}
+
+# 获取用户数量
+get_users_count() {
+    local count=0
+    if [[ -f "${DATA_DIR}/users.json" ]]; then
+        count=$(jq -r '.users | length' "${DATA_DIR}/users.json" 2>/dev/null || echo "0")
+        if [[ -z "$count" || ! "$count" =~ ^[0-9]+$ ]]; then
+            count=0
+        fi
+    fi
+    echo "$count"
+}
+
+# 获取启用的用户数量
+get_enabled_users_count() {
+    local count=0
+    if [[ -f "${DATA_DIR}/users.json" ]]; then
+        count=$(jq -r '[.users[] | select(.enabled == true)] | length' "${DATA_DIR}/users.json" 2>/dev/null || echo "0")
+        if [[ -z "$count" || ! "$count" =~ ^[0-9]+$ ]]; then
+            count=0
+        fi
+    fi
+    echo "$count"
+}
+
+# 获取在线用户数量
+get_online_users_count() {
+    local online=0
+    # TODO: 实现实际的在线用户统计逻辑
+    # 暂时返回0
+    echo "$online"
+}
+
+# =============================================================================
 # 主菜单
 # =============================================================================
 
 show_main_menu() {
     clear
-    print_header "sing-box Manager V2.0.0"
 
-    echo "【功能菜单】"
-    echo "1)  节点管理"
-    echo "2)  用户管理"
-    echo "3)  绑定管理"
-    echo "4)  订阅管理"
-    echo "5)  配置管理"
-    echo "6)  内核管理"
-    echo "7)  出站规则"
-    echo "8)  域名管理"
-    echo "9)  证书管理"
-    echo "10) 防火墙管理"
+    # 获取状态信息
+    local status_info=$(get_singbox_status)
+    local version=$(echo "$status_info" | cut -d'|' -f1)
+    local status=$(echo "$status_info" | cut -d'|' -f2)
+
+    # 获取节点数量
+    local node_count=$(get_nodes_count 2>/dev/null || echo "0")
+
+    # 获取用户数量
+    local user_count=$(get_users_count 2>/dev/null || echo "0")
+
+    # 获取启用的用户数量
+    local enabled_count=$(get_enabled_users_count 2>/dev/null || echo "0")
+
+    # 获取在线用户数量
+    local online_count=$(get_online_users_count 2>/dev/null || echo "0")
+
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║   sing-box Manager V2.0.0           ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
-    echo "【系统工具】"
-    echo "11) 服务控制"
-    echo "12) API 管理"
-    echo "13) 智能提示"
+    echo -e "${CYAN}┌─────────────────────────────────────┐${NC}"
+    echo -e "${CYAN}│${NC}  ${YELLOW}系统状态${NC}                           ${CYAN}│${NC}"
+    echo -e "${CYAN}├─────────────────────────────────────┤${NC}"
+    echo -e "${CYAN}│${NC}  内核版本: ${YELLOW}${version}${NC}"
+    echo -e "${CYAN}│${NC}  运行状态: ${status}"
+    echo -e "${CYAN}│${NC}  用户数量: ${BLUE}${user_count}${NC} ${CYAN}(启用:${NC} ${GREEN}${enabled_count}${NC}${CYAN})${NC}"
+    echo -e "${CYAN}│${NC}  节点总数: ${BLUE}${node_count}${NC}"
+    echo -e "${CYAN}│${NC}  在线用户: ${GREEN}${online_count}${NC}/${BLUE}${user_count}${NC}"
+    echo -e "${CYAN}└─────────────────────────────────────┘${NC}"
     echo ""
-    echo "0)  退出脚本"
+    echo -e "${CYAN}┌─────────────────────────────────────┐${NC}"
+    echo -e "${CYAN}│${NC}  ${YELLOW}功能菜单${NC}                           ${CYAN}│${NC}"
+    echo -e "${CYAN}├─────────────────────────────────────┤${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}1.${NC}  节点管理                       ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}2.${NC}  用户管理                       ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}3.${NC}  绑定管理                       ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}4.${NC}  订阅管理                       ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}5.${NC}  配置管理                       ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}6.${NC}  内核管理                       ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}7.${NC}  出站规则                       ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}8.${NC}  域名管理                       ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}9.${NC}  证书管理                       ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}10.${NC} 防火墙管理                     ${CYAN}│${NC}"
+    echo -e "${CYAN}├─────────────────────────────────────┤${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}11.${NC} 服务控制                       ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}12.${NC} API 管理                       ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}13.${NC} 智能提示                       ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}0.${NC}  退出脚本                       ${CYAN}│${NC}"
+    echo -e "${CYAN}└─────────────────────────────────────┘${NC}"
     echo ""
 }
 
@@ -337,170 +435,101 @@ show_main_menu() {
 show_node_menu() {
     clear
 
-    # 使用增强UI（如果可用）
-    if declare -f draw_title_box &>/dev/null; then
-        draw_title_box "节点管理" 68
-        local nodes_count=$(get_nodes_count 2>/dev/null || echo "0")
-        echo -e "${CYAN}当前节点数:${NC} ${YELLOW}${nodes_count}${NC} 个"
-        echo ""
-        if declare -f show_menu_item &>/dev/null; then
-            show_menu_item "1" "➕" "添加节点" "配置新的代理节点"
-            show_menu_item "2" "🗑️" "删除节点" "移除现有节点"
-            show_menu_item "3" "📋" "列出节点" "查看所有节点"
-            echo ""
-            draw_separator 68
-            show_menu_item "0" "↩️" "返回主菜单"
-            echo ""
-        else
-            echo "1)  添加节点"
-            echo "2)  删除节点"
-            echo "3)  列出节点"
-            echo ""
-            echo "0)  返回主菜单"
-            echo ""
-        fi
-    else
-        print_header "节点管理"
-        echo "1)  添加节点"
-        echo "2)  删除节点"
-        echo "3)  列出节点"
-        echo ""
-        echo "0)  返回主菜单"
-        echo ""
-    fi
+    local nodes_count=$(get_nodes_count 2>/dev/null || echo "0")
+
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║          节点管理                    ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${CYAN}当前节点数:${NC} ${YELLOW}${nodes_count}${NC} 个"
+    echo ""
+    echo -e "${GREEN}1.${NC} 添加节点"
+    echo -e "${GREEN}2.${NC} 删除节点"
+    echo -e "${GREEN}3.${NC} 列出节点"
+    echo -e "${GREEN}0.${NC} 返回主菜单"
+    echo ""
 }
 
 # 用户管理菜单
 show_user_menu() {
     clear
 
-    # 使用增强UI（如果可用）
-    if declare -f draw_title_box &>/dev/null; then
-        draw_title_box "用户管理" 68
-        local users_count=$(get_users_count 2>/dev/null || echo "0")
-        local enabled_count=$(get_enabled_users_count 2>/dev/null || echo "0")
-        echo -e "${CYAN}当前用户数:${NC} ${YELLOW}${users_count}${NC} 个 ${CYAN}(启用:${NC} ${GREEN}${enabled_count}${NC}${CYAN})${NC}"
-        echo ""
-        if declare -f show_menu_item &>/dev/null; then
-            show_menu_item "1" "👤" "添加用户" "创建新用户账号"
-            show_menu_item "2" "🗑️" "删除用户" "移除用户账号"
-            show_menu_item "3" "📋" "列出用户" "查看所有用户"
-            show_menu_item "4" "✏️" "修改用户" "编辑用户信息"
-            show_menu_item "5" "🔍" "查看用户详情" "查看完整信息"
-            echo ""
-            draw_separator 68
-            show_menu_item "0" "↩️" "返回主菜单"
-            echo ""
-        else
-            echo "1)  添加用户"
-            echo "2)  删除用户"
-            echo "3)  列出用户"
-            echo "4)  修改用户"
-            echo "5)  查看用户详情"
-            echo ""
-            echo "0)  返回主菜单"
-            echo ""
+    local users_count=$(get_users_count 2>/dev/null || echo "0")
+    local enabled_count=$(get_enabled_users_count 2>/dev/null || echo "0")
+
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║          用户管理                    ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${CYAN}当前用户数:${NC} ${YELLOW}${users_count}${NC} 个 ${CYAN}(启用:${NC} ${GREEN}${enabled_count}${NC}${CYAN})${NC}"
+    echo ""
+    echo -e "${GREEN}1.${NC} 添加用户"
+    echo -e "${GREEN}2.${NC} 删除用户"
+    echo -e "${GREEN}3.${NC} 列出用户"
+    echo -e "${GREEN}4.${NC} 修改用户"
+    echo -e "${GREEN}5.${NC} 查看用户详情"
+    echo -e "${GREEN}0.${NC} 返回主菜单"
+    echo ""
+}
+
+# 获取绑定数量
+get_bindings_count() {
+    local count=0
+    if [[ -f "${DATA_DIR}/node_users.json" ]]; then
+        count=$(jq -r '.bindings | length' "${DATA_DIR}/node_users.json" 2>/dev/null || echo "0")
+        if [[ -z "$count" || ! "$count" =~ ^[0-9]+$ ]]; then
+            count=0
         fi
-    else
-        print_header "用户管理"
-        echo "1)  添加用户"
-        echo "2)  删除用户"
-        echo "3)  列出用户"
-        echo "4)  修改用户"
-        echo "5)  查看用户详情"
-        echo ""
-        echo "0)  返回主菜单"
-        echo ""
     fi
+    echo "$count"
 }
 
 # 绑定管理菜单
 show_binding_menu() {
     clear
 
-    # 使用增强UI（如果可用）
-    if declare -f draw_title_box &>/dev/null; then
-        draw_title_box "绑定管理" 68
-        local bindings_count=$(get_bindings_count 2>/dev/null || echo "0")
-        echo -e "${CYAN}当前绑定数:${NC} ${YELLOW}${bindings_count}${NC} 个"
-        echo ""
-        if declare -f show_menu_item &>/dev/null; then
-            show_menu_item "1" "🔗" "绑定用户到节点"
-            show_menu_item "2" "🔓" "解绑用户与节点"
-            show_menu_item "3" "📦" "批量绑定用户"
-            show_menu_item "4" "📋" "列出所有绑定"
-            show_menu_item "5" "👤" "列出用户的绑定"
-            show_menu_item "6" "📡" "列出节点的用户"
-            show_menu_item "7" "🧹" "清理空绑定"
-            show_menu_item "8" "✔️" "验证绑定完整性"
-            echo ""
-            draw_separator 68
-            show_menu_item "0" "↩️" "返回主菜单"
-            echo ""
-        else
-            echo "1)  绑定用户到节点"
-            echo "2)  解绑用户与节点"
-            echo "3)  批量绑定用户"
-            echo "4)  列出所有绑定"
-            echo "5)  列出用户的绑定"
-            echo "6)  列出节点的用户"
-            echo "7)  清理空绑定"
-            echo "8)  验证绑定完整性"
-            echo ""
-            echo "0)  返回主菜单"
-            echo ""
-        fi
-    else
-        print_header "绑定管理"
-        echo "1)  绑定用户到节点"
-        echo "2)  解绑用户与节点"
-        echo "3)  批量绑定用户"
-        echo "4)  列出所有绑定"
-        echo "5)  列出用户的绑定"
-        echo "6)  列出节点的用户"
-        echo "7)  清理空绑定"
-        echo "8)  验证绑定完整性"
-        echo ""
-        echo "0)  返回主菜单"
-        echo ""
-    fi
+    local bindings_count=$(get_bindings_count 2>/dev/null || echo "0")
+
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║          绑定管理                    ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${CYAN}当前绑定数:${NC} ${YELLOW}${bindings_count}${NC} 个"
+    echo ""
+    echo -e "${GREEN}1.${NC} 绑定用户到节点"
+    echo -e "${GREEN}2.${NC} 解绑用户与节点"
+    echo -e "${GREEN}3.${NC} 批量绑定用户"
+    echo -e "${GREEN}4.${NC} 列出所有绑定"
+    echo -e "${GREEN}5.${NC} 列出用户的绑定"
+    echo -e "${GREEN}6.${NC} 列出节点的用户"
+    echo -e "${GREEN}7.${NC} 清理空绑定"
+    echo -e "${GREEN}8.${NC} 验证绑定完整性"
+    echo -e "${GREEN}0.${NC} 返回主菜单"
+    echo ""
 }
 
 # 配置管理菜单
 show_config_menu() {
     clear
 
-    # 使用增强UI（如果可用）
-    if declare -f draw_title_box &>/dev/null; then
-        draw_title_box "配置管理" 68
-        echo ""
-        if declare -f show_menu_item &>/dev/null; then
-            show_menu_item "1" "⚙️" "生成配置" "根据节点和用户生成"
-            show_menu_item "2" "📄" "查看配置" "查看当前配置文件"
-            show_menu_item "3" "✔️" "验证配置" "检查配置有效性"
-            show_menu_item "4" "💾" "恢复备份" "从备份恢复配置"
-            echo ""
-            draw_separator 68
-            show_menu_item "0" "↩️" "返回主菜单"
-            echo ""
-        else
-            echo "1)  生成配置"
-            echo "2)  查看配置"
-            echo "3)  验证配置"
-            echo "4)  恢复备份"
-            echo ""
-            echo "0)  返回主菜单"
-            echo ""
-        fi
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║          配置管理                    ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${GREEN}1.${NC} 生成配置"
+    echo -e "${GREEN}2.${NC} 查看配置"
+    echo -e "${GREEN}3.${NC} 验证配置"
+    echo -e "${GREEN}4.${NC} 恢复备份"
+    echo -e "${GREEN}0.${NC} 返回主菜单"
+    echo ""
+}
+
+# 获取服务状态显示
+get_service_status_display() {
+    if systemctl is-active --quiet sing-box; then
+        echo -e "${GREEN}运行中${NC}"
     else
-        print_header "配置管理"
-        echo "1)  生成配置"
-        echo "2)  查看配置"
-        echo "3)  验证配置"
-        echo "4)  恢复备份"
-        echo ""
-        echo "0)  返回主菜单"
-        echo ""
+        echo -e "${RED}已停止${NC}"
     fi
 }
 
@@ -508,40 +537,20 @@ show_config_menu() {
 show_service_menu() {
     clear
 
-    # 使用增强UI（如果可用）
-    if declare -f draw_title_box &>/dev/null; then
-        draw_title_box "服务控制" 68
-        local service_status=$(get_service_status_display 2>/dev/null || echo "未知")
-        echo -e "${CYAN}服务状态:${NC} $service_status"
-        echo ""
-        if declare -f show_menu_item &>/dev/null; then
-            show_menu_item "1" "▶️" "启动服务" "启动 sing-box"
-            show_menu_item "2" "⏹️" "停止服务" "停止 sing-box"
-            show_menu_item "3" "🔄" "重启服务" "重启 sing-box"
-            show_menu_item "4" "♻️" "重载配置" "重新加载配置文件"
-            echo ""
-            draw_separator 68
-            show_menu_item "0" "↩️" "返回主菜单"
-            echo ""
-        else
-            echo "1)  启动服务"
-            echo "2)  停止服务"
-            echo "3)  重启服务"
-            echo "4)  重载配置"
-            echo ""
-            echo "0)  返回主菜单"
-            echo ""
-        fi
-    else
-        print_header "服务控制"
-        echo "1)  启动服务"
-        echo "2)  停止服务"
-        echo "3)  重启服务"
-        echo "4)  重载配置"
-        echo ""
-        echo "0)  返回主菜单"
-        echo ""
-    fi
+    local service_status=$(get_service_status_display 2>/dev/null || echo "未知")
+
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║          服务控制                    ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${CYAN}服务状态:${NC} $service_status"
+    echo ""
+    echo -e "${GREEN}1.${NC} 启动服务"
+    echo -e "${GREEN}2.${NC} 停止服务"
+    echo -e "${GREEN}3.${NC} 重启服务"
+    echo -e "${GREEN}4.${NC} 重载配置"
+    echo -e "${GREEN}0.${NC} 返回主菜单"
+    echo ""
 }
 
 # =============================================================================

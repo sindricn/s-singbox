@@ -345,8 +345,8 @@ show_enhanced_main_menu() {
 
     # 获取内核版本（如果安装）
     local version="未安装"
-    if [[ -x "$SINGBOX_BINARY" ]]; then
-        version=$($SINGBOX_BINARY version 2>/dev/null | head -1 | awk '{print $3}' || echo "未知")
+    if [[ -x "$SINGBOX_BIN" ]]; then
+        version=$($SINGBOX_BIN version 2>/dev/null | head -1 | awk '{print $3}' || echo "未知")
     fi
 
     # 标题栏

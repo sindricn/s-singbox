@@ -1,733 +1,550 @@
 #!/bin/bash
 
-# =============================================================================
-# sing-box 配置生成核心模块
-# 功能：根据 users.json, nodes.json, node_users.json 动态生成 sing-box 配置
-# =============================================================================
+#================================================================
+# 配置生成模块（新架构）
+# 功能：根据nodes.json、users.json、node_users.json生成config.json
+# 架构：节点用户分离架构
+#================================================================
 
-# 配置文件路径
-SINGBOX_CONFIG_DIR="/usr/local/singbox"
-SINGBOX_CONFIG_FILE="${SINGBOX_CONFIG_DIR}/config.json"
-SINGBOX_CONFIG_BACKUP="${SINGBOX_CONFIG_FILE}.bak"
+# 生成Xray完整配置文件
+generate_xray_config() {
+    print_info "开始生成Xray配置..."
 
-DATA_DIR="./data"
-USERS_FILE="${DATA_DIR}/users.json"
-NODES_FILE="${DATA_DIR}/nodes.json"
-BINDINGS_FILE="${DATA_DIR}/node_users.json"
+    local nodes_file="$DATA_DIR/nodes.json"
+    local users_file="$DATA_DIR/users.json"
+    local node_users_file="$DATA_DIR/node_users.json"
+    local config_file="$XRAY_CONFIG"
 
-TEMPLATES_DIR="./templates"
-BASE_TEMPLATE="${TEMPLATES_DIR}/base_config.json"
-PROTOCOLS_DIR="${TEMPLATES_DIR}/protocols"
-
-# =============================================================================
-# 辅助函数
-# =============================================================================
-
-# 加载数据文件
-load_data_files() {
-    if [[ ! -f "$USERS_FILE" ]]; then
-        print_error "用户数据文件不存在: $USERS_FILE"
+    # 检查必需文件
+    if [[ ! -f "$nodes_file" ]]; then
+        print_error "节点文件不存在: $nodes_file"
         return 1
     fi
 
-    if [[ ! -f "$NODES_FILE" ]]; then
-        print_error "节点数据文件不存在: $NODES_FILE"
-        return 1
+    if [[ ! -f "$users_file" ]]; then
+        print_warning "用户文件不存在，创建空文件"
+        echo '{"users":[]}' > "$users_file"
     fi
 
-    if [[ ! -f "$BINDINGS_FILE" ]]; then
-        print_error "绑定关系文件不存在: $BINDINGS_FILE"
-        return 1
+    if [[ ! -f "$node_users_file" ]]; then
+        print_warning "绑定关系文件不存在，创建空文件"
+        echo '{"bindings":[]}' > "$node_users_file"
     fi
 
-    # 读取数据到变量
-    USERS_DATA=$(cat "$USERS_FILE")
-    NODES_DATA=$(cat "$NODES_FILE")
-    BINDINGS_DATA=$(cat "$BINDINGS_FILE")
-
-    return 0
-}
-
-# 获取绑定到指定节点的用户列表
-get_bound_users() {
-    local port=$1
-    local protocol=$2
-
-    # 从 bindings 中查找匹配的用户ID列表
-    local user_ids=$(echo "$BINDINGS_DATA" | jq -r \
-        --arg port "$port" \
-        --arg protocol "$protocol" \
-        '.bindings[] | select(.port == $port and .protocol == $protocol) | .users[]' 2>/dev/null)
-
-    if [[ -z "$user_ids" ]]; then
-        echo "[]"
-        return
-    fi
-
-    # 根据用户ID获取完整用户信息
-    local users_array="[]"
-    while IFS= read -r user_id; do
-        local user_info=$(echo "$USERS_DATA" | jq -r \
-            --arg uid "$user_id" \
-            '.users[] | select(.id == $uid and .enabled == true)')
-
-        if [[ -n "$user_info" ]]; then
-            users_array=$(echo "$users_array" | jq --argjson user "$user_info" '. += [$user]')
-        fi
-    done <<< "$user_ids"
-
-    echo "$users_array"
-}
-
-# =============================================================================
-# 协议 Inbound 生成函数
-# =============================================================================
-
-# 生成 Shadowsocks Inbound
-generate_shadowsocks_inbound() {
-    local node=$1
-
-    local port=$(echo "$node" | jq -r '.port')
-    local protocol=$(echo "$node" | jq -r '.protocol')
-    local tag=$(echo "$node" | jq -r '.tag')
-    local method=$(echo "$node" | jq -r '.extra.method // "aes-128-gcm"')
-
-    # 获取绑定的用户
-    local bound_users=$(get_bound_users "$port" "$protocol")
-
-    # 构建用户列表 (sing-box shadowsocks 格式)
-    local users_array="[]"
-    local user_count=$(echo "$bound_users" | jq 'length')
-
-    for ((i=0; i<user_count; i++)); do
-        local user=$(echo "$bound_users" | jq -r ".[$i]")
-        local email=$(echo "$user" | jq -r '.email')
-        local password=$(echo "$user" | jq -r '.password')
-
-        local user_obj=$(jq -n \
-            --arg name "$email" \
-            --arg password "$password" \
-            '{name: $name, password: $password}')
-
-        users_array=$(echo "$users_array" | jq --argjson user "$user_obj" '. += [$user]')
-    done
-
-    # 读取模板并替换变量
-    local template=$(cat "${PROTOCOLS_DIR}/shadowsocks.json")
-
-    local inbound=$(echo "$template" | jq \
-        --arg tag "$tag" \
-        --argjson port "$port" \
-        --arg method "$method" \
-        --argjson users "$users_array" \
-        '.tag = $tag |
-         .listen_port = $port |
-         .method = $method |
-         .users = $users')
-
-    echo "$inbound"
-}
-
-# 生成 Trojan Inbound
-generate_trojan_inbound() {
-    local node=$1
-
-    local port=$(echo "$node" | jq -r '.port')
-    local protocol=$(echo "$node" | jq -r '.protocol')
-    local tag=$(echo "$node" | jq -r '.tag')
-    local transport=$(echo "$node" | jq -r '.transport // "tcp"')
-
-    # TLS 配置
-    local tls_enabled=$(echo "$node" | jq -r '.extra.tls.enabled // true')
-    local server_name=$(echo "$node" | jq -r '.extra.tls.server_name // ""')
-    local cert_path=$(echo "$node" | jq -r '.extra.tls.certificate_path // ""')
-    local key_path=$(echo "$node" | jq -r '.extra.tls.key_path // ""')
-
-    # 获取绑定的用户
-    local bound_users=$(get_bound_users "$port" "$protocol")
-
-    # 构建用户列表 (sing-box trojan 格式)
-    local users_array="[]"
-    local user_count=$(echo "$bound_users" | jq 'length')
-
-    for ((i=0; i<user_count; i++)); do
-        local user=$(echo "$bound_users" | jq -r ".[$i]")
-        local email=$(echo "$user" | jq -r '.email')
-        local password=$(echo "$user" | jq -r '.password')
-
-        local user_obj=$(jq -n \
-            --arg name "$email" \
-            --arg password "$password" \
-            '{name: $name, password: $password}')
-
-        users_array=$(echo "$users_array" | jq --argjson user "$user_obj" '. += [$user]')
-    done
-
-    # 读取模板
-    local template=$(cat "${PROTOCOLS_DIR}/trojan.json")
-
-    # 构建 TLS 配置
-    local tls_config=$(jq -n \
-        --argjson enabled "$tls_enabled" \
-        --arg server_name "$server_name" \
-        --arg cert "$cert_path" \
-        --arg key "$key_path" \
-        '{enabled: $enabled, server_name: $server_name, certificate_path: $cert, key_path: $key}')
-
-    # 替换变量
-    local inbound=$(echo "$template" | jq \
-        --arg tag "$tag" \
-        --argjson port "$port" \
-        --argjson users "$users_array" \
-        --argjson tls "$tls_config" \
-        '.tag = $tag |
-         .listen_port = $port |
-         .users = $users |
-         .tls = $tls')
-
-    echo "$inbound"
-}
-
-# 生成 Hysteria2 Inbound
-generate_hysteria2_inbound() {
-    local node=$1
-
-    local port=$(echo "$node" | jq -r '.port')
-    local protocol=$(echo "$node" | jq -r '.protocol')
-    local tag=$(echo "$node" | jq -r '.tag')
-
-    # TLS 配置
-    local server_name=$(echo "$node" | jq -r '.extra.tls.server_name // ""')
-    local cert_path=$(echo "$node" | jq -r '.extra.tls.certificate_path // ""')
-    local key_path=$(echo "$node" | jq -r '.extra.tls.key_path // ""')
-
-    # Obfs 配置
-    local obfs_password=$(echo "$node" | jq -r '.extra.obfs.password // ""')
-
-    # 获取绑定的用户
-    local bound_users=$(get_bound_users "$port" "$protocol")
-
-    # 构建用户列表
-    local users_array="[]"
-    local user_count=$(echo "$bound_users" | jq 'length')
-
-    for ((i=0; i<user_count; i++)); do
-        local user=$(echo "$bound_users" | jq -r ".[$i]")
-        local email=$(echo "$user" | jq -r '.email')
-        local password=$(echo "$user" | jq -r '.password')
-
-        local user_obj=$(jq -n \
-            --arg name "$email" \
-            --arg password "$password" \
-            '{name: $name, password: $password}')
-
-        users_array=$(echo "$users_array" | jq --argjson user "$user_obj" '. += [$user]')
-    done
-
-    # 读取模板
-    local template=$(cat "${PROTOCOLS_DIR}/hysteria2.json")
-
-    # 构建配置
-    local tls_config=$(jq -n \
-        --arg server_name "$server_name" \
-        --arg cert "$cert_path" \
-        --arg key "$key_path" \
-        '{enabled: true, server_name: $server_name, certificate_path: $cert, key_path: $key}')
-
-    local obfs_config=$(jq -n \
-        --arg password "$obfs_password" \
-        '{type: "salamander", password: $password}')
-
-    # 替换变量
-    local inbound=$(echo "$template" | jq \
-        --arg tag "$tag" \
-        --argjson port "$port" \
-        --argjson users "$users_array" \
-        --argjson tls "$tls_config" \
-        --argjson obfs "$obfs_config" \
-        '.tag = $tag |
-         .listen_port = $port |
-         .users = $users |
-         .tls = $tls |
-         .obfs = $obfs')
-
-    echo "$inbound"
-}
-
-# 生成 TUIC Inbound
-generate_tuic_inbound() {
-    local node=$1
-
-    local port=$(echo "$node" | jq -r '.port')
-    local protocol=$(echo "$node" | jq -r '.protocol')
-    local tag=$(echo "$node" | jq -r '.tag')
-
-    # TLS 配置
-    local server_name=$(echo "$node" | jq -r '.extra.tls.server_name // ""')
-    local cert_path=$(echo "$node" | jq -r '.extra.tls.certificate_path // ""')
-    local key_path=$(echo "$node" | jq -r '.extra.tls.key_path // ""')
-
-    # 拥塞控制算法
-    local congestion=$(echo "$node" | jq -r '.extra.congestion_control // "bbr"')
-
-    # 获取绑定的用户
-    local bound_users=$(get_bound_users "$port" "$protocol")
-
-    # 构建用户列表 (TUIC 使用 uuid 和 password)
-    local users_array="[]"
-    local user_count=$(echo "$bound_users" | jq 'length')
-
-    for ((i=0; i<user_count; i++)); do
-        local user=$(echo "$bound_users" | jq -r ".[$i]")
-        local uuid=$(echo "$user" | jq -r '.id')
-        local password=$(echo "$user" | jq -r '.password')
-
-        local user_obj=$(jq -n \
-            --arg uuid "$uuid" \
-            --arg password "$password" \
-            '{uuid: $uuid, password: $password}')
-
-        users_array=$(echo "$users_array" | jq --argjson user "$user_obj" '. += [$user]')
-    done
-
-    # 读取模板
-    local template=$(cat "${PROTOCOLS_DIR}/tuic.json")
-
-    # 构建 TLS 配置
-    local tls_config=$(jq -n \
-        --arg server_name "$server_name" \
-        --arg cert "$cert_path" \
-        --arg key "$key_path" \
-        '{enabled: true, server_name: $server_name, certificate_path: $cert, key_path: $key}')
-
-    # 替换变量
-    local inbound=$(echo "$template" | jq \
-        --arg tag "$tag" \
-        --argjson port "$port" \
-        --argjson users "$users_array" \
-        --arg congestion "$congestion" \
-        --argjson tls "$tls_config" \
-        '.tag = $tag |
-         .listen_port = $port |
-         .users = $users |
-         .congestion_control = $congestion |
-         .tls = $tls')
-
-    echo "$inbound"
-}
-
-# 生成 Naive Inbound
-generate_naive_inbound() {
-    local node=$1
-
-    local port=$(echo "$node" | jq -r '.port')
-    local protocol=$(echo "$node" | jq -r '.protocol')
-    local tag=$(echo "$node" | jq -r '.tag')
-
-    # TLS 配置（Naive 必须）
-    local server_name=$(echo "$node" | jq -r '.extra.tls.server_name // ""')
-    local cert_path=$(echo "$node" | jq -r '.extra.tls.certificate_path // ""')
-    local key_path=$(echo "$node" | jq -r '.extra.tls.key_path // ""')
-
-    # 获取绑定的用户
-    local bound_users=$(get_bound_users "$port" "$protocol")
-
-    # 构建用户列表 (Naive 使用 username 和 password)
-    local users_array="[]"
-    local user_count=$(echo "$bound_users" | jq 'length')
-
-    for ((i=0; i<user_count; i++)); do
-        local user=$(echo "$bound_users" | jq -r ".[$i]")
-        local username=$(echo "$user" | jq -r '.username')
-        local password=$(echo "$user" | jq -r '.password')
-
-        local user_obj=$(jq -n \
-            --arg username "$username" \
-            --arg password "$password" \
-            '{username: $username, password: $password}')
-
-        users_array=$(echo "$users_array" | jq --argjson user "$user_obj" '. += [$user]')
-    done
-
-    # 读取模板
-    local template=$(cat "${PROTOCOLS_DIR}/naive.json")
-
-    # 构建 TLS 配置
-    local tls_config=$(jq -n \
-        --arg server_name "$server_name" \
-        --arg cert "$cert_path" \
-        --arg key "$key_path" \
-        '{enabled: true, server_name: $server_name, certificate_path: $cert, key_path: $key}')
-
-    # 替换变量
-    local inbound=$(echo "$template" | jq \
-        --arg tag "$tag" \
-        --argjson port "$port" \
-        --argjson users "$users_array" \
-        --argjson tls "$tls_config" \
-        '.tag = $tag |
-         .listen_port = $port |
-         .users = $users |
-         .tls = $tls')
-
-    echo "$inbound"
-}
-
-# 生成 VMess Inbound
-generate_vmess_inbound() {
-    local node=$1
-
-    local port=$(echo "$node" | jq -r '.port')
-    local protocol=$(echo "$node" | jq -r '.protocol')
-    local tag=$(echo "$node" | jq -r '.tag')
-
-    # TLS 配置（可选）
-    local tls_enabled=$(echo "$node" | jq -r '.extra.tls.enabled // false')
-    local server_name=$(echo "$node" | jq -r '.extra.tls.server_name // ""')
-    local cert_path=$(echo "$node" | jq -r '.extra.tls.certificate_path // ""')
-    local key_path=$(echo "$node" | jq -r '.extra.tls.key_path // ""')
-
-    # 传输方式（可选）
-    local transport_type=$(echo "$node" | jq -r '.extra.transport.type // ""')
-
-    # 获取绑定的用户
-    local bound_users=$(get_bound_users "$port" "$protocol")
-
-    # 构建用户列表 (VMess 使用 name, uuid, alterId)
-    local users_array="[]"
-    local user_count=$(echo "$bound_users" | jq 'length')
-
-    for ((i=0; i<user_count; i++)); do
-        local user=$(echo "$bound_users" | jq -r ".[$i]")
-        local username=$(echo "$user" | jq -r '.username')
-        local uuid=$(echo "$user" | jq -r '.id')
-
-        local user_obj=$(jq -n \
-            --arg name "$username" \
-            --arg uuid "$uuid" \
-            '{name: $name, uuid: $uuid, alterId: 0}')
-
-        users_array=$(echo "$users_array" | jq --argjson user "$user_obj" '. += [$user]')
-    done
-
-    # 读取模板
-    local template=$(cat "${PROTOCOLS_DIR}/vmess.json")
-
-    # 构建 TLS 配置
-    local tls_config="null"
-    if [[ "$tls_enabled" == "true" ]]; then
-        tls_config=$(jq -n \
-            --arg server_name "$server_name" \
-            --arg cert "$cert_path" \
-            --arg key "$key_path" \
-            '{enabled: true, server_name: $server_name, certificate_path: $cert, key_path: $key}')
-    fi
-
-    # 构建传输配置
-    local transport_config="null"
-    if [[ -n "$transport_type" && "$transport_type" != "null" ]]; then
-        transport_config=$(echo "$node" | jq -r '.extra.transport')
-    fi
-
-    # 替换变量
-    local inbound=$(echo "$template" | jq \
-        --arg tag "$tag" \
-        --argjson port "$port" \
-        --argjson users "$users_array" \
-        --argjson tls "$tls_config" \
-        --argjson transport "$transport_config" \
-        '.tag = $tag |
-         .listen_port = $port |
-         .users = $users |
-         .tls = $tls |
-         .transport = $transport')
-
-    echo "$inbound"
-}
-
-# 生成 VLESS Inbound
-generate_vless_inbound() {
-    local node=$1
-
-    local port=$(echo "$node" | jq -r '.port')
-    local protocol=$(echo "$node" | jq -r '.protocol')
-    local tag=$(echo "$node" | jq -r '.tag')
-
-    # TLS 配置（VLESS 通常需要 TLS）
-    local server_name=$(echo "$node" | jq -r '.extra.tls.server_name // ""')
-    local cert_path=$(echo "$node" | jq -r '.extra.tls.certificate_path // ""')
-    local key_path=$(echo "$node" | jq -r '.extra.tls.key_path // ""')
-
-    # Flow 配置（可选：xtls-rprx-vision）
-    local flow=$(echo "$node" | jq -r '.extra.flow // ""')
-
-    # 传输方式（可选）
-    local transport_type=$(echo "$node" | jq -r '.extra.transport.type // ""')
-
-    # 获取绑定的用户
-    local bound_users=$(get_bound_users "$port" "$protocol")
-
-    # 构建用户列表 (VLESS 使用 name, uuid, flow)
-    local users_array="[]"
-    local user_count=$(echo "$bound_users" | jq 'length')
-
-    for ((i=0; i<user_count; i++)); do
-        local user=$(echo "$bound_users" | jq -r ".[$i]")
-        local username=$(echo "$user" | jq -r '.username')
-        local uuid=$(echo "$user" | jq -r '.id')
-
-        local user_obj=$(jq -n \
-            --arg name "$username" \
-            --arg uuid "$uuid" \
-            --arg flow "$flow" \
-            '{name: $name, uuid: $uuid, flow: $flow}')
-
-        users_array=$(echo "$users_array" | jq --argjson user "$user_obj" '. += [$user]')
-    done
-
-    # 读取模板
-    local template=$(cat "${PROTOCOLS_DIR}/vless.json")
-
-    # 构建 TLS 配置
-    local tls_config=$(jq -n \
-        --arg server_name "$server_name" \
-        --arg cert "$cert_path" \
-        --arg key "$key_path" \
-        '{enabled: true, server_name: $server_name, certificate_path: $cert, key_path: $key}')
-
-    # 构建传输配置
-    local transport_config="null"
-    if [[ -n "$transport_type" && "$transport_type" != "null" ]]; then
-        transport_config=$(echo "$node" | jq -r '.extra.transport')
-    fi
-
-    # 替换变量
-    local inbound=$(echo "$template" | jq \
-        --arg tag "$tag" \
-        --argjson port "$port" \
-        --argjson users "$users_array" \
-        --argjson tls "$tls_config" \
-        --argjson transport "$transport_config" \
-        '.tag = $tag |
-         .listen_port = $port |
-         .users = $users |
-         .tls = $tls |
-         .transport = $transport')
-
-    echo "$inbound"
-}
-
-# 生成 ShadowTLS Inbound
-generate_shadowtls_inbound() {
-    local node=$1
-
-    local port=$(echo "$node" | jq -r '.port')
-    local protocol=$(echo "$node" | jq -r '.protocol')
-    local tag=$(echo "$node" | jq -r '.tag')
-
-    # ShadowTLS 版本
-    local version=$(echo "$node" | jq -r '.extra.version // 3')
-
-    # 握手服务器配置
-    local handshake_server=$(echo "$node" | jq -r '.extra.handshake.server // "cloudflare.com"')
-    local handshake_port=$(echo "$node" | jq -r '.extra.handshake.port // 443')
-
-    # Strict mode（仅 v3）
-    local strict_mode=$(echo "$node" | jq -r '.extra.strict_mode // false')
-
-    # 获取绑定的用户
-    local bound_users=$(get_bound_users "$port" "$protocol")
-
-    # 构建用户列表 (ShadowTLS v3 使用 name, password)
-    local users_array="[]"
-    local user_count=$(echo "$bound_users" | jq 'length')
-
-    for ((i=0; i<user_count; i++)); do
-        local user=$(echo "$bound_users" | jq -r ".[$i]")
-        local username=$(echo "$user" | jq -r '.username')
-        local password=$(echo "$user" | jq -r '.password')
-
-        local user_obj=$(jq -n \
-            --arg name "$username" \
-            --arg password "$password" \
-            '{name: $name, password: $password}')
-
-        users_array=$(echo "$users_array" | jq --argjson user "$user_obj" '. += [$user]')
-    done
-
-    # 读取模板
-    local template=$(cat "${PROTOCOLS_DIR}/shadowtls.json")
-
-    # 构建握手配置
-    local handshake_config=$(jq -n \
-        --arg server "$handshake_server" \
-        --argjson port "$handshake_port" \
-        '{server: $server, server_port: $port}')
-
-    # 替换变量
-    local inbound=$(echo "$template" | jq \
-        --arg tag "$tag" \
-        --argjson port "$port" \
-        --argjson version "$version" \
-        --argjson users "$users_array" \
-        --argjson handshake "$handshake_config" \
-        --argjson strict_mode "$strict_mode" \
-        '.tag = $tag |
-         .listen_port = $port |
-         .version = $version |
-         .users = $users |
-         .handshake = $handshake |
-         .strict_mode = $strict_mode')
-
-    echo "$inbound"
-}
-
-# =============================================================================
-# 主配置生成函数
-# =============================================================================
-
-# 生成所有 inbounds
-generate_inbounds() {
-    local inbounds_array="[]"
-
-    # 获取所有节点
-    local nodes=$(echo "$NODES_DATA" | jq -r '.nodes[]')
-    local node_count=$(echo "$NODES_DATA" | jq '.nodes | length')
-
-    for ((i=0; i<node_count; i++)); do
-        local node=$(echo "$NODES_DATA" | jq -r ".nodes[$i]")
-        local protocol=$(echo "$node" | jq -r '.protocol')
-
-        local inbound=""
-        case "$protocol" in
-            shadowsocks)
-                inbound=$(generate_shadowsocks_inbound "$node")
-                ;;
-            trojan)
-                inbound=$(generate_trojan_inbound "$node")
-                ;;
-            hysteria2)
-                inbound=$(generate_hysteria2_inbound "$node")
-                ;;
-            tuic)
-                inbound=$(generate_tuic_inbound "$node")
-                ;;
-            naive)
-                inbound=$(generate_naive_inbound "$node")
-                ;;
-            vmess)
-                inbound=$(generate_vmess_inbound "$node")
-                ;;
-            vless)
-                inbound=$(generate_vless_inbound "$node")
-                ;;
-            shadowtls)
-                inbound=$(generate_shadowtls_inbound "$node")
-                ;;
-            *)
-                print_warn "未知协议: $protocol, 跳过"
-                continue
-                ;;
-        esac
-
-        if [[ -n "$inbound" ]]; then
-            inbounds_array=$(echo "$inbounds_array" | jq --argjson inbound "$inbound" '. += [$inbound]')
-        fi
-    done
-
-    echo "$inbounds_array"
-}
-
-# 生成完整配置
-generate_singbox_config() {
-    print_info "开始生成 sing-box 配置..."
-
-    # 1. 加载数据文件
-    if ! load_data_files; then
-        return 1
-    fi
-
-    # 2. 读取基础配置模板
-    if [[ ! -f "$BASE_TEMPLATE" ]]; then
-        print_error "基础配置模板不存在: $BASE_TEMPLATE"
-        return 1
-    fi
-
-    local base_config=$(cat "$BASE_TEMPLATE")
-
-    # 3. 生成 inbounds
-    print_info "生成 inbound 配置..."
-    local inbounds=$(generate_inbounds)
-
-    # 4. 合并配置
-    local final_config=$(echo "$base_config" | jq --argjson inbounds "$inbounds" '.inbounds = $inbounds')
-
-    # 5. 创建临时文件
-    local temp_config="${SINGBOX_CONFIG_FILE}.tmp"
-    echo "$final_config" | jq '.' > "$temp_config"
-
-    # 6. 校验配置
-    print_info "校验配置文件..."
-    if command -v sing-box &>/dev/null; then
-        if ! sing-box check -c "$temp_config" 2>&1; then
-            print_error "配置校验失败"
-            rm -f "$temp_config"
-            return 1
-        fi
+    # 生成inbounds配置
+    local inbounds="[]"
+    local node_count=$(jq '.nodes | length' "$nodes_file")
+
+    if [[ $node_count -eq 0 ]]; then
+        print_warning "没有配置节点"
     else
-        print_warn "sing-box 未安装，跳过配置校验"
+        print_info "处理 $node_count 个节点..."
+
+        # 遍历所有节点
+        while IFS= read -r node; do
+            local port=$(echo "$node" | jq -r '.port')
+            local protocol=$(echo "$node" | jq -r '.protocol')
+            local transport=$(echo "$node" | jq -r '.transport')
+            local security=$(echo "$node" | jq -r '.security')
+            local extra=$(echo "$node" | jq -r '.extra')
+
+            print_info "  处理节点: $protocol/$port (security: $security)"
+
+            # 获取该节点的用户列表
+            local user_uuids=$(jq -r ".bindings[] | select(.port == \"$port\") | .users[]" "$node_users_file" 2>/dev/null)
+
+            # 生成clients列表
+            local clients="[]"
+            if [[ -n "$user_uuids" ]]; then
+                local user_count=0
+                while IFS= read -r uuid; do
+                    [[ -z "$uuid" ]] && continue
+
+                    # 从users.json获取用户信息
+                    local user=$(jq -r ".users[] | select(.id == \"$uuid\" and .enabled == true)" "$users_file" 2>/dev/null)
+
+                    if [[ -n "$user" && "$user" != "null" ]]; then
+                        local email=$(echo "$user" | jq -r '.email // ""')
+                        local level=$(echo "$user" | jq -r '.level // 0')
+                        local password=$(echo "$user" | jq -r '.password // ""')
+
+                        # 如果email为空或null,使用UUID作为email(确保Stats API能工作)
+                        if [[ -z "$email" || "$email" == "null" ]]; then
+                            email="${uuid}@local"
+                            print_warning "    用户 $uuid 缺少email字段,使用默认: $email"
+                        fi
+
+                        # 根据协议生成client配置
+                        local client=""
+                        case $protocol in
+                            vless|vmess)
+                                local flow=""
+                                if [[ "$security" == "reality" ]]; then
+                                    flow=$(echo "$extra" | jq -r '.flow // "xtls-rprx-vision"')
+                                fi
+
+                                if [[ -n "$flow" ]]; then
+                                    client=$(jq -n \
+                                        --arg id "$uuid" \
+                                        --arg email "$email" \
+                                        --argjson level "$level" \
+                                        --arg flow "$flow" \
+                                        '{id: $id, email: $email, level: $level, flow: $flow}')
+                                else
+                                    client=$(jq -n \
+                                        --arg id "$uuid" \
+                                        --arg email "$email" \
+                                        --argjson level "$level" \
+                                        '{id: $id, email: $email, level: $level}')
+                                fi
+                                ;;
+                            trojan)
+                                # Trojan使用password（从用户表读取）
+                                client=$(jq -n \
+                                    --arg password "$password" \
+                                    --arg email "$email" \
+                                    --argjson level "$level" \
+                                    '{password: $password, email: $email, level: $level}')
+                                ;;
+                            shadowsocks)
+                                # Shadowsocks也使用password
+                                client=$(jq -n \
+                                    --arg password "$password" \
+                                    --arg email "$email" \
+                                    --argjson level "$level" \
+                                    '{password: $password, email: $email, level: $level}')
+                                ;;
+                            http|socks)
+                                # HTTP/SOCKS使用username和password
+                                local username=$(echo "$user" | jq -r '.username')
+                                client=$(jq -n \
+                                    --arg user "$username" \
+                                    --arg pass "$password" \
+                                    --arg email "$email" \
+                                    --argjson level "$level" \
+                                    '{user: $user, pass: $pass, email: $email, level: $level}')
+                                ;;
+                        esac
+
+                        clients=$(echo "$clients" | jq ". += [$client]")
+                        ((user_count++))
+                    fi
+                done <<< "$user_uuids"
+
+                print_info "    绑定用户: $user_count 个"
+            else
+                print_warning "    没有绑定用户，节点将无法使用"
+            fi
+
+            # 生成inbound配置
+            local inbound=$(generate_inbound_config "$port" "$protocol" "$transport" "$security" "$extra" "$clients")
+
+            # 添加到inbounds列表
+            inbounds=$(echo "$inbounds" | jq ". += [$inbound]")
+
+        done < <(jq -c '.nodes[]' "$nodes_file" 2>/dev/null)
     fi
 
-    # 7. 备份旧配置
-    if [[ -f "$SINGBOX_CONFIG_FILE" ]]; then
-        print_info "备份旧配置..."
-        cp "$SINGBOX_CONFIG_FILE" "$SINGBOX_CONFIG_BACKUP"
+    # 读取用户配置的出站规则
+    local outbounds="[]"
+    local outbounds_file="$DATA_DIR/outbounds.json"
+    if [[ -f "$outbounds_file" ]]; then
+        local user_outbounds=$(jq '.outbounds // []' "$outbounds_file" 2>/dev/null)
+        if [[ -n "$user_outbounds" && "$user_outbounds" != "null" ]]; then
+            outbounds="$user_outbounds"
+        fi
     fi
 
-    # 8. 应用新配置
-    mkdir -p "$SINGBOX_CONFIG_DIR"
-    mv "$temp_config" "$SINGBOX_CONFIG_FILE"
+    # 添加默认出站
+    outbounds=$(echo "$outbounds" | jq '. += [
+        {
+            protocol: "freedom",
+            tag: "direct"
+        },
+        {
+            protocol: "blackhole",
+            tag: "block"
+        }
+    ]')
 
-    print_success "配置生成成功: $SINGBOX_CONFIG_FILE"
-    return 0
-}
+    # 注意: API outbound 由 Xray 自动创建，不需要手动添加
+    # 参考文档: "当 api 配置开启时，Xray 会自建一个和 tag 同名的出站代理"
 
-# 恢复备份配置
-restore_config_backup() {
-    if [[ -f "$SINGBOX_CONFIG_BACKUP" ]]; then
-        print_info "恢复备份配置..."
-        cp "$SINGBOX_CONFIG_BACKUP" "$SINGBOX_CONFIG_FILE"
-        print_success "配置已恢复"
+    # 生成路由规则
+    local routing_rules="[]"
+
+    # 为每个节点生成路由规则
+    while IFS= read -r node; do
+        local port=$(echo "$node" | jq -r '.port')
+        local protocol=$(echo "$node" | jq -r '.protocol')
+        local outbound_tag=$(echo "$node" | jq -r '.outbound_tag // empty')
+        local inbound_tag="${protocol}-${port}"
+
+        # 如果节点配置了出站规则,使用指定的出站;否则使用直连
+        if [[ -n "$outbound_tag" && "$outbound_tag" != "null" ]]; then
+            # 有出站规则的节点使用指定的代理
+            local rule=$(jq -n \
+                --arg inbound_tag "$inbound_tag" \
+                --arg outbound_tag "$outbound_tag" \
+                '{
+                    type: "field",
+                    inboundTag: [$inbound_tag],
+                    outboundTag: $outbound_tag
+                }')
+        else
+            # 没有出站规则的节点使用直连
+            local rule=$(jq -n \
+                --arg inbound_tag "$inbound_tag" \
+                '{
+                    type: "field",
+                    inboundTag: [$inbound_tag],
+                    outboundTag: "direct"
+                }')
+        fi
+        routing_rules=$(echo "$routing_rules" | jq ". += [$rule]")
+    done < <(jq -c '.nodes[]' "$nodes_file" 2>/dev/null)
+
+    # 添加默认路由规则（阻止私有IP,必须放在最后）
+    routing_rules=$(echo "$routing_rules" | jq '. += [{
+        type: "field",
+        ip: ["geoip:private"],
+        outboundTag: "block"
+    }]')
+
+    # 添加 API inbound
+    local api_inbound=$(jq -n '{
+        tag: "api",
+        listen: "127.0.0.1",
+        port: 10085,
+        protocol: "dokodemo-door",
+        settings: {
+            address: "127.0.0.1"
+        }
+    }')
+    inbounds=$(echo "$inbounds" | jq ". += [$api_inbound]")
+
+    # 添加 API 路由规则 (将 API inbound 连接到 API outbound)
+    local api_routing_rule=$(jq -n '{
+        type: "field",
+        inboundTag: ["api"],
+        outboundTag: "api"
+    }')
+    routing_rules=$(echo "$routing_rules" | jq ". = [$api_routing_rule] + .")
+
+    # 生成完整配置
+    local full_config=$(jq -n \
+        --argjson inbounds "$inbounds" \
+        --argjson outbounds "$outbounds" \
+        --argjson routing_rules "$routing_rules" \
+        '{
+            log: {
+                loglevel: "warning"
+            },
+            inbounds: $inbounds,
+            outbounds: $outbounds,
+            routing: {
+                rules: $routing_rules
+            },
+            stats: {},
+            policy: {
+                levels: {
+                    "0": {
+                        statsUserUplink: true,
+                        statsUserDownlink: true
+                    }
+                },
+                system: {
+                    statsInboundUplink: true,
+                    statsInboundDownlink: true,
+                    statsOutboundUplink: true,
+                    statsOutboundDownlink: true
+                }
+            },
+            api: {
+                tag: "api",
+                services: ["StatsService", "HandlerService"]
+            }
+        }')
+
+    # 写入配置文件
+    echo "$full_config" | jq '.' > "$config_file"
+
+    if [[ $? -eq 0 ]]; then
+        print_success "配置文件生成成功: $config_file"
         return 0
     else
-        print_error "备份配置不存在"
+        print_error "配置文件生成失败"
         return 1
     fi
 }
 
-# 查看当前配置
-show_current_config() {
-    if [[ -f "$SINGBOX_CONFIG_FILE" ]]; then
-        cat "$SINGBOX_CONFIG_FILE" | jq '.'
+# 生成单个inbound配置
+generate_inbound_config() {
+    local port=$1
+    local protocol=$2
+    local transport=$3
+    local security=$4
+    local extra=$5
+    local clients=$6
+
+    local stream_settings=$(generate_stream_settings "$transport" "$security" "$extra")
+
+    case $protocol in
+        vless)
+            local inbound=$(jq -n \
+                --argjson port "$port" \
+                --arg tag "vless-$port" \
+                --argjson clients "$clients" \
+                --argjson stream_settings "$stream_settings" \
+                '{
+                    port: $port,
+                    protocol: "vless",
+                    tag: $tag,
+                    settings: {
+                        clients: $clients,
+                        decryption: "none"
+                    },
+                    streamSettings: $stream_settings,
+                    sniffing: {
+                        enabled: true,
+                        destOverride: ["http", "tls", "quic"]
+                    }
+                }')
+            ;;
+
+        vmess)
+            # VMess配置: alterId已废弃,不再添加
+            local inbound=$(jq -n \
+                --argjson port "$port" \
+                --arg tag "vmess-$port" \
+                --argjson clients "$clients" \
+                --argjson stream_settings "$stream_settings" \
+                '{
+                    port: $port,
+                    protocol: "vmess",
+                    tag: $tag,
+                    settings: {
+                        clients: $clients
+                    },
+                    streamSettings: $stream_settings,
+                    sniffing: {
+                        enabled: true,
+                        destOverride: ["http", "tls", "quic"]
+                    }
+                }')
+            ;;
+
+        trojan)
+            local inbound=$(jq -n \
+                --argjson port "$port" \
+                --arg tag "trojan-$port" \
+                --argjson clients "$clients" \
+                --argjson stream_settings "$stream_settings" \
+                '{
+                    port: $port,
+                    protocol: "trojan",
+                    tag: $tag,
+                    settings: {
+                        clients: $clients
+                    },
+                    streamSettings: $stream_settings,
+                    sniffing: {
+                        enabled: true,
+                        destOverride: ["http", "tls", "quic"]
+                    }
+                }')
+            ;;
+
+        shadowsocks)
+            # Shadowsocks配置: 需要method和password作为默认值
+            local method=$(echo "$extra" | jq -r '.method // "aes-256-gcm"')
+
+            # 如果有clients,使用多用户模式;否则使用单用户模式
+            local has_clients=$(echo "$clients" | jq 'length > 0')
+
+            if [[ "$has_clients" == "true" ]]; then
+                # 多用户模式: 使用clients数组
+                local inbound=$(jq -n \
+                    --argjson port "$port" \
+                    --arg tag "shadowsocks-$port" \
+                    --arg method "$method" \
+                    --argjson clients "$clients" \
+                    --argjson stream_settings "$stream_settings" \
+                    '{
+                        port: $port,
+                        protocol: "shadowsocks",
+                        tag: $tag,
+                        settings: {
+                            network: "tcp,udp",
+                            method: $method,
+                            clients: $clients
+                        },
+                        streamSettings: $stream_settings
+                    }')
+            else
+                # 单用户模式: 需要password字段(从第一个client提取)
+                local password=$(echo "$clients" | jq -r '.[0].password // "default-password"')
+                local inbound=$(jq -n \
+                    --argjson port "$port" \
+                    --arg tag "shadowsocks-$port" \
+                    --arg method "$method" \
+                    --arg password "$password" \
+                    --argjson stream_settings "$stream_settings" \
+                    '{
+                        port: $port,
+                        protocol: "shadowsocks",
+                        tag: $tag,
+                        settings: {
+                            network: "tcp,udp",
+                            method: $method,
+                            password: $password
+                        },
+                        streamSettings: $stream_settings
+                    }')
+            fi
+            ;;
+
+        http)
+            local inbound=$(jq -n \
+                --argjson port "$port" \
+                --arg tag "http-$port" \
+                --argjson clients "$clients" \
+                '{
+                    port: $port,
+                    protocol: "http",
+                    tag: $tag,
+                    settings: {
+                        accounts: $clients,
+                        allowTransparent: false
+                    }
+                }')
+            ;;
+
+        socks)
+            local inbound=$(jq -n \
+                --argjson port "$port" \
+                --arg tag "socks-$port" \
+                --argjson clients "$clients" \
+                '{
+                    port: $port,
+                    protocol: "socks",
+                    tag: $tag,
+                    settings: {
+                        auth: "password",
+                        accounts: $clients,
+                        udp: true
+                    }
+                }')
+            ;;
+    esac
+
+    echo "$inbound"
+}
+
+# 生成streamSettings配置
+generate_stream_settings() {
+    local transport=$1
+    local security=$2
+    local extra=$3
+
+    local stream_settings="{}"
+
+    # 设置network
+    stream_settings=$(echo "$stream_settings" | jq --arg network "$transport" '. + {network: $network}')
+
+    # 设置security
+    case $security in
+        reality)
+            local dest=$(echo "$extra" | jq -r '.dest')
+            local server_names=$(echo "$extra" | jq -r '.server_names')
+            local private_key=$(echo "$extra" | jq -r '.private_key')
+            local short_ids=$(echo "$extra" | jq -r '.short_ids')
+
+            stream_settings=$(echo "$stream_settings" | jq \
+                --arg security "reality" \
+                --arg dest "$dest" \
+                --argjson server_names "$server_names" \
+                --arg private_key "$private_key" \
+                --argjson short_ids "$short_ids" \
+                '. + {
+                    security: $security,
+                    realitySettings: {
+                        show: false,
+                        dest: $dest,
+                        xver: 0,
+                        serverNames: $server_names,
+                        privateKey: $private_key,
+                        shortIds: $short_ids
+                    }
+                }')
+            ;;
+
+        tls)
+            local cert_file=$(echo "$extra" | jq -r '.cert_file // "/usr/local/xray/certs/cert.pem"')
+            local key_file=$(echo "$extra" | jq -r '.key_file // "/usr/local/xray/certs/key.pem"')
+
+            stream_settings=$(echo "$stream_settings" | jq \
+                --arg security "tls" \
+                --arg cert "$cert_file" \
+                --arg key "$key_file" \
+                '. + {
+                    security: $security,
+                    tlsSettings: {
+                        certificates: [{
+                            certificateFile: $cert,
+                            keyFile: $key
+                        }]
+                    }
+                }')
+            ;;
+
+        none|*)
+            stream_settings=$(echo "$stream_settings" | jq '. + {security: "none"}')
+            ;;
+    esac
+
+    # 设置传输层配置
+    case $transport in
+        ws)
+            local path=$(echo "$extra" | jq -r '.path // "/"')
+            stream_settings=$(echo "$stream_settings" | jq \
+                --arg path "$path" \
+                '. + {
+                    wsSettings: {
+                        path: $path
+                    }
+                }')
+            ;;
+
+        grpc)
+            local service_name=$(echo "$extra" | jq -r '.service_name // "grpc"')
+            stream_settings=$(echo "$stream_settings" | jq \
+                --arg service_name "$service_name" \
+                '. + {
+                    grpcSettings: {
+                        serviceName: $service_name
+                    }
+                }')
+            ;;
+    esac
+
+    echo "$stream_settings"
+}
+
+# 验证配置文件
+validate_xray_config() {
+    if [[ ! -f "$XRAY_BIN" ]]; then
+        print_error "Xray未安装"
+        return 1
+    fi
+
+    print_info "验证配置文件..."
+    if "$XRAY_BIN" run -test -config "$XRAY_CONFIG" &>/dev/null; then
+        print_success "配置文件验证通过"
+        return 0
     else
-        print_error "配置文件不存在: $SINGBOX_CONFIG_FILE"
+        print_error "配置文件验证失败"
+        "$XRAY_BIN" run -test -config "$XRAY_CONFIG"
         return 1
     fi
-}
-
-# 通用打印函数（依赖 common.sh）
-print_info() {
-    echo -e "\033[34m[INFO]\033[0m $1"
-}
-
-print_success() {
-    echo -e "\033[32m[SUCCESS]\033[0m $1"
-}
-
-print_error() {
-    echo -e "\033[31m[ERROR]\033[0m $1"
-}
-
-print_warn() {
-    echo -e "\033[33m[WARN]\033[0m $1"
 }

@@ -1,226 +1,105 @@
 #!/bin/bash
 
-# =============================================================================
+#================================================================
 # sing-box Manager - 主入口脚本
-# sing-box 服务管理工具
-# =============================================================================
+# 功能：sing-box 服务管理工具
+# 版本：V2.0.0 (重构版)
+# 项目地址：https://github.com/yourusername/s-singbox
+#================================================================
 
-# 脚本目录
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR" || exit 1
+# 严格模式
+set -uo pipefail
 
-# 数据目录
-DATA_DIR="${SCRIPT_DIR}/data"
-MODULES_DIR="${SCRIPT_DIR}/modules"
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+GRAY='\033[0;90m'
+NC='\033[0m' # No Color
 
-# 配置文件
-SINGBOX_CONFIG_DIR="/usr/local/singbox"
-SINGBOX_CONFIG_FILE="${SINGBOX_CONFIG_DIR}/config.json"
-SINGBOX_BINARY="/usr/local/bin/sing-box"
+# 全局变量
+readonly SINGBOX_DIR="/usr/local/singbox"
+readonly SINGBOX_BIN="/usr/local/bin/sing-box"
+readonly SINGBOX_CONFIG="${SINGBOX_DIR}/config.json"
+readonly SINGBOX_SERVICE="/etc/systemd/system/sing-box.service"
+readonly DATA_DIR="${SINGBOX_DIR}/data"
+readonly USERS_FILE="${DATA_DIR}/users.json"
+readonly NODES_FILE="${DATA_DIR}/nodes.json"
+readonly NODE_USERS_FILE="${DATA_DIR}/node_users.json"
+readonly SUBSCRIPTION_DIR="${DATA_DIR}/subscriptions"
 
-# =============================================================================
-# 加载公共库模块（最高优先级）
-# =============================================================================
+# 日志配置
+export LOG_FILE="/var/log/singbox-manager.log"
+export LOG_LEVEL=${LOG_LEVEL:-1}  # 默认 INFO 级别
 
-# 加载 common.sh（日志系统、工具函数）
-if [[ -f "${MODULES_DIR}/common.sh" ]]; then
-    source "${MODULES_DIR}/common.sh"
-else
-    # 如果 common.sh 不存在，使用基础打印函数
-    RED='\033[0;31m'
-    GREEN='\033[0;32m'
-    YELLOW='\033[1;33m'
-    BLUE='\033[0;34m'
-    CYAN='\033[0;36m'
-    NC='\033[0m'
+# 加载模块
+source_modules() {
+    # 解析真实脚本路径（处理软链接）
+    local script_path="${BASH_SOURCE[0]}"
 
-    print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-    print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
-    print_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-    print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-    print_header() {
-        echo ""
-        echo -e "${GREEN}======================================${NC}"
-        echo -e "${GREEN}  $1${NC}"
-        echo -e "${GREEN}======================================${NC}"
-        echo ""
-    }
-
-    # 日志函数（备用版本，仅输出到控制台）
-    log_error() { print_error "$1"; }
-    log_success() { print_success "$1"; }
-    log_warn() { print_warn "$1"; }
-    log_info() { print_info "$1"; }
-    log_debug() { : ; }  # 空操作
-
-    print_error "找不到 common.sh 模块: ${MODULES_DIR}/common.sh"
-    print_warn "使用备用打印函数，部分功能可能不可用"
-fi
-
-# =============================================================================
-# 加载核心增强模块
-# =============================================================================
-
-# 加载输入验证模块
-if [[ -f "${MODULES_DIR}/input-validation.sh" ]]; then
-    source "${MODULES_DIR}/input-validation.sh"
-    log_debug "input-validation.sh 已加载"
-fi
-
-# 加载安全JSON模块
-if [[ -f "${MODULES_DIR}/safe_json.sh" ]]; then
-    source "${MODULES_DIR}/safe_json.sh"
-    log_debug "safe_json.sh 已加载"
-fi
-
-# 加载UI增强模块
-if [[ -f "${MODULES_DIR}/ui_helper.sh" ]]; then
-    source "${MODULES_DIR}/ui_helper.sh"
-    # 验证关键函数是否加载成功
-    if declare -f show_enhanced_main_menu &>/dev/null; then
-        log_debug "ui_helper.sh 已加载，增强菜单可用"
-    else
-        log_warn "ui_helper.sh 已加载但函数不可用，将使用简化版菜单"
+    # 如果是软链接，解析真实路径
+    if [[ -L "$script_path" ]]; then
+        script_path="$(readlink -f "$script_path")"
     fi
-else
-    log_warn "ui_helper.sh 不存在，将使用简化版菜单"
-fi
 
-# 加载智能提示模块
-if [[ -f "${MODULES_DIR}/smart_tips.sh" ]]; then
-    source "${MODULES_DIR}/smart_tips.sh"
-    log_debug "smart_tips.sh 已加载"
-fi
+    local script_dir="$(cd "$(dirname "$script_path")" && pwd)"
 
-# 加载快速向导模块
-if [[ -f "${MODULES_DIR}/quick_wizard.sh" ]]; then
-    source "${MODULES_DIR}/quick_wizard.sh"
-    log_debug "quick_wizard.sh 已加载"
-fi
+    # 导出 MODULES_DIR 为全局变量
+    export MODULES_DIR="${script_dir}/modules"
 
-# =============================================================================
-# 环境检查
-# =============================================================================
-
-check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        print_error "此脚本需要 root 权限运行"
+    if [[ ! -d "$MODULES_DIR" ]]; then
+        echo -e "${RED}[ERROR]${NC} 模块目录不存在: $MODULES_DIR"
+        echo -e "${RED}[ERROR]${NC} 脚本路径: $script_path"
+        echo -e "${RED}[ERROR]${NC} 脚本目录: $script_dir"
         exit 1
     fi
-}
 
-check_dependencies() {
-    local missing_deps=()
+    # 优先加载公共库
+    if [[ -f "${MODULES_DIR}/common.sh" ]]; then
+        source "${MODULES_DIR}/common.sh"
+    else
+        echo -e "${RED}[ERROR]${NC} 公共库不存在: ${MODULES_DIR}/common.sh"
+        exit 1
+    fi
 
-    # 检查必需的命令
-    for cmd in jq systemctl; do
-        if ! command -v "$cmd" &>/dev/null; then
-            missing_deps+=("$cmd")
+    # 加载输入验证模块
+    if [[ -f "${MODULES_DIR}/input-validation.sh" ]]; then
+        source "${MODULES_DIR}/input-validation.sh"
+    fi
+
+    # 加载安全JSON模块
+    if [[ -f "${MODULES_DIR}/safe_json.sh" ]]; then
+        source "${MODULES_DIR}/safe_json.sh"
+    fi
+
+    # 加载其他模块
+    for module in "${MODULES_DIR}"/*.sh; do
+        if [[ -f "$module" ]] && \
+           [[ "$module" != */common.sh ]] && \
+           [[ "$module" != */input-validation.sh ]] && \
+           [[ "$module" != */safe_json.sh ]]; then
+            source "$module"
+            log_debug "已加载模块: $(basename "$module")"
         fi
     done
 
-    if [[ ${#missing_deps[@]} -gt 0 ]]; then
-        print_error "缺少必需的依赖: ${missing_deps[*]}"
-        print_info "请安装后重试"
-        exit 1
-    fi
+    log_info "所有模块加载完成"
 }
 
-check_data_files() {
-    # 检查数据目录
-    if [[ ! -d "$DATA_DIR" ]]; then
-        print_warn "数据目录不存在，正在创建..."
-        mkdir -p "$DATA_DIR"
-    fi
+# 初始化数据目录 (使用xray的数据结构规范)
+init_data_dir() {
+    mkdir -p "$DATA_DIR"
+    mkdir -p "$SUBSCRIPTION_DIR"
 
-    # 检查并初始化数据文件
-    if [[ ! -f "${DATA_DIR}/users.json" ]]; then
-        print_warn "users.json 不存在，正在初始化..."
-        init_users_file
-    fi
-
-    if [[ ! -f "${DATA_DIR}/nodes.json" ]]; then
-        print_warn "nodes.json 不存在，正在初始化..."
-        init_nodes_file
-    fi
-
-    if [[ ! -f "${DATA_DIR}/node_users.json" ]]; then
-        print_warn "node_users.json 不存在，正在初始化..."
-        init_bindings_file
-    fi
-}
-
-# =============================================================================
-# 数据文件初始化
-# =============================================================================
-
-init_users_file() {
-    # 生成 admin 用户的 UUID 和密码
-    local admin_uuid=$(generate_uuid)
-    local admin_password=$(generate_random_password 16)
-    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-    cat > "${DATA_DIR}/users.json" <<EOF
-{
-  "users": [
-    {
-      "id": "$admin_uuid",
-      "username": "admin",
-      "email": "admin@local",
-      "password": "$admin_password",
-      "level": 0,
-      "enabled": true,
-      "created_at": "$timestamp",
-      "traffic_limit": 0,
-      "expire_time": ""
-    }
-  ]
-}
-EOF
-
-    print_success "users.json 初始化完成"
-    print_info "admin 用户已创建"
-    print_warn "admin 密码: $admin_password (请妥善保存)"
-}
-
-init_nodes_file() {
-    cat > "${DATA_DIR}/nodes.json" <<EOF
-{
-  "nodes": []
-}
-EOF
-
-    print_success "nodes.json 初始化完成"
-}
-
-init_bindings_file() {
-    cat > "${DATA_DIR}/node_users.json" <<EOF
-{
-  "bindings": []
-}
-EOF
-
-    print_success "node_users.json 初始化完成"
-}
-
-# =============================================================================
-# UUID 和密码生成
-# =============================================================================
-
-generate_uuid() {
-    if command -v uuidgen &>/dev/null; then
-        uuidgen | tr '[:upper:]' '[:lower:]'
-    elif [[ -f /proc/sys/kernel/random/uuid ]]; then
-        cat /proc/sys/kernel/random/uuid
-    else
-        python3 -c "import uuid; print(str(uuid.uuid4()))" 2>/dev/null || \
-        echo "$(cat /dev/urandom | tr -dc 'a-f0-9' | fold -w 8 | head -n 1)-$(cat /dev/urandom | tr -dc 'a-f0-9' | fold -w 4 | head -n 1)-4$(cat /dev/urandom | tr -dc 'a-f0-9' | fold -w 3 | head -n 1)-$(cat /dev/urandom | tr -dc 'a-f0-9' | fold -w 4 | head -n 1)-$(cat /dev/urandom | tr -dc 'a-f0-9' | fold -w 12 | head -n 1)"
-    fi
-}
-
-generate_random_password() {
-    local length=${1:-16}
-    tr -dc 'A-Za-z0-9!@#$%^&*' < /dev/urandom | head -c "$length"
+    # 核心数据文件初始化，缺失时写入空结构
+    ensure_json_file "$USERS_FILE" '{"users":[]}'
+    ensure_json_file "$NODES_FILE" '{"nodes":[]}'
+    ensure_json_file "$NODE_USERS_FILE" '{"bindings":[]}'
+    ensure_json_file "${DATA_DIR}/subscriptions.json" '{"subscriptions":[]}'
+    ensure_json_file "${DATA_DIR}/subscription_metadata.json" '{"subscriptions":[]}'
+    ensure_json_file "${DATA_DIR}/outbounds.json" '{"outbounds":[]}'
 }
 
 # =============================================================================
@@ -313,8 +192,8 @@ get_singbox_status() {
     local version="未安装"
     local status="${RED}未运行${NC}"
 
-    if [[ -f "$SINGBOX_BINARY" ]]; then
-        version=$("$SINGBOX_BINARY" version 2>/dev/null | head -1 | awk '{print $3}')
+    if [[ -f "$SINGBOX_BIN" ]]; then
+        version=$("$SINGBOX_BIN" version 2>/dev/null | head -1 | awk '{print $3}')
         [[ -z "$version" ]] && version="unknown"
 
         if systemctl is-active --quiet sing-box; then
@@ -767,109 +646,28 @@ handle_service_menu() {
 }
 
 # =============================================================================
-# 模块加载（优先级加载）
-# =============================================================================
-
-load_modules() {
-    log_info "加载系统模块..."
-
-    # 第一优先级：基础模块（已在顶部加载 common.sh）
-    # common.sh 已在文件开头加载
-
-    # 第二优先级：安全和验证模块
-    local priority_modules=(
-        "input-validation.sh"
-        "safe_json.sh"
-    )
-
-    for module in "${priority_modules[@]}"; do
-        if [[ -f "${MODULES_DIR}/${module}" ]]; then
-            source "${MODULES_DIR}/${module}"
-            log_debug "已加载: $module"
-        else
-            log_warn "模块不存在: $module"
-        fi
-    done
-
-    # 第三优先级：选择器模块
-    if [[ -f "${MODULES_DIR}/selector.sh" ]]; then
-        source "${MODULES_DIR}/selector.sh"
-        log_debug "已加载: selector.sh"
-    fi
-
-    # UI增强模块
-    if [[ -f "${MODULES_DIR}/ui_helper.sh" ]]; then
-        source "${MODULES_DIR}/ui_helper.sh"
-        log_debug "已加载: ui_helper.sh"
-    fi
-
-    # 快速部署向导模块
-    if [[ -f "${MODULES_DIR}/quick_wizard.sh" ]]; then
-        source "${MODULES_DIR}/quick_wizard.sh"
-        log_debug "已加载: quick_wizard.sh"
-    fi
-
-    # 智能提示系统模块
-    if [[ -f "${MODULES_DIR}/smart_tips.sh" ]]; then
-        source "${MODULES_DIR}/smart_tips.sh"
-        log_debug "已加载: smart_tips.sh"
-    fi
-
-    # 第四优先级：业务模块
-    local business_modules=(
-        "core.sh"
-        "node.sh"
-        "user.sh"
-        "user_node_binding.sh"
-        "config_generator.sh"
-        "subscription.sh"
-        "outbound.sh"
-        "domain.sh"
-        "cert.sh"
-        "firewall.sh"
-        "monitor.sh"
-        "singbox_api.sh"
-        "config.sh"
-    )
-
-    for module in "${business_modules[@]}"; do
-        if [[ -f "${MODULES_DIR}/${module}" ]]; then
-            source "${MODULES_DIR}/${module}"
-            log_debug "已加载: $module"
-        else
-            log_warn "模块不存在: $module"
-        fi
-    done
-
-    log_success "模块加载完成"
-}
-
-# =============================================================================
 # 主程序
 # =============================================================================
 
 main() {
+    # 先加载所有模块（必须在调用模块函数之前）
+    source_modules
+
     # 检查 root 权限
-    check_root
+    require_root
 
-    # 检查依赖
-    check_dependencies
+    # 初始化数据目录
+    init_data_dir
 
-    # 加载所有模块（优先级加载）
-    load_modules
+    # 初始化默认admin用户
+    init_admin_user
 
-    # 检查数据文件
-    check_data_files
+    log_info "sing-box 管理脚本启动 (V2.0.0)"
 
     # 主循环
     while true; do
-        # 使用增强版主菜单（如果ui_helper模块已加载）
-        if declare -f show_enhanced_main_menu &>/dev/null; then
-            show_enhanced_main_menu
-        else
-            show_main_menu
-        fi
-        read -p "$(echo -e ${CYAN}请选择${NC}: )" choice
+        show_main_menu
+        read -p "请选择操作: " choice
 
         case "$choice" in
             1)

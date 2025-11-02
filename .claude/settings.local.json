@@ -24,7 +24,11 @@
       "Bash(do if [[ -f \"modules/$module.sh\" ]])",
       "Bash(then echo \"✅ modules/$module.sh 存在\")",
       "Bash(else echo \"❌ modules/$module.sh 缺失\")",
-      "Bash(fi)"
+      "Bash(fi)",
+      "Bash(while read file)",
+      "Bash(do if bash -n $file)",
+      "Bash(then echo '✓ $file')",
+      "Bash(else echo '✗ $file')"
     ],
     "deny": [],
     "ask": []

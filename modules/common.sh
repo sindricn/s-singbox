@@ -1,419 +1,485 @@
 #!/bin/bash
 
-# =============================================================================
-# common.sh - 通用函数库
-# 提供日志、颜色输出、工具函数等基础功能
-# =============================================================================
+#================================================================
+# 公共库模块 - Common Library
+# 功能：统一日志系统、错误处理、工具函数
+# 参考：s-hy2 最佳实践
+#================================================================
 
-# =============================================================================
-# 颜色定义
-# =============================================================================
+# 严格模式（不使用 -e，保持错误处理可控）
+set -uo pipefail
 
-export RED='\033[0;31m'
-export GREEN='\033[0;32m'
-export YELLOW='\033[1;33m'
-export BLUE='\033[0;34m'
-export CYAN='\033[0;36m'
-export MAGENTA='\033[0;35m'
-export NC='\033[0m' # No Color
+#================================================================
+# 日志系统 - Logging System
+#================================================================
 
-# =============================================================================
 # 日志级别
-# =============================================================================
+readonly LOG_LEVEL_DEBUG=0
+readonly LOG_LEVEL_INFO=1
+readonly LOG_LEVEL_WARN=2
+readonly LOG_LEVEL_ERROR=3
+readonly LOG_LEVEL_FATAL=4
 
-export LOG_LEVEL_DEBUG=0
-export LOG_LEVEL_INFO=1
-export LOG_LEVEL_WARN=2
-export LOG_LEVEL_ERROR=3
+# 当前日志级别（默认 INFO）
+LOG_LEVEL=${LOG_LEVEL:-$LOG_LEVEL_INFO}
 
-# 默认日志级别
-CURRENT_LOG_LEVEL=${LOG_LEVEL_INFO}
+# 日志文件
+LOG_FILE="${LOG_FILE:-/var/log/xray-manager.log}"
+LOG_DIR="$(dirname "$LOG_FILE")"
 
-# 日志文件路径
-LOG_FILE="/var/log/singbox/manager.log"
-
-# =============================================================================
-# 打印函数（输出到终端）
-# =============================================================================
-
-print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-print_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-print_debug() {
-    if [[ ${CURRENT_LOG_LEVEL} -le ${LOG_LEVEL_DEBUG} ]]; then
-        echo -e "${CYAN}[DEBUG]${NC} $1"
+# 初始化日志目录
+init_log_dir() {
+    if [[ ! -d "$LOG_DIR" ]]; then
+        mkdir -p "$LOG_DIR" 2>/dev/null || true
     fi
 }
 
-print_header() {
-    echo ""
-    echo -e "${GREEN}======================================${NC}"
-    echo -e "${GREEN}  $1${NC}"
-    echo -e "${GREEN}======================================${NC}"
-    echo ""
-}
-
-print_separator() {
-    echo -e "${BLUE}--------------------------------------${NC}"
-}
-
-# =============================================================================
-# 日志函数（写入日志文件）
-# =============================================================================
-
-# 确保日志目录存在
-ensure_log_dir() {
-    local log_dir=$(dirname "$LOG_FILE")
-    if [[ ! -d "$log_dir" ]]; then
-        mkdir -p "$log_dir"
-    fi
-}
-
-# 写入日志
-log_write() {
+# 日志函数 - 分级日志输出
+log() {
     local level=$1
     shift
-    local message="$@"
+    local message="$*"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local pid=$$
 
-    ensure_log_dir
-    echo "[${timestamp}] [${level}] ${message}" >> "$LOG_FILE"
-}
+    # 根据日志级别输出
+    if [[ $level -ge $LOG_LEVEL ]]; then
+        local level_name=""
+        local color=""
 
-log_info() {
-    log_write "INFO" "$@"
-    print_info "$@"
-}
+        case $level in
+            $LOG_LEVEL_DEBUG)
+                level_name="DEBUG"
+                color="${BLUE}"
+                ;;
+            $LOG_LEVEL_INFO)
+                level_name="INFO "
+                color="${CYAN}"
+                ;;
+            $LOG_LEVEL_WARN)
+                level_name="WARN "
+                color="${YELLOW}"
+                ;;
+            $LOG_LEVEL_ERROR)
+                level_name="ERROR"
+                color="${RED}"
+                ;;
+            $LOG_LEVEL_FATAL)
+                level_name="FATAL"
+                color="${RED}"
+                ;;
+        esac
 
-log_success() {
-    log_write "SUCCESS" "$@"
-    print_success "$@"
-}
+        # 终端输出（彩色）
+        echo -e "${color}[${level_name}]${NC} $message"
 
-log_error() {
-    log_write "ERROR" "$@"
-    print_error "$@"
-}
-
-log_warn() {
-    log_write "WARN" "$@"
-    print_warn "$@"
-}
-
-log_debug() {
-    if [[ ${CURRENT_LOG_LEVEL} -le ${LOG_LEVEL_DEBUG} ]]; then
-        log_write "DEBUG" "$@"
-        print_debug "$@"
+        # 文件输出（无颜色）
+        if [[ -w "$LOG_DIR" ]] || [[ -w "$LOG_FILE" ]]; then
+            echo "[$timestamp] [$level_name] [PID:$pid] $message" >> "$LOG_FILE" 2>/dev/null || true
+        fi
     fi
 }
 
-# =============================================================================
-# 权限检查
-# =============================================================================
+# 便捷日志函数
+log_debug() { log $LOG_LEVEL_DEBUG "$@"; }
+log_info() { log $LOG_LEVEL_INFO "$@"; }
+log_warn() { log $LOG_LEVEL_WARN "$@"; }
+log_error() { log $LOG_LEVEL_ERROR "$@"; }
+log_fatal() { log $LOG_LEVEL_FATAL "$@"; }
 
-check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        print_error "此操作需要 root 权限"
-        print_info "请使用 sudo 运行此脚本"
-        return 1
+# 兼容旧的打印函数（逐步迁移）
+print_info() { log_info "$@"; }
+print_success() { echo -e "${GREEN}[SUCCESS]${NC} $*"; log_info "[SUCCESS] $*"; }
+print_error() { log_error "$@"; }
+print_warning() { log_warn "$@"; }
+
+#================================================================
+# 错误处理 - Error Handling
+#================================================================
+
+# 错误退出函数
+error_exit() {
+    local message="$1"
+    local exit_code="${2:-1}"
+
+    log_fatal "$message"
+
+    # 调用清理函数（如果存在）
+    if declare -f cleanup >/dev/null; then
+        cleanup
     fi
-    return 0
+
+    exit "$exit_code"
 }
 
-require_root() {
-    if ! check_root; then
-        exit 1
-    fi
+# 信号捕获 - 自动清理
+setup_signal_handlers() {
+    trap 'error_exit "脚本被中断 (SIGINT)" 130' INT
+    trap 'error_exit "脚本被终止 (SIGTERM)" 143' TERM
+    trap 'handle_error ${LINENO} ${BASH_LINENO} "$BASH_COMMAND" $?' ERR
 }
 
-# =============================================================================
-# 命令检查
-# =============================================================================
+# 错误处理函数 - 调用栈跟踪
+handle_error() {
+    local lineno=$1
+    local bash_lineno=$2
+    local command=$3
+    local error_code=$4
 
-check_command() {
-    local cmd=$1
-    if command -v "$cmd" &>/dev/null; then
-        return 0
-    else
-        return 1
-    fi
+    log_error "命令执行失败 (退出码: $error_code)"
+    log_error "  行号: $lineno"
+    log_error "  命令: $command"
+
+    # 打印调用栈
+    log_debug "调用栈:"
+    local frame=0
+    while caller $frame; do
+        ((frame++))
+    done | while read line func file; do
+        log_debug "  $file:$line ($func)"
+    done
 }
 
-require_command() {
-    local cmd=$1
-    local package=${2:-$cmd}
+# 临时文件管理
+declare -a TEMP_FILES=()
 
-    if ! check_command "$cmd"; then
-        print_error "缺少必需的命令: $cmd"
-        print_info "请安装: $package"
-        return 1
-    fi
-    return 0
+create_temp_file() {
+    local temp_file=$(mktemp) || error_exit "无法创建临时文件"
+    chmod 600 "$temp_file"
+    TEMP_FILES+=("$temp_file")
+    echo "$temp_file"
 }
 
-check_commands() {
-    local missing_commands=()
-
-    for cmd in "$@"; do
-        if ! check_command "$cmd"; then
-            missing_commands+=("$cmd")
+cleanup_temp_files() {
+    for temp_file in "${TEMP_FILES[@]}"; do
+        if [[ -f "$temp_file" ]]; then
+            rm -f "$temp_file"
+            log_debug "清理临时文件: $temp_file"
         fi
     done
-
-    if [[ ${#missing_commands[@]} -gt 0 ]]; then
-        print_error "缺少以下必需命令: ${missing_commands[*]}"
-        return 1
-    fi
-    return 0
+    TEMP_FILES=()
 }
 
-# =============================================================================
-# 文件操作工具
-# =============================================================================
-
-# 检查文件是否存在
-file_exists() {
-    [[ -f "$1" ]]
+# 清理函数（可被覆盖）
+cleanup() {
+    cleanup_temp_files
 }
 
-# 检查目录是否存在
-dir_exists() {
-    [[ -d "$1" ]]
-}
+#================================================================
+# 工具函数 - Utility Functions
+#================================================================
 
-# 确保目录存在
-ensure_dir() {
-    local dir=$1
-    if [[ ! -d "$dir" ]]; then
-        mkdir -p "$dir"
-        log_debug "创建目录: $dir"
+# 检查命令是否存在
+require_command() {
+    local command=$1
+    local package=${2:-$command}
+
+    if ! command -v "$command" &>/dev/null; then
+        error_exit "未找到命令: $command (请安装: $package)"
     fi
 }
 
-# 安全删除文件
-safe_remove() {
-    local file=$1
-    if [[ -f "$file" ]]; then
-        rm -f "$file"
-        log_debug "删除文件: $file"
+# 检查 root 权限
+require_root() {
+    if [[ $EUID -ne 0 ]]; then
+        error_exit "此脚本必须以 root 权限运行"
     fi
 }
 
-# 安全复制文件
-safe_copy() {
-    local src=$1
-    local dst=$2
-
-    if [[ ! -f "$src" ]]; then
-        log_error "源文件不存在: $src"
-        return 1
-    fi
-
-    cp "$src" "$dst"
-    log_debug "复制文件: $src -> $dst"
-}
-
-# 安全移动文件
-safe_move() {
-    local src=$1
-    local dst=$2
-
-    if [[ ! -f "$src" ]]; then
-        log_error "源文件不存在: $src"
-        return 1
-    fi
-
-    mv "$src" "$dst"
-    log_debug "移动文件: $src -> $dst"
-}
-
-# =============================================================================
-# 字符串工具
-# =============================================================================
-
-# 去除字符串首尾空格
-trim() {
-    local var="$*"
-    var="${var#"${var%%[![:space:]]*}"}"
-    var="${var%"${var##*[![:space:]]}"}"
-    echo -n "$var"
-}
-
-# 转换为小写
-to_lower() {
-    echo "$1" | tr '[:upper:]' '[:lower:]'
-}
-
-# 转换为大写
-to_upper() {
-    echo "$1" | tr '[:lower:]' '[:upper:]'
-}
-
-# 检查字符串是否为空
-is_empty() {
-    [[ -z "$1" ]]
-}
-
-# 检查字符串是否不为空
-is_not_empty() {
-    [[ -n "$1" ]]
-}
-
-# =============================================================================
-# UUID 生成
-# =============================================================================
-
-generate_uuid() {
-    # 尝试多种方法生成 UUID
-    if check_command uuidgen; then
-        uuidgen | to_lower
-    elif check_command cat && [[ -e /proc/sys/kernel/random/uuid ]]; then
-        cat /proc/sys/kernel/random/uuid
-    else
-        # 使用 /dev/urandom 生成 UUID v4
-        local N B T
-        for (( N=0; N < 16; ++N )); do
-            B=$(( $RANDOM % 256 ))
-            if (( N == 6 )); then
-                printf '4%x' $(( B % 16 ))
-            elif (( N == 8 )); then
-                local T=$(( B % 4 ))
-                printf '%x%x' $(( 8 + T )) $(( (B / 4) % 16 ))
-            else
-                printf '%02x' $B
-            fi
-            case $N in
-                3 | 5 | 7 | 9) printf '-' ;;
-            esac
-        done
-        echo
-    fi
-}
-
-# =============================================================================
-# 随机密码生成
-# =============================================================================
-
-generate_random_password() {
-    local length=${1:-16}
-
-    if check_command openssl; then
-        openssl rand -base64 $((length * 2)) | tr -d '/+=' | head -c "$length"
-    elif check_command /dev/urandom; then
-        tr -dc 'A-Za-z0-9' < /dev/urandom | head -c "$length"
-    else
-        # 降级方案
-        date +%s%N | md5sum | head -c "$length"
-    fi
-    echo
-}
-
-# =============================================================================
-# 确认提示
-# =============================================================================
-
+# 用户确认
 confirm() {
-    local prompt="${1:-继续}"
+    local prompt="${1:-确认操作}"
     local default="${2:-n}"
 
-    local yn_prompt
-    if [[ "$default" == "y" || "$default" == "Y" ]]; then
-        yn_prompt="[Y/n]"
+    local yn_prompt="[y/N]"
+    [[ "$default" == "y" ]] && yn_prompt="[Y/n]"
+
+    read -p "$prompt $yn_prompt: " response
+    response=${response:-$default}
+
+    [[ "$response" =~ ^[Yy]$ ]]
+}
+
+# 确保 JSON 数据文件存在
+ensure_json_file() {
+    local target_file="$1"
+    local default_payload
+    if [[ -z "$2" ]]; then
+        default_payload="{}"
     else
-        yn_prompt="[y/N]"
+        default_payload="$2"
     fi
 
-    read -p "$(echo -e ${YELLOW}${prompt} ${yn_prompt}:${NC} )" -r
-    REPLY=$(echo "$REPLY" | to_lower)
-
-    if [[ -z "$REPLY" ]]; then
-        REPLY="$default"
-    fi
-
-    [[ "$REPLY" == "y" ]]
-}
-
-# =============================================================================
-# 输入读取
-# =============================================================================
-
-read_input() {
-    local prompt=$1
-    local default=$2
-    local result
-
-    if [[ -n "$default" ]]; then
-        read -p "$(echo -e ${CYAN}${prompt}${NC} [${default}]: )" -r result
-        result=${result:-$default}
-    else
-        read -p "$(echo -e ${CYAN}${prompt}${NC}: )" -r result
-    fi
-
-    echo "$result"
-}
-
-read_password() {
-    local prompt=$1
-    local result
-
-    read -sp "$(echo -e ${CYAN}${prompt}${NC}: )" -r result
-    echo >&2  # 换行
-    echo "$result"
-}
-
-# =============================================================================
-# 进程管理
-# =============================================================================
-
-# 检查进程是否运行
-is_process_running() {
-    local pid=$1
-    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    # 已存在则直接返回
+    if [[ -f "$target_file" ]]; then
         return 0
-    else
+    fi
+
+    local target_dir
+    target_dir="$(dirname "$target_file")"
+
+    # 确保所在目录存在
+    if [[ ! -d "$target_dir" ]]; then
+        if ! mkdir -p "$target_dir" 2>/dev/null; then
+            error_exit "无法创建数据目录: $target_dir"
+        fi
+    fi
+
+    # 写入默认内容
+    if printf '%s\n' "$default_payload" > "$target_file"; then
+        log_debug "已初始化数据文件: $target_file"
+        return 0
+    fi
+
+    error_exit "无法初始化数据文件: $target_file"
+}
+
+# 验证 JSON 文件格式是否正确
+validate_json_file() {
+    local file=$1
+
+    # 文件不存在
+    if [[ ! -f "$file" ]]; then
+        log_error "JSON 文件不存在: $file"
         return 1
     fi
-}
 
-# 等待进程结束
-wait_process() {
-    local pid=$1
-    local timeout=${2:-30}
-    local elapsed=0
+    # 使用 jq 验证 JSON 格式
+    if ! jq empty "$file" >/dev/null 2>&1; then
+        log_error "JSON 文件格式错误: $file"
+        return 1
+    fi
 
-    while is_process_running "$pid"; do
-        if [[ $elapsed -ge $timeout ]]; then
-            return 1
-        fi
-        sleep 1
-        ((elapsed++))
-    done
     return 0
 }
 
-# =============================================================================
-# 系统信息
-# =============================================================================
+# 安全修复损坏的 JSON 文件（备份后重新初始化）
+repair_json_file() {
+    local file=$1
+    local default_content
+    if [[ -z "$2" ]]; then
+        default_content="{}"
+    else
+        default_content="$2"
+    fi
 
+    if [[ ! -f "$file" ]]; then
+        log_warn "文件不存在，将创建新文件: $file"
+        printf '%s\n' "$default_content" > "$file"
+        return 0
+    fi
+
+    # 验证文件是否损坏
+    if jq empty "$file" >/dev/null 2>&1; then
+        log_info "JSON 文件格式正确: $file"
+        return 0
+    fi
+
+    # 备份损坏的文件
+    local backup_file="${file}.broken.$(date +%Y%m%d_%H%M%S)"
+    cp "$file" "$backup_file" 2>/dev/null || true
+    log_warn "JSON 文件已损坏，已备份到: $backup_file"
+
+    # 重新初始化
+    printf '%s\n' "$default_content" > "$file"
+    log_info "已重新初始化 JSON 文件: $file"
+
+    return 0
+}
+
+# 安全更新 JSON 文件（仅在 jq 成功时覆盖原文件）
+update_json_file() {
+    if [[ $# -lt 2 ]]; then
+        log_error "update_json_file 调用参数不足"
+        return 1
+    fi
+
+    local file="${!#}"         # 最后一个参数视为文件路径
+    local args=("${@:1:$#-1}") # 除最后一个参数外的所有 jq 参数
+
+    if [[ ! -f "$file" ]]; then
+        log_error "update_json_file: 目标文件不存在: $file"
+        return 1
+    fi
+
+    # 先验证原始文件格式
+    if ! jq empty "$file" >/dev/null 2>&1; then
+        log_error "JSON 文件格式错误，无法更新: $file"
+        return 1
+    fi
+
+    # 创建临时文件
+    local tmp_file
+    tmp_file=$(mktemp) || {
+        log_error "update_json_file: 无法创建临时文件"
+        return 1
+    }
+
+    if jq "${args[@]}" "$file" > "$tmp_file" 2> "${tmp_file}.err"; then
+        mv "$tmp_file" "$file"
+        rm -f "${tmp_file}.err"
+        return 0
+    fi
+
+    log_error "更新 JSON 文件失败: $file"
+    if [[ -s "${tmp_file}.err" ]]; then
+        while IFS= read -r line; do
+            log_error "jq: $line"
+        done < "${tmp_file}.err"
+    fi
+    rm -f "$tmp_file" "${tmp_file}.err"
+    return 1
+}
+
+# IP 地址验证
+validate_ip() {
+    local ip=$1
+    local ip_regex='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+
+    if [[ ! $ip =~ $ip_regex ]]; then
+        return 1
+    fi
+
+    # 验证每个字段 <= 255
+    local IFS='.'
+    local -a octets=($ip)
+    for octet in "${octets[@]}"; do
+        if [[ $octet -gt 255 ]]; then
+            return 1
+        fi
+    done
+
+    return 0
+}
+
+# 域名验证
+validate_domain() {
+    local domain=$1
+    local domain_regex='^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
+
+    [[ $domain =~ $domain_regex ]]
+}
+
+# 端口验证
+validate_port() {
+    local port=$1
+
+    if [[ ! $port =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+
+    if [[ $port -lt 1 || $port -gt 65535 ]]; then
+        return 1
+    fi
+
+    return 0
+}
+
+# 邮箱验证
+validate_email() {
+    local email=$1
+    local email_regex='^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+
+    [[ $email =~ $email_regex ]]
+}
+
+# UUID 验证
+validate_uuid() {
+    local uuid=$1
+    local uuid_regex='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+
+    [[ $uuid =~ $uuid_regex ]]
+}
+
+# 路径安全验证（防目录遍历）
+validate_path() {
+    local path=$1
+
+    # 不允许 .. 和绝对路径开头的 /
+    if [[ $path =~ \.\. ]] || [[ $path =~ ^/ ]]; then
+        return 1
+    fi
+
+    return 0
+}
+
+# 输入清理（防注入）
+sanitize_input() {
+    local input="$1"
+
+    # 移除危险字符
+    input="${input//;/}"   # 移除分号
+    input="${input//|/}"   # 移除管道
+    input="${input//&/}"   # 移除 &
+    input="${input//\$/}"  # 移除 $
+    input="${input//\`/}"  # 移除反引号
+    input="${input//\(/}"  # 移除 (
+    input="${input//\)/}"  # 移除 )
+    input="${input//\{/}"  # 移除 {
+    input="${input//\}/}"  # 移除 }
+    input="${input//\[/}"  # 移除 [
+    input="${input//\]/}"  # 移除 ]
+    input="${input//</}"   # 移除 <
+    input="${input//>/}"   # 移除 >
+
+    echo "$input"
+}
+
+# 获取公网 IP
+get_public_ip() {
+    local ip=""
+
+    # 尝试多个服务
+    ip=$(curl -s -4 --max-time 5 ifconfig.me 2>/dev/null) || \
+    ip=$(curl -s -4 --max-time 5 icanhazip.com 2>/dev/null) || \
+    ip=$(curl -s -4 --max-time 5 api.ipify.org 2>/dev/null) || \
+    ip=$(curl -s -4 --max-time 5 ipinfo.io/ip 2>/dev/null)
+
+    if [[ -z "$ip" ]]; then
+        log_warn "无法获取公网 IP"
+        return 1
+    fi
+
+    if ! validate_ip "$ip"; then
+        log_warn "获取的公网 IP 格式不正确: $ip"
+        return 1
+    fi
+
+    echo "$ip"
+}
+
+# 检查端口是否被占用
+check_port_in_use() {
+    local port=$1
+
+    if ss -tunlp | grep -q ":$port "; then
+        return 0  # 端口被占用
+    fi
+
+    return 1  # 端口未被占用
+}
+
+# 生成随机字符串
+generate_random_string() {
+    local length=${1:-16}
+    local chars='A-Za-z0-9!@#$%^&*()_+'
+
+    tr -dc "$chars" < /dev/urandom | head -c "$length"
+}
+
+# 生成安全密码
+generate_secure_password() {
+    local length=${1:-16}
+    generate_random_string "$length"
+}
+
+# 检查系统类型
 get_os_type() {
     if [[ -f /etc/os-release ]]; then
-        . /etc/os-release
+        source /etc/os-release
         echo "$ID"
     elif [[ -f /etc/redhat-release ]]; then
-        echo "rhel"
+        echo "centos"
     elif [[ -f /etc/debian_version ]]; then
         echo "debian"
     else
@@ -421,164 +487,98 @@ get_os_type() {
     fi
 }
 
+# 检查系统版本
 get_os_version() {
     if [[ -f /etc/os-release ]]; then
-        . /etc/os-release
+        source /etc/os-release
         echo "$VERSION_ID"
     else
         echo "unknown"
     fi
 }
 
-get_arch() {
-    local arch=$(uname -m)
-    case $arch in
-        x86_64)
-            echo "amd64"
-            ;;
-        aarch64)
-            echo "arm64"
-            ;;
-        armv7l)
-            echo "armv7"
-            ;;
-        *)
-            echo "$arch"
-            ;;
-    esac
-}
+# 进度条显示
+show_progress() {
+    local current=$1
+    local total=$2
+    local width=${3:-50}
 
-# =============================================================================
-# 网络工具
-# =============================================================================
+    local percent=$((current * 100 / total))
+    local filled=$((width * current / total))
+    local empty=$((width - filled))
 
-# 检查端口是否占用
-is_port_in_use() {
-    local port=$1
-    if command -v ss &>/dev/null; then
-        ss -tuln | grep -q ":${port} "
-    elif command -v netstat &>/dev/null; then
-        netstat -tuln | grep -q ":${port} "
-    else
-        return 1
+    printf "\r["
+    printf "%${filled}s" | tr ' ' '='
+    printf "%${empty}s" | tr ' ' ' '
+    printf "] %3d%% (%d/%d)" "$percent" "$current" "$total"
+
+    if [[ $current -eq $total ]]; then
+        echo ""
     fi
 }
 
-# 获取本机公网IP
-get_public_ip() {
-    local ip
+# 等待任务完成（带超时）
+wait_for_condition() {
+    local condition_command="$1"
+    local timeout=${2:-30}
+    local interval=${3:-1}
 
-    # 尝试多个服务
-    for url in "https://api.ipify.org" "https://ifconfig.me" "https://icanhazip.com"; do
-        ip=$(curl -s --max-time 5 "$url" 2>/dev/null)
-        if [[ -n "$ip" ]]; then
-            echo "$ip"
+    local elapsed=0
+
+    while [[ $elapsed -lt $timeout ]]; do
+        if eval "$condition_command"; then
             return 0
         fi
+
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
     done
 
+    log_warn "等待超时: $condition_command"
     return 1
 }
 
-# =============================================================================
-# 时间工具
-# =============================================================================
+# 重试执行（带指数退避）
+retry_with_backoff() {
+    local max_attempts=${1:-3}
+    local initial_delay=${2:-1}
+    shift 2
+    local command="$@"
 
-# 获取 ISO 8601 格式的时间戳
-get_timestamp() {
-    date -u +"%Y-%m-%dT%H:%M:%SZ"
-}
+    local attempt=1
+    local delay=$initial_delay
 
-# 获取 Unix 时间戳
-get_unix_timestamp() {
-    date +%s
-}
+    while [[ $attempt -le $max_attempts ]]; do
+        log_debug "尝试执行 (第 $attempt 次): $command"
 
-# =============================================================================
-# 数组工具
-# =============================================================================
-
-# 检查数组是否包含元素
-array_contains() {
-    local item=$1
-    shift
-    local array=("$@")
-
-    for element in "${array[@]}"; do
-        if [[ "$element" == "$item" ]]; then
+        if eval "$command"; then
             return 0
         fi
+
+        if [[ $attempt -lt $max_attempts ]]; then
+            log_warn "执行失败，${delay}秒后重试..."
+            sleep "$delay"
+            delay=$((delay * 2))
+        fi
+
+        attempt=$((attempt + 1))
     done
+
+    log_error "执行失败，已达到最大重试次数: $max_attempts"
     return 1
 }
 
-# 数组去重
-array_unique() {
-    local -a result=()
-    for item in "$@"; do
-        if ! array_contains "$item" "${result[@]}"; then
-            result+=("$item")
-        fi
-    done
-    echo "${result[@]}"
-}
-
-# =============================================================================
-# 版本比较
-# =============================================================================
-
-version_compare() {
-    local ver1=$1
-    local ver2=$2
-
-    if [[ "$ver1" == "$ver2" ]]; then
-        echo 0
-        return
-    fi
-
-    local IFS=.
-    local i ver1_arr=($ver1) ver2_arr=($ver2)
-
-    for ((i=0; i<${#ver1_arr[@]} || i<${#ver2_arr[@]}; i++)); do
-        local v1=${ver1_arr[i]:-0}
-        local v2=${ver2_arr[i]:-0}
-
-        if ((10#$v1 > 10#$v2)); then
-            echo 1
-            return
-        elif ((10#$v1 < 10#$v2)); then
-            echo -1
-            return
-        fi
-    done
-
-    echo 0
-}
-
-# =============================================================================
+#================================================================
 # 初始化
-# =============================================================================
+#================================================================
 
-# 设置日志级别
-set_log_level() {
-    case $(to_lower "$1") in
-        debug)
-            CURRENT_LOG_LEVEL=${LOG_LEVEL_DEBUG}
-            ;;
-        info)
-            CURRENT_LOG_LEVEL=${LOG_LEVEL_INFO}
-            ;;
-        warn)
-            CURRENT_LOG_LEVEL=${LOG_LEVEL_WARN}
-            ;;
-        error)
-            CURRENT_LOG_LEVEL=${LOG_LEVEL_ERROR}
-            ;;
-        *)
-            log_warn "未知的日志级别: $1，使用默认级别 INFO"
-            ;;
-    esac
-}
+# 初始化日志
+init_log_dir
 
-# 模块加载完成
-log_debug "common.sh 模块已加载"
+# 设置信号处理
+setup_signal_handlers
+
+# 注册清理函数
+trap cleanup EXIT
+
+log_debug "公共库加载完成"

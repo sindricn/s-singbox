@@ -1,393 +1,362 @@
 #!/bin/bash
 
-# =============================================================================
-# config.sh - 配置管理基础模块
-# 提供配置文件路径管理、备份恢复等功能
-# =============================================================================
+#================================================================
+# 配置管理模块
+# 功能：查看配置、编辑配置、备份配置、恢复配置、验证配置
+#================================================================
 
-# 依赖检查
-if [[ -z "${SCRIPT_DIR}" ]]; then
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-fi
+# 查看当前配置
+show_config() {
+    clear
+    echo -e "${CYAN}====== 当前配置 ======${NC}\n"
 
-if ! declare -f print_error &>/dev/null; then
-    source "${SCRIPT_DIR}/modules/common.sh"
-fi
-
-# =============================================================================
-# 配置路径
-# =============================================================================
-
-# sing-box 配置目录
-SINGBOX_CONFIG_DIR="${SINGBOX_CONFIG_DIR:-/usr/local/singbox}"
-SINGBOX_CONFIG_FILE="${SINGBOX_CONFIG_DIR}/config.json"
-
-# 备份目录
-CONFIG_BACKUP_DIR="${SINGBOX_CONFIG_DIR}/backups"
-
-# 最大备份数量
-MAX_CONFIG_BACKUPS=10
-
-# =============================================================================
-# 路径管理
-# =============================================================================
-
-get_config_dir() {
-    echo "$SINGBOX_CONFIG_DIR"
-}
-
-get_config_file() {
-    echo "$SINGBOX_CONFIG_FILE"
-}
-
-get_backup_dir() {
-    echo "$CONFIG_BACKUP_DIR"
-}
-
-ensure_config_dir() {
-    ensure_dir "$SINGBOX_CONFIG_DIR"
-    ensure_dir "$CONFIG_BACKUP_DIR"
-}
-
-# =============================================================================
-# 配置文件检查
-# =============================================================================
-
-config_exists() {
-    [[ -f "$SINGBOX_CONFIG_FILE" ]]
-}
-
-config_is_valid() {
-    if ! config_exists; then
+    if [[ ! -f "$XRAY_CONFIG" ]]; then
+        print_error "配置文件不存在"
         return 1
     fi
 
-    # 验证 JSON 格式
-    if ! jq empty "$SINGBOX_CONFIG_FILE" 2>/dev/null; then
-        return 1
-    fi
-
-    return 0
-}
-
-# =============================================================================
-# 配置备份
-# =============================================================================
-
-backup_config() {
-    local description=${1:-"manual"}
-
-    if ! config_exists; then
-        log_warn "配置文件不存在，无需备份"
-        return 0
-    fi
-
-    ensure_config_dir
-
-    local timestamp=$(date +%Y%m%d_%H%M%S)
-    local backup_file="${CONFIG_BACKUP_DIR}/config.${timestamp}.${description}.bak"
-
-    if cp "$SINGBOX_CONFIG_FILE" "$backup_file"; then
-        log_success "配置已备份: $backup_file"
-
-        # 清理旧备份
-        cleanup_old_config_backups
-
-        echo "$backup_file"
-        return 0
+    # 使用 jq 格式化显示
+    if command -v jq &>/dev/null; then
+        jq . "$XRAY_CONFIG" | less
     else
-        log_error "配置备份失败"
+        less "$XRAY_CONFIG"
+    fi
+}
+
+# 编辑配置文件
+edit_config() {
+    clear
+    echo -e "${CYAN}====== 编辑配置 ======${NC}\n"
+
+    if [[ ! -f "$XRAY_CONFIG" ]]; then
+        print_error "配置文件不存在"
         return 1
     fi
-}
 
-# =============================================================================
-# 清理旧备份
-# =============================================================================
+    print_warning "编辑前将自动备份配置"
 
-cleanup_old_config_backups() {
-    local backups=($(ls -t "${CONFIG_BACKUP_DIR}"/config.*.bak 2>/dev/null))
+    # 备份
+    backup_config
 
-    if [[ ${#backups[@]} -gt $MAX_CONFIG_BACKUPS ]]; then
-        local to_delete=("${backups[@]:$MAX_CONFIG_BACKUPS}")
-
-        for file in "${to_delete[@]}"; do
-            rm -f "$file"
-            log_debug "删除旧备份: $file"
-        done
+    # 选择编辑器
+    local editor=""
+    if command -v vim &>/dev/null; then
+        editor="vim"
+    elif command -v vi &>/dev/null; then
+        editor="vi"
+    elif command -v nano &>/dev/null; then
+        editor="nano"
+    else
+        print_error "未找到可用的编辑器"
+        return 1
     fi
-}
 
-# =============================================================================
-# 配置恢复
-# =============================================================================
+    print_info "使用 $editor 编辑配置"
+    "$editor" "$XRAY_CONFIG"
 
-restore_config() {
-    local backup_file=$1
-
-    if [[ -z "$backup_file" ]]; then
-        # 如果没有指定备份文件，使用最新的
-        backup_file=$(ls -t "${CONFIG_BACKUP_DIR}"/config.*.bak 2>/dev/null | head -1)
-
-        if [[ -z "$backup_file" ]]; then
-            log_error "没有可用的备份文件"
-            return 1
+    # 验证配置
+    if validate_config; then
+        read -p "配置验证通过，是否重启服务使配置生效? [Y/n]: " restart_confirm
+        if [[ "$restart_confirm" != "n" && "$restart_confirm" != "N" ]]; then
+            restart_xray
         fi
-
-        log_info "使用最新备份: $backup_file"
+    else
+        print_error "配置验证失败，请修正错误"
+        read -p "是否恢复备份? [y/N]: " restore_confirm
+        if [[ "$restore_confirm" == "y" || "$restore_confirm" == "Y" ]]; then
+            restore_config
+        fi
     fi
+}
 
-    if [[ ! -f "$backup_file" ]]; then
-        log_error "备份文件不存在: $backup_file"
+# 备份配置
+backup_config() {
+    local backup_dir="${DATA_DIR}/backups"
+    mkdir -p "$backup_dir"
+
+    local backup_file="${backup_dir}/config_$(date +%Y%m%d_%H%M%S).json"
+
+    if [[ -f "$XRAY_CONFIG" ]]; then
+        cp "$XRAY_CONFIG" "$backup_file"
+        print_success "配置已备份到: $backup_file"
+
+        # 保留最近10个备份
+        local backup_count=$(ls -1 "$backup_dir"/config_*.json 2>/dev/null | wc -l)
+        if [[ $backup_count -gt 10 ]]; then
+            ls -t "$backup_dir"/config_*.json | tail -n +11 | xargs rm -f
+            print_info "已清理旧备份文件"
+        fi
+    else
+        print_error "配置文件不存在，无法备份"
         return 1
     fi
+}
+
+# 恢复配置
+restore_config() {
+    clear
+    echo -e "${CYAN}====== 恢复配置 ======${NC}\n"
+
+    local backup_dir="${DATA_DIR}/backups"
+
+    if [[ ! -d "$backup_dir" ]]; then
+        print_error "备份目录不存在"
+        return 1
+    fi
+
+    # 列出备份文件
+    local backups=$(ls -t "$backup_dir"/config_*.json 2>/dev/null)
+
+    if [[ -z "$backups" ]]; then
+        print_error "没有可用的备份"
+        return 1
+    fi
+
+    echo -e "${CYAN}可用的备份：${NC}"
+    local index=1
+    declare -A backup_map
+
+    while IFS= read -r backup; do
+        local filename=$(basename "$backup")
+        local timestamp=$(stat -c %y "$backup" 2>/dev/null | cut -d'.' -f1)
+        echo "$index. $filename ($timestamp)"
+        backup_map[$index]="$backup"
+        ((index++))
+    done <<< "$backups"
+
+    echo ""
+    read -p "请选择要恢复的备份 [1-$((index-1))]: " choice
+
+    if [[ -z "${backup_map[$choice]}" ]]; then
+        print_error "无效选择"
+        return 1
+    fi
+
+    local selected_backup="${backup_map[$choice]}"
 
     # 验证备份文件
-    if ! jq empty "$backup_file" 2>/dev/null; then
-        log_error "备份文件格式无效"
-        return 1
-    fi
-
-    # 备份当前配置（如果存在）
-    if config_exists; then
-        local current_backup="${CONFIG_BACKUP_DIR}/config.before_restore.$(date +%Y%m%d_%H%M%S).bak"
-        cp "$SINGBOX_CONFIG_FILE" "$current_backup"
-        log_info "当前配置已保存: $current_backup"
-    fi
-
-    # 恢复配置
-    if cp "$backup_file" "$SINGBOX_CONFIG_FILE"; then
-        log_success "配置已恢复: $backup_file"
-        return 0
-    else
-        log_error "配置恢复失败"
-        return 1
-    fi
-}
-
-# =============================================================================
-# 列出备份
-# =============================================================================
-
-list_config_backups() {
-    local backups=($(ls -t "${CONFIG_BACKUP_DIR}"/config.*.bak 2>/dev/null))
-
-    if [[ ${#backups[@]} -eq 0 ]]; then
-        print_info "没有可用的备份"
-        return 0
-    fi
-
-    print_header "配置备份列表"
-
-    local index=1
-    for backup in "${backups[@]}"; do
-        local filename=$(basename "$backup")
-        local size=$(du -h "$backup" | cut -f1)
-        local date=$(stat -c %y "$backup" 2>/dev/null || stat -f "%Sm" "$backup")
-
-        echo -e "${CYAN}[$index]${NC} $filename"
-        echo -e "    大小: $size"
-        echo -e "    时间: $date"
-        echo ""
-
-        ((index++))
-    done
-}
-
-# =============================================================================
-# 配置导出
-# =============================================================================
-
-export_config() {
-    local export_path=$1
-
-    if [[ -z "$export_path" ]]; then
-        export_path="${HOME}/singbox-config-$(date +%Y%m%d_%H%M%S).json"
-    fi
-
-    if ! config_exists; then
-        log_error "配置文件不存在"
-        return 1
-    fi
-
-    if cp "$SINGBOX_CONFIG_FILE" "$export_path"; then
-        log_success "配置已导出: $export_path"
-        echo "$export_path"
-        return 0
-    else
-        log_error "配置导出失败"
-        return 1
-    fi
-}
-
-# =============================================================================
-# 配置导入
-# =============================================================================
-
-import_config() {
-    local import_path=$1
-
-    if [[ ! -f "$import_path" ]]; then
-        log_error "导入文件不存在: $import_path"
-        return 1
-    fi
-
-    # 验证导入文件
-    if ! jq empty "$import_path" 2>/dev/null; then
-        log_error "导入文件格式无效"
+    if ! jq empty "$selected_backup" 2>/dev/null; then
+        print_error "备份文件损坏"
         return 1
     fi
 
     # 备份当前配置
-    if config_exists; then
-        backup_config "before_import"
+    if [[ -f "$XRAY_CONFIG" ]]; then
+        cp "$XRAY_CONFIG" "${XRAY_CONFIG}.before_restore"
     fi
 
-    # 导入配置
-    ensure_config_dir
+    # 恢复配置
+    cp "$selected_backup" "$XRAY_CONFIG"
+    print_success "配置已恢复"
 
-    if cp "$import_path" "$SINGBOX_CONFIG_FILE"; then
-        log_success "配置已导入: $import_path"
-        return 0
+    # 验证并重启
+    if validate_config; then
+        read -p "配置验证通过，是否重启服务? [Y/n]: " restart_confirm
+        if [[ "$restart_confirm" != "n" && "$restart_confirm" != "N" ]]; then
+            restart_xray
+        fi
     else
-        log_error "配置导入失败"
-        return 1
+        print_error "恢复的配置无效，请检查"
+        cp "${XRAY_CONFIG}.before_restore" "$XRAY_CONFIG"
+        print_info "已回滚到恢复前的配置"
     fi
 }
 
-# =============================================================================
-# 配置验证
-# =============================================================================
-
+# 验证配置
 validate_config() {
-    if ! config_exists; then
-        log_error "配置文件不存在"
+    if [[ ! -f "$XRAY_CONFIG" ]]; then
+        print_error "配置文件不存在"
         return 1
     fi
 
-    # JSON 格式验证
-    if ! jq empty "$SINGBOX_CONFIG_FILE" 2>/dev/null; then
-        log_error "配置文件 JSON 格式无效"
+    print_info "正在验证配置..."
+
+    # JSON 语法验证
+    if ! jq empty "$XRAY_CONFIG" 2>/dev/null; then
+        print_error "JSON 格式错误"
         return 1
     fi
 
-    # sing-box 配置验证
-    if command -v sing-box &>/dev/null; then
-        if sing-box check -c "$SINGBOX_CONFIG_FILE" 2>/dev/null; then
-            log_success "配置文件验证通过"
+    # 使用 xray 内置验证
+    if [[ -f "$XRAY_BIN" ]]; then
+        if "$XRAY_BIN" test -config "$XRAY_CONFIG" >/dev/null 2>&1; then
+            print_success "配置验证通过"
             return 0
         else
-            log_error "sing-box 配置验证失败"
+            print_error "配置验证失败"
+            "$XRAY_BIN" test -config "$XRAY_CONFIG"
             return 1
         fi
     else
-        log_warn "sing-box 未安装，跳过配置验证"
+        print_warning "Xray 未安装，跳过内置验证"
         return 0
     fi
 }
 
-# =============================================================================
-# 配置信息
-# =============================================================================
+# 导出配置
+export_config() {
+    clear
+    echo -e "${CYAN}====== 导出配置 ======${NC}\n"
 
-show_config_info() {
-    print_header "配置信息"
+    local export_dir="${DATA_DIR}/exports"
+    mkdir -p "$export_dir"
 
-    # 配置文件路径
-    echo -e "${CYAN}配置文件:${NC} $SINGBOX_CONFIG_FILE"
+    local export_file="${export_dir}/xray_config_$(date +%Y%m%d_%H%M%S).tar.gz"
 
-    # 配置文件大小
-    if config_exists; then
-        local size=$(du -h "$SINGBOX_CONFIG_FILE" | cut -f1)
-        echo -e "${CYAN}文件大小:${NC} $size"
+    print_info "正在导出配置..."
 
-        # 最后修改时间
-        local mtime=$(stat -c %y "$SINGBOX_CONFIG_FILE" 2>/dev/null || stat -f "%Sm" "$SINGBOX_CONFIG_FILE")
-        echo -e "${CYAN}修改时间:${NC} $mtime"
+    # 创建临时目录
+    local temp_dir=$(mktemp -d)
 
-        # 配置验证
-        echo -e -n "${CYAN}配置状态:${NC} "
-        if config_is_valid; then
-            echo -e "${GREEN}有效${NC}"
-        else
-            echo -e "${RED}无效${NC}"
-        fi
+    # 复制配置文件
+    cp "$XRAY_CONFIG" "${temp_dir}/"
+    cp "$USERS_FILE" "${temp_dir}/" 2>/dev/null
+    cp "$NODES_FILE" "${temp_dir}/" 2>/dev/null
+
+    # 打包
+    tar -czf "$export_file" -C "$temp_dir" . 2>/dev/null
+
+    rm -rf "$temp_dir"
+
+    if [[ -f "$export_file" ]]; then
+        print_success "配置已导出到: $export_file"
     else
-        echo -e "${CYAN}状态:${NC} ${YELLOW}不存在${NC}"
+        print_error "导出失败"
+        return 1
+    fi
+}
+
+# 导入配置
+import_config() {
+    clear
+    echo -e "${CYAN}====== 导入配置 ======${NC}\n"
+
+    read -p "请输入配置文件路径: " import_file
+
+    if [[ ! -f "$import_file" ]]; then
+        print_error "文件不存在"
+        return 1
     fi
 
-    # 备份信息
-    local backups=($(ls -t "${CONFIG_BACKUP_DIR}"/config.*.bak 2>/dev/null))
-    echo -e "${CYAN}备份数量:${NC} ${#backups[@]}"
+    print_warning "导入前将备份当前配置"
+    backup_config
 
-    if [[ ${#backups[@]} -gt 0 ]]; then
-        local latest_backup=$(basename "${backups[0]}")
-        echo -e "${CYAN}最新备份:${NC} $latest_backup"
+    # 检查文件类型
+    if [[ "$import_file" == *.tar.gz ]]; then
+        # 解压导入
+        local temp_dir=$(mktemp -d)
+        tar -xzf "$import_file" -C "$temp_dir" 2>/dev/null
+
+        if [[ -f "${temp_dir}/config.json" ]]; then
+            cp "${temp_dir}/config.json" "$XRAY_CONFIG"
+        fi
+
+        if [[ -f "${temp_dir}/users.json" ]]; then
+            cp "${temp_dir}/users.json" "$USERS_FILE"
+        fi
+
+        if [[ -f "${temp_dir}/nodes.json" ]]; then
+            cp "${temp_dir}/nodes.json" "$NODES_FILE"
+        fi
+
+        rm -rf "$temp_dir"
+
+    elif [[ "$import_file" == *.json ]]; then
+        # JSON 配置文件
+        if jq empty "$import_file" 2>/dev/null; then
+            cp "$import_file" "$XRAY_CONFIG"
+        else
+            print_error "无效的 JSON 文件"
+            return 1
+        fi
+    else
+        print_error "不支持的文件格式"
+        return 1
+    fi
+
+    # 验证并重启
+    if validate_config; then
+        print_success "配置导入成功"
+        read -p "是否重启服务? [Y/n]: " restart_confirm
+        if [[ "$restart_confirm" != "n" && "$restart_confirm" != "N" ]]; then
+            restart_xray
+        fi
+    else
+        print_error "导入的配置无效"
+        restore_config
+    fi
+}
+
+# 重置配置
+reset_config() {
+    clear
+    echo -e "${CYAN}====== 重置配置 ======${NC}\n"
+
+    print_warning "此操作将删除所有节点和用户配置！"
+    read -p "确认重置配置? [y/N]: " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        print_info "取消重置"
+        return 0
+    fi
+
+    # 二次确认
+    read -p "再次确认重置配置? 输入 YES 继续: " confirm2
+    if [[ "$confirm2" != "YES" ]]; then
+        print_info "取消重置"
+        return 0
+    fi
+
+    # 备份当前配置
+    backup_config
+
+    # 创建默认配置
+    create_default_config
+
+    # 重置数据文件
+    echo '{"users":[]}' > "$USERS_FILE"
+    echo '{"nodes":[]}' > "$NODES_FILE"
+
+    restart_xray
+
+    print_success "配置已重置为默认值"
+}
+
+# 配置优化建议
+config_suggestions() {
+    clear
+    echo -e "${CYAN}====== 配置优化建议 ======${NC}\n"
+
+    if [[ ! -f "$XRAY_CONFIG" ]]; then
+        print_error "配置文件不存在"
+        return 1
+    fi
+
+    echo -e "${CYAN}正在分析配置...${NC}\n"
+
+    # 检查日志配置
+    local log_level=$(jq -r '.log.loglevel // "none"' "$XRAY_CONFIG")
+    if [[ "$log_level" == "debug" ]]; then
+        echo -e "${YELLOW}建议：${NC}日志级别为 debug，生产环境建议使用 warning"
+    fi
+
+    # 检查 stats 配置
+    local has_stats=$(jq -r '.stats // {} | length' "$XRAY_CONFIG")
+    if [[ "$has_stats" -eq 0 ]]; then
+        echo -e "${YELLOW}建议：${NC}未启用流量统计，无法查看流量信息"
+    fi
+
+    # 检查 sniffing 配置
+    local inbounds=$(jq -r '.inbounds[] | select(.sniffing.enabled != true) | .port' "$XRAY_CONFIG" 2>/dev/null)
+    if [[ -n "$inbounds" ]]; then
+        echo -e "${YELLOW}建议：${NC}以下端口未启用流量嗅探：$inbounds"
+    fi
+
+    # 检查 routing 规则
+    local routing_rules=$(jq -r '.routing.rules // [] | length' "$XRAY_CONFIG")
+    if [[ "$routing_rules" -lt 2 ]]; then
+        echo -e "${YELLOW}建议：${NC}路由规则较少，可能需要添加更多分流规则"
     fi
 
     echo ""
+    print_info "优化建议分析完成"
 }
-
-# =============================================================================
-# 配置重置
-# =============================================================================
-
-reset_config() {
-    if ! confirm "确认重置配置文件（将删除现有配置）"; then
-        log_info "取消重置"
-        return 0
-    fi
-
-    # 备份现有配置
-    if config_exists; then
-        backup_config "before_reset"
-    fi
-
-    # 删除配置文件
-    if [[ -f "$SINGBOX_CONFIG_FILE" ]]; then
-        rm -f "$SINGBOX_CONFIG_FILE"
-        log_info "配置文件已删除"
-    fi
-
-    log_success "配置已重置"
-}
-
-# =============================================================================
-# 配置差异比较
-# =============================================================================
-
-diff_config() {
-    local file1=$1
-    local file2=${2:-$SINGBOX_CONFIG_FILE}
-
-    if [[ ! -f "$file1" ]]; then
-        log_error "文件不存在: $file1"
-        return 1
-    fi
-
-    if [[ ! -f "$file2" ]]; then
-        log_error "文件不存在: $file2"
-        return 1
-    fi
-
-    # 使用 diff 或 jq 比较
-    if command -v diff &>/dev/null; then
-        diff -u "$file1" "$file2"
-    else
-        log_warn "diff 命令不可用，使用简单比较"
-        if cmp -s "$file1" "$file2"; then
-            echo "文件相同"
-        else
-            echo "文件不同"
-        fi
-    fi
-}
-
-# =============================================================================
-# 模块初始化
-# =============================================================================
-
-# 确保配置目录存在
-ensure_config_dir
-
-log_debug "config.sh 模块已加载"

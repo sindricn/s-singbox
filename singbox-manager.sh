@@ -568,23 +568,39 @@ menu_node_add() {
         echo -e "${CYAN}║          添加节点                    ║${NC}"
         echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
         echo ""
-        echo -e "${GREEN}1.${NC} VLESS 节点（支持 Reality/TLS/TCP）"
-        echo -e "${GREEN}2.${NC} VMess 节点"
-        echo -e "${GREEN}3.${NC} Trojan 节点"
-        echo -e "${GREEN}4.${NC} Shadowsocks 节点"
-        echo -e "${GREEN}5.${NC} HTTP 入站节点"
-        echo -e "${GREEN}6.${NC} SOCKS 入站节点"
-        echo -e "${GREEN}0.${NC} 返回上级菜单"
+        echo -e "${YELLOW}━━━━━━━ 主流代理协议 ━━━━━━━${NC}"
+        echo -e "${GREEN}1.${NC}  VLESS    - 通用代理（支持 XTLS）"
+        echo -e "${GREEN}2.${NC}  VMess    - V2Ray 经典协议"
+        echo -e "${GREEN}3.${NC}  Trojan   - TLS 伪装代理"
+        echo -e "${GREEN}4.${NC}  Shadowsocks - 轻量级代理"
         echo ""
-        read -p "请选择协议 [0-6]: " choice
+        echo -e "${YELLOW}━━━━━━━ 高性能协议 ━━━━━━━${NC}"
+        echo -e "${GREEN}5.${NC}  Hysteria2 - 基于 QUIC 高性能（推荐）"
+        echo -e "${GREEN}6.${NC}  TUIC      - QUIC 协议代理"
+        echo ""
+        echo -e "${YELLOW}━━━━━━━ 抗审查/本地代理 ━━━━━━━${NC}"
+        echo -e "${GREEN}7.${NC}  Naive     - 强抗审查代理"
+        echo -e "${GREEN}8.${NC}  Mixed     - HTTP + SOCKS5 混合"
+        echo -e "${GREEN}9.${NC}  HTTP      - HTTP 代理"
+        echo -e "${GREEN}10.${NC} SOCKS     - SOCKS5 代理"
+        echo -e "${GREEN}11.${NC} AnyTLS    - 流量填充混淆（sing-box 1.12.0+）"
+        echo ""
+        echo -e "${GREEN}0.${NC}  返回上级菜单"
+        echo ""
+        read -p "请选择协议 [0-11]: " choice
 
         case $choice in
             1) add_vless_node ;;
             2) add_vmess_node ;;
             3) add_trojan_node ;;
             4) add_shadowsocks_node ;;
-            5) add_http_inbound_node ;;
-            6) add_socks_inbound_node ;;
+            5) add_hysteria2_node ;;
+            6) add_tuic_node ;;
+            7) add_naive_node ;;
+            8) add_mixed_node ;;
+            9) add_http_inbound_node ;;
+            10) add_socks_inbound_node ;;
+            11) add_anytls_node ;;
             0) break ;;
             *) print_error "无效选择" ;;
         esac

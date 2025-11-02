@@ -32,7 +32,9 @@
       "Bash(do)",
       "Bash(if [ -f \"$file\" ])",
       "Bash(then)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(cat:*)",
+      "Bash(node.sh:*)"
     ],
     "deny": [],
     "ask": []

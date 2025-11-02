@@ -453,7 +453,7 @@ quick_add_vless_reality() {
     IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
 
     # 重新生成sing-box配置文件
-    generate_sing-box_config
+    generate_singbox_config
 
     # 重启服务
     restart_sing-box
@@ -601,7 +601,7 @@ add_vless_node() {
     IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
 
     # 重新生成完整配置
-    generate_sing-box_config
+    generate_singbox_config
     restart_sing-box
 
     print_success "VLESS 节点创建成功！"
@@ -698,7 +698,7 @@ add_vmess_node() {
     IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
 
     # 重新生成完整配置
-    generate_sing-box_config
+    generate_singbox_config
     restart_sing-box
 
     print_success "VMess 节点创建成功！"
@@ -789,7 +789,7 @@ add_trojan_node() {
     IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
 
     # 重新生成完整配置
-    generate_sing-box_config
+    generate_singbox_config
     restart_sing-box
 
     print_success "Trojan 节点创建成功！"
@@ -861,7 +861,7 @@ add_shadowsocks_node() {
     IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
 
     # 重新生成完整配置
-    generate_sing-box_config
+    generate_singbox_config
     restart_sing-box
 
     print_success "Shadowsocks 节点创建成功！"
@@ -1182,7 +1182,7 @@ modify_node_config() {
 
                 # 更新配置文件
                 remove_inbound_from_config "$port"
-                generate_sing-box_config
+                generate_singbox_config
                 restart_sing-box
 
                 print_success "端口已修改为 $new_port"
@@ -1218,7 +1218,7 @@ modify_node_config() {
                                 return 1
                             fi
                         fi
-                        generate_sing-box_config
+                        generate_singbox_config
                         restart_sing-box
                         print_success "用户已绑定"
                     fi
@@ -1248,7 +1248,7 @@ modify_node_config() {
                             print_error "解绑用户失败"
                             return 1
                         fi
-                        generate_sing-box_config
+                        generate_singbox_config
                         restart_sing-box
                         print_success "用户已解绑"
                     fi
@@ -1616,7 +1616,7 @@ add_http_inbound_node() {
     fi
 
     # 生成配置并重启
-    generate_sing-box_config
+    generate_singbox_config
     restart_sing-box
 
     print_success "HTTP 入站节点添加成功！"
@@ -1676,7 +1676,7 @@ add_socks_inbound_node() {
     fi
 
     # 生成配置并重启
-    generate_sing-box_config
+    generate_singbox_config
     restart_sing-box
 
     print_success "SOCKS 入站节点添加成功！"
@@ -1689,4 +1689,504 @@ add_socks_inbound_node() {
     echo ""
     print_info "提示：可在【用户管理】中添加更多用户到此节点"
     echo ""
+}
+
+# ============================================================================
+# Hysteria2 节点管理
+# ============================================================================
+
+# 添加 Hysteria2 节点
+add_hysteria2_node() {
+    clear
+    echo -e "${CYAN}====== 添加 Hysteria2 节点 ======${NC}"
+    echo ""
+
+    echo -e "${YELLOW}Hysteria2 说明：${NC}"
+    echo -e "  • 基于 QUIC 的高性能代理协议"
+    echo -e "  • 适合高延迟、高丢包环境"
+    echo -e "  • 必须启用 TLS"
+    echo -e "  • 支持混淆和速率限制"
+    echo ""
+
+    # 输入端口
+    read -p "请输入端口 [默认: 443]: " port
+    port=${port:-443}
+
+    # 检查端口是否已被占用
+    if check_port_exists "$port"; then
+        print_error "端口 $port 已被占用或已存在，请使用其他端口"
+        return 1
+    fi
+
+    # TLS 配置（必须）
+    echo -e "\n${CYAN}TLS 配置（Hysteria2 必须启用 TLS）：${NC}"
+    read -p "请输入域名: " tls_domain
+    if [[ -z "$tls_domain" ]]; then
+        print_error "Hysteria2 必须配置域名"
+        return 1
+    fi
+
+    read -p "请输入证书路径 [留空使用自签名]: " tls_cert
+    local tls_key=""
+
+    if [[ -n "$tls_cert" ]]; then
+        read -p "请输入密钥路径: " tls_key
+        if [[ ! -f "$tls_cert" ]] || [[ ! -f "$tls_key" ]]; then
+            print_error "证书或密钥文件不存在"
+            return 1
+        fi
+    else
+        print_info "使用自签名证书"
+        if declare -f generate_self_signed_cert &>/dev/null; then
+            generate_self_signed_cert "$tls_domain"
+        fi
+        tls_cert="${SINGBOX_DIR}/certs/${tls_domain}.crt"
+        tls_key="${SINGBOX_DIR}/certs/${tls_domain}.key"
+    fi
+
+    # 速率限制
+    echo -e "\n${CYAN}速率限制配置：${NC}"
+    read -p "上行速率 (Mbps) [默认: 100]: " up_mbps
+    up_mbps=${up_mbps:-100}
+    read -p "下行速率 (Mbps) [默认: 100]: " down_mbps
+    down_mbps=${down_mbps:-100}
+
+    # 混淆配置
+    echo -e "\n${CYAN}混淆配置：${NC}"
+    read -p "是否启用 Salamander 混淆? [y/N]: " enable_obfs
+    local obfs_password=""
+    if [[ "$enable_obfs" == "y" || "$enable_obfs" == "Y" ]]; then
+        obfs_password=$(openssl rand -base64 16)
+        print_info "混淆密码: $obfs_password"
+    fi
+
+    # 构建 extra_config
+    local extra_config=$(jq -n \
+        --arg tls_domain "$tls_domain" \
+        --arg tls_cert "$tls_cert" \
+        --arg tls_key "$tls_key" \
+        --argjson up_mbps "$up_mbps" \
+        --argjson down_mbps "$down_mbps" \
+        --arg obfs_password "$obfs_password" \
+        '{
+            tls_domain: $tls_domain,
+            tls_cert: $tls_cert,
+            tls_key: $tls_key,
+            up_mbps: $up_mbps,
+            down_mbps: $down_mbps,
+            obfs_password: $obfs_password
+        }')
+
+    # 保存节点信息
+    save_node_info "hysteria2" "$port" "udp" "tls" "$extra_config" "hy2-$port"
+
+    # 绑定admin用户
+    local admin_info=$(bind_admin_to_node "$port" "hysteria2")
+    if [[ $? -ne 0 ]]; then
+        print_error "绑定默认用户失败"
+        return 1
+    fi
+
+    # 生成配置并重启
+    generate_singbox_config
+    restart_sing-box
+
+    print_success "Hysteria2 节点添加成功！"
+    echo -e "${CYAN}节点信息：${NC}"
+    echo "  端口: $port"
+    echo "  域名: $tls_domain"
+    echo "  上行: ${up_mbps} Mbps"
+    echo "  下行: ${down_mbps} Mbps"
+    [[ -n "$obfs_password" ]] && echo "  混淆: Salamander"
+    echo ""
+}
+
+# ============================================================================
+# TUIC 节点管理
+# ============================================================================
+
+# 添加 TUIC 节点
+add_tuic_node() {
+    clear
+    echo -e "${CYAN}====== 添加 TUIC 节点 ======${NC}"
+    echo ""
+
+    echo -e "${YELLOW}TUIC 说明：${NC}"
+    echo -e "  • 基于 QUIC 的代理协议"
+    echo -e "  • 支持 UDP 和 TCP"
+    echo -e "  • 必须启用 TLS"
+    echo -e "  • 支持 0-RTT 握手（不推荐）"
+    echo ""
+
+    # 输入端口
+    read -p "请输入端口 [默认: 443]: " port
+    port=${port:-443}
+
+    # 检查端口
+    if check_port_exists "$port"; then
+        print_error "端口 $port 已被占用"
+        return 1
+    fi
+
+    # TLS 配置（必须）
+    echo -e "\n${CYAN}TLS 配置（TUIC 必须启用 TLS）：${NC}"
+    read -p "请输入域名: " tls_domain
+    if [[ -z "$tls_domain" ]]; then
+        print_error "TUIC 必须配置域名"
+        return 1
+    fi
+
+    read -p "请输入证书路径 [留空使用自签名]: " tls_cert
+    local tls_key=""
+
+    if [[ -n "$tls_cert" ]]; then
+        read -p "请输入密钥路径: " tls_key
+    else
+        print_info "使用自签名证书"
+        if declare -f generate_self_signed_cert &>/dev/null; then
+            generate_self_signed_cert "$tls_domain"
+        fi
+        tls_cert="${SINGBOX_DIR}/certs/${tls_domain}.crt"
+        tls_key="${SINGBOX_DIR}/certs/${tls_domain}.key"
+    fi
+
+    # 拥塞控制
+    echo -e "\n${CYAN}拥塞控制算法：${NC}"
+    echo "1. cubic (默认)"
+    echo "2. new_reno"
+    echo "3. bbr"
+    read -p "请选择 [1-3]: " cc_choice
+
+    case $cc_choice in
+        1) congestion_control="cubic" ;;
+        2) congestion_control="new_reno" ;;
+        3) congestion_control="bbr" ;;
+        *) congestion_control="cubic" ;;
+    esac
+
+    # 0-RTT 握手
+    echo -e "\n${YELLOW}注意: 0-RTT 握手可能不安全，容易受到重放攻击${NC}"
+    read -p "是否启用 0-RTT 握手? [y/N]: " enable_zero_rtt
+    local zero_rtt="false"
+    if [[ "$enable_zero_rtt" == "y" || "$enable_zero_rtt" == "Y" ]]; then
+        zero_rtt="true"
+    fi
+
+    # 构建 extra_config
+    local extra_config=$(jq -n \
+        --arg tls_domain "$tls_domain" \
+        --arg tls_cert "$tls_cert" \
+        --arg tls_key "$tls_key" \
+        --arg congestion_control "$congestion_control" \
+        --arg zero_rtt "$zero_rtt" \
+        '{
+            tls_domain: $tls_domain,
+            tls_cert: $tls_cert,
+            tls_key: $tls_key,
+            congestion_control: $congestion_control,
+            zero_rtt_handshake: ($zero_rtt == "true"),
+            auth_timeout: "3s",
+            heartbeat: "10s"
+        }')
+
+    # 保存节点
+    save_node_info "tuic" "$port" "udp" "tls" "$extra_config" "tuic-$port"
+
+    # 绑定admin用户
+    local admin_info=$(bind_admin_to_node "$port" "tuic")
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+
+    # 生成配置
+    generate_singbox_config
+    restart_sing-box
+
+    print_success "TUIC 节点添加成功！"
+    echo -e "${CYAN}节点信息：${NC}"
+    echo "  端口: $port"
+    echo "  域名: $tls_domain"
+    echo "  拥塞控制: $congestion_control"
+    echo "  0-RTT: $zero_rtt"
+    echo ""
+}
+
+# ============================================================================
+# Naive 节点管理
+# ============================================================================
+
+# 添加 Naive 节点
+add_naive_node() {
+    clear
+    echo -e "${CYAN}====== 添加 Naive 节点 ======${NC}"
+    echo ""
+
+    echo -e "${YELLOW}Naive 说明：${NC}"
+    echo -e "  • 强抗审查代理协议"
+    echo -e "  • 伪装成普通 HTTPS 流量"
+    echo -e "  • 必须启用 TLS"
+    echo -e "  • 不支持 UDP"
+    echo ""
+
+    # 输入端口
+    read -p "请输入端口 [默认: 443]: " port
+    port=${port:-443}
+
+    # 检查端口
+    if check_port_exists "$port"; then
+        print_error "端口 $port 已被占用"
+        return 1
+    fi
+
+    # TLS 配置（必须）
+    echo -e "\n${CYAN}TLS 配置（Naive 必须启用 TLS）：${NC}"
+    read -p "请输入域名: " tls_domain
+    if [[ -z "$tls_domain" ]]; then
+        print_error "Naive 必须配置域名"
+        return 1
+    fi
+
+    read -p "请输入证书路径 [留空使用自签名]: " tls_cert
+    local tls_key=""
+
+    if [[ -n "$tls_cert" ]]; then
+        read -p "请输入密钥路径: " tls_key
+    else
+        print_info "使用自签名证书"
+        if declare -f generate_self_signed_cert &>/dev/null; then
+            generate_self_signed_cert "$tls_domain"
+        fi
+        tls_cert="${SINGBOX_DIR}/certs/${tls_domain}.crt"
+        tls_key="${SINGBOX_DIR}/certs/${tls_domain}.key"
+    fi
+
+    # 构建 extra_config
+    local extra_config=$(jq -n \
+        --arg tls_domain "$tls_domain" \
+        --arg tls_cert "$tls_cert" \
+        --arg tls_key "$tls_key" \
+        '{
+            tls_domain: $tls_domain,
+            tls_cert: $tls_cert,
+            tls_key: $tls_key
+        }')
+
+    # 保存节点
+    save_node_info "naive" "$port" "tcp" "tls" "$extra_config" "naive-$port"
+
+    # 绑定admin用户
+    bind_admin_to_node "$port" "naive"
+
+    # 生成配置
+    generate_singbox_config
+    restart_sing-box
+
+    print_success "Naive 节点添加成功！"
+    echo -e "${CYAN}节点信息：${NC}"
+    echo "  端口: $port"
+    echo "  域名: $tls_domain"
+    echo ""
+}
+
+# ============================================================================
+# Mixed 代理节点管理
+# ============================================================================
+
+# 添加 Mixed 代理节点
+add_mixed_node() {
+    clear
+    echo -e "${CYAN}====== 添加 Mixed 代理节点 ======${NC}"
+    echo ""
+
+    echo -e "${YELLOW}Mixed 代理说明：${NC}"
+    echo -e "  • 同时支持 HTTP 和 SOCKS5"
+    echo -e "  • 一个端口同时提供两种协议"
+    echo -e "  • 支持用户认证"
+    echo -e "  • 适合本地客户端使用"
+    echo ""
+
+    # 输入端口
+    read -p "请输入端口 [默认: 7890]: " port
+    port=${port:-7890}
+
+    # 检查端口
+    if check_port_exists "$port"; then
+        print_error "端口 $port 已被占用"
+        return 1
+    fi
+
+    # 是否启用UDP
+    read -p "是否启用 UDP 支持? [Y/n]: " enable_udp
+    local udp_enabled="true"
+    if [[ "$enable_udp" == "n" || "$enable_udp" == "N" ]]; then
+        udp_enabled="false"
+    fi
+
+    # 构建 extra_config
+    local extra_config=$(jq -n \
+        --arg udp "$udp_enabled" \
+        '{udp: ($udp == "true")}')
+
+    # 保存节点
+    save_node_info "mixed" "$port" "tcp" "none" "$extra_config" "mixed-$port"
+
+    # 绑定admin用户
+    bind_admin_to_node "$port" "mixed"
+
+    # 生成配置
+    generate_singbox_config
+    restart_sing-box
+
+    print_success "Mixed 代理节点添加成功！"
+    echo -e "${CYAN}节点信息：${NC}"
+    echo "  端口: $port"
+    echo "  协议: HTTP + SOCKS5"
+    echo "  UDP: $udp_enabled"
+    echo ""
+}
+
+# ============================================================================
+# AnyTLS 节点管理
+# ============================================================================
+
+# 添加 AnyTLS 节点
+add_anytls_node() {
+    clear
+    echo -e "${CYAN}====== 添加 AnyTLS 节点 ======${NC}"
+    echo ""
+
+    echo -e "${YELLOW}AnyTLS 说明：${NC}"
+    echo -e "  • sing-box 1.12.0+ 新协议"
+    echo -e "  • 支持流量填充混淆"
+    echo -e "  • 可选 TLS 加密"
+    echo -e "  • 基于密码认证"
+    echo ""
+
+    # 输入端口
+    read -p "请输入端口 [默认: 443]: " port
+    port=${port:-443}
+
+    # 检查端口
+    if check_port_exists "$port"; then
+        print_error "端口 $port 已被占用"
+        return 1
+    fi
+
+    # TLS 配置（可选）
+    echo -e "\n${CYAN}TLS 配置：${NC}"
+    read -p "是否启用 TLS? [Y/n]: " enable_tls
+    local security="none"
+    local tls_domain=""
+    local tls_cert=""
+    local tls_key=""
+
+    if [[ "$enable_tls" != "n" && "$enable_tls" != "N" ]]; then
+        security="tls"
+        read -p "请输入域名: " tls_domain
+        if [[ -z "$tls_domain" ]]; then
+            print_error "启用 TLS 必须配置域名"
+            return 1
+        fi
+
+        read -p "请输入证书路径 [留空使用自签名]: " tls_cert
+
+        if [[ -n "$tls_cert" ]]; then
+            read -p "请输入密钥路径: " tls_key
+            if [[ ! -f "$tls_cert" ]] || [[ ! -f "$tls_key" ]]; then
+                print_error "证书或密钥文件不存在"
+                return 1
+            fi
+        else
+            print_info "使用自签名证书"
+            if declare -f generate_self_signed_cert &>/dev/null; then
+                generate_self_signed_cert "$tls_domain"
+            fi
+            tls_cert="${SINGBOX_DIR}/certs/${tls_domain}.crt"
+            tls_key="${SINGBOX_DIR}/certs/${tls_domain}.key"
+        fi
+    fi
+
+    # 填充方案配置
+    echo -e "\n${CYAN}流量填充配置：${NC}"
+    echo "1. 使用默认填充方案（推荐）"
+    echo "2. 禁用填充"
+    echo "3. 自定义填充方案（高级）"
+    read -p "请选择 [1-3]: " padding_choice
+
+    local use_padding="true"
+    local custom_padding="false"
+
+    case $padding_choice in
+        1)
+            use_padding="true"
+            custom_padding="false"
+            print_info "将使用默认填充方案"
+            ;;
+        2)
+            use_padding="false"
+            custom_padding="false"
+            print_warning "禁用填充可能降低抗审查能力"
+            ;;
+        3)
+            use_padding="true"
+            custom_padding="true"
+            print_info "请查阅官方文档配置自定义填充方案"
+            ;;
+        *)
+            use_padding="true"
+            custom_padding="false"
+            ;;
+    esac
+
+    # 构建 extra_config
+    local extra_config
+    if [[ "$security" == "tls" ]]; then
+        extra_config=$(jq -n \
+            --arg tls_domain "$tls_domain" \
+            --arg tls_cert "$tls_cert" \
+            --arg tls_key "$tls_key" \
+            --arg use_padding "$use_padding" \
+            --arg custom_padding "$custom_padding" \
+            '{
+                tls_domain: $tls_domain,
+                tls_cert: $tls_cert,
+                tls_key: $tls_key,
+                use_padding: ($use_padding == "true"),
+                custom_padding: ($custom_padding == "true")
+            }')
+    else
+        extra_config=$(jq -n \
+            --arg use_padding "$use_padding" \
+            --arg custom_padding "$custom_padding" \
+            '{
+                use_padding: ($use_padding == "true"),
+                custom_padding: ($custom_padding == "true")
+            }')
+    fi
+
+    # 保存节点
+    save_node_info "anytls" "$port" "tcp" "$security" "$extra_config" "anytls-$port"
+
+    # 绑定admin用户
+    local admin_info=$(bind_admin_to_node "$port" "anytls")
+    if [[ $? -ne 0 ]]; then
+        print_error "绑定默认用户失败"
+        return 1
+    fi
+
+    # 生成配置
+    generate_singbox_config
+    restart_sing-box
+
+    print_success "AnyTLS 节点添加成功！"
+    echo -e "${CYAN}节点信息：${NC}"
+    echo "  端口: $port"
+    [[ "$security" == "tls" ]] && echo "  域名: $tls_domain"
+    echo "  TLS: $([[ "$security" == "tls" ]] && echo "已启用" || echo "未启用")"
+    echo "  填充: $([[ "$use_padding" == "true" ]] && echo "已启用" || echo "未启用")"
+    echo ""
+
+    if [[ "$security" != "tls" ]]; then
+        echo -e "${YELLOW}提示：未启用 TLS 可能降低安全性${NC}"
+    fi
 }

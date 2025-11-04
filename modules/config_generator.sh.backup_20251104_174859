@@ -291,39 +291,25 @@ generate_inbound_config() {
 
     case $protocol in
         vless)
-            # sing-box格式: 使用type而非protocol, users而非clients
-            local users="[]"
-            # 转换clients格式为sing-box的users格式
-            users=$(echo "$clients" | jq '[.[] | {
-                name: .email,
-                uuid: .id,
-                flow: (.flow // "")
-            }]')
-
             local inbound=$(jq -n \
-                --arg type "vless" \
+                --argjson port "$port" \
                 --arg tag "vless-$port" \
-                --arg listen "::" \
-                --argjson listen_port "$port" \
-                --argjson users "$users" \
+                --argjson clients "$clients" \
+                --argjson stream_settings "$stream_settings" \
                 '{
-                    type: $type,
+                    port: $port,
+                    protocol: "vless",
                     tag: $tag,
-                    listen: $listen,
-                    listen_port: $listen_port,
-                    users: $users
+                    settings: {
+                        clients: $clients,
+                        decryption: "none"
+                    },
+                    streamSettings: $stream_settings,
+                    sniffing: {
+                        enabled: true,
+                        destOverride: ["http", "tls", "quic"]
+                    }
                 }')
-
-            # 添加TLS和transport配置
-            if [[ "$security" != "none" ]]; then
-                local tls_config=$(generate_tls_config "$security" "$extra")
-                inbound=$(echo "$inbound" | jq --argjson tls "$tls_config" '. + {tls: $tls}')
-            fi
-
-            if [[ "$transport" != "tcp" ]]; then
-                local transport_config=$(generate_transport_config "$transport" "$extra")
-                inbound=$(echo "$inbound" | jq --argjson transport "$transport_config" '. + {transport: $transport}')
-            fi
             ;;
 
         vmess)
@@ -450,63 +436,6 @@ generate_inbound_config() {
                     }
                 }')
             ;;
-
-        hysteria2)
-            # Hysteria2配置 - sing-box格式
-            local users="[]"
-            # 转换clients为hysteria2的users格式
-            users=$(echo "$clients" | jq '[.[] | {
-                name: .email,
-                password: (.password // .id)
-            }]')
-
-            # 从extra获取配置参数
-            local up_mbps=$(echo "$extra" | jq -r '.up_mbps // "100"')
-            local down_mbps=$(echo "$extra" | jq -r '.down_mbps // "100"')
-            local obfs_password=$(echo "$extra" | jq -r '.obfs_password // ""')
-            local masquerade=$(echo "$extra" | jq -r '.masquerade // ""')
-
-            local inbound=$(jq -n \
-                --arg type "hysteria2" \
-                --arg tag "hysteria2-$port" \
-                --arg listen "::" \
-                --argjson listen_port "$port" \
-                --argjson users "$users" \
-                --arg up_mbps "$up_mbps" \
-                --arg down_mbps "$down_mbps" \
-                '{
-                    type: $type,
-                    tag: $tag,
-                    listen: $listen,
-                    listen_port: $listen_port,
-                    users: $users,
-                    up_mbps: ($up_mbps | tonumber),
-                    down_mbps: ($down_mbps | tonumber)
-                }')
-
-            # 添加obfs配置
-            if [[ -n "$obfs_password" && "$obfs_password" != "null" ]]; then
-                inbound=$(echo "$inbound" | jq \
-                    --arg password "$obfs_password" \
-                    '. + {
-                        obfs: {
-                            type: "salamander",
-                            password: $password
-                        }
-                    }')
-            fi
-
-            # 添加masquerade配置
-            if [[ -n "$masquerade" && "$masquerade" != "null" ]]; then
-                inbound=$(echo "$inbound" | jq --arg url "$masquerade" '. + {masquerade: $url}')
-            fi
-
-            # Hysteria2需要TLS
-            if [[ "$security" == "tls" || "$security" == "reality" ]]; then
-                local tls_config=$(generate_tls_config "$security" "$extra")
-                inbound=$(echo "$inbound" | jq --argjson tls "$tls_config" '. + {tls: $tls}')
-            fi
-            ;;
     esac
 
     echo "$inbound"
@@ -600,111 +529,6 @@ generate_stream_settings() {
     esac
 
     echo "$stream_settings"
-}
-
-# 生成sing-box格式的TLS配置
-generate_tls_config() {
-    local security=$1
-    local extra=$2
-    local tls_config="{}"
-
-    case $security in
-        reality)
-            # Reality配置 - sing-box格式
-            local dest=$(echo "$extra" | jq -r '.dest // ""')
-            local server_names=$(echo "$extra" | jq -r '.server_names // "[]"')
-            local private_key=$(echo "$extra" | jq -r '.private_key // ""')
-            local short_ids=$(echo "$extra" | jq -r '.short_ids // "[]"')
-
-            # 解析dest为server和port
-            local server=$(echo "$dest" | cut -d: -f1)
-            local server_port=$(echo "$dest" | cut -d: -f2)
-            [[ -z "$server_port" ]] && server_port="443"
-
-            tls_config=$(jq -n \
-                --argjson enabled "true" \
-                --arg server "$server" \
-                --argjson server_port "$server_port" \
-                --arg private_key "$private_key" \
-                --argjson short_id "$short_ids" \
-                '{
-                    enabled: $enabled,
-                    server_name: "",
-                    reality: {
-                        enabled: true,
-                        handshake: {
-                            server: $server,
-                            server_port: $server_port
-                        },
-                        private_key: $private_key,
-                        short_id: $short_id
-                    }
-                }')
-            ;;
-
-        tls)
-            # 普通TLS配置
-            local cert_file=$(echo "$extra" | jq -r '.cert_file // "/usr/local/sing-box/certs/cert.pem"')
-            local key_file=$(echo "$extra" | jq -r '.key_file // "/usr/local/sing-box/certs/key.pem"')
-
-            tls_config=$(jq -n \
-                --argjson enabled "true" \
-                --arg cert "$cert_file" \
-                --arg key "$key_file" \
-                '{
-                    enabled: $enabled,
-                    certificate_path: $cert,
-                    key_path: $key
-                }')
-            ;;
-    esac
-
-    echo "$tls_config"
-}
-
-# 生成sing-box格式的transport配置
-generate_transport_config() {
-    local transport=$1
-    local extra=$2
-    local transport_config="{}"
-
-    case $transport in
-        ws)
-            local path=$(echo "$extra" | jq -r '.path // "/"')
-            transport_config=$(jq -n \
-                --arg type "ws" \
-                --arg path "$path" \
-                '{
-                    type: $type,
-                    path: $path
-                }')
-            ;;
-
-        grpc)
-            local service_name=$(echo "$extra" | jq -r '.service_name // "grpc"')
-            transport_config=$(jq -n \
-                --arg type "grpc" \
-                --arg service_name "$service_name" \
-                '{
-                    type: $type,
-                    service_name: $service_name
-                }')
-            ;;
-
-        http)
-            # HTTP/2 transport
-            local path=$(echo "$extra" | jq -r '.path // "/"')
-            transport_config=$(jq -n \
-                --arg type "http" \
-                --arg path "$path" \
-                '{
-                    type: $type,
-                    path: $path
-                }')
-            ;;
-    esac
-
-    echo "$transport_config"
 }
 
 # 验证配置文件

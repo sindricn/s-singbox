@@ -34,7 +34,8 @@
       "Bash(then)",
       "Bash(curl:*)",
       "Bash(cat:*)",
-      "Bash(node.sh:*)"
+      "Bash(node.sh:*)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []

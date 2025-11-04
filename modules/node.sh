@@ -2261,17 +2261,22 @@ quick_setup_vless_reality() {
     # 4. Short ID (可选)
     local short_ids='["","0123456789abcdef"]'
 
-    # 5. 构建 extra_config
+    # 5. 构建 extra_config（使用sing-box格式字段名）
+    local dest="${dest_server}:443"  # Reality需要 server:port 格式
     local extra_config=$(jq -n \
-        --arg dest "$dest_server" \
+        --arg dest "$dest" \
         --arg private_key "$private_key" \
         --arg public_key "$public_key" \
         --argjson short_ids "$short_ids" \
+        --argjson server_names "[\"${dest_server}\"]" \
+        --arg flow "xtls-rprx-vision" \
         '{
-            dest_server: $dest,
+            dest: $dest,
             private_key: $private_key,
             public_key: $public_key,
-            short_ids: $short_ids
+            short_ids: $short_ids,
+            server_names: $server_names,
+            flow: $flow
         }')
 
     # 6. 保存节点信息
@@ -2365,21 +2370,21 @@ quick_setup_hysteria2() {
     local obfs_password=$(openssl rand -base64 16)
     print_info "已自动生成混淆密码: $obfs_password"
 
-    # 6. 构建 extra_config
+    # 6. 构建 extra_config（使用sing-box格式字段名）
     local extra_config=$(jq -n \
-        --arg tls_domain "$tls_domain" \
-        --arg tls_cert "$tls_cert" \
-        --arg tls_key "$tls_key" \
+        --arg cert_file "$tls_cert" \
+        --arg key_file "$tls_key" \
         --argjson up_mbps "$up_mbps" \
         --argjson down_mbps "$down_mbps" \
         --arg obfs_password "$obfs_password" \
+        --arg masquerade "https://www.bing.com" \
         '{
-            tls_domain: $tls_domain,
-            tls_cert: $tls_cert,
-            tls_key: $tls_key,
+            cert_file: $cert_file,
+            key_file: $key_file,
             up_mbps: $up_mbps,
             down_mbps: $down_mbps,
-            obfs_password: $obfs_password
+            obfs_password: $obfs_password,
+            masquerade: $masquerade
         }')
 
     # 7. 保存节点信息

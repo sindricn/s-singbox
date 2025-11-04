@@ -2198,15 +2198,14 @@ add_anytls_node() {
 # 快速搭建 VLESS + Reality 节点（一键配置）
 quick_setup_vless_reality() {
     clear
-    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║   快速搭建 VLESS + Reality 节点    ║${NC}"
-    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo -e "${CYAN}═══════════════════════════════════${NC}"
+    echo -e "${CYAN}   一键搭建 VLESS + Reality 节点${NC}"
+    echo -e "${CYAN}═══════════════════════════════════${NC}"
     echo ""
-    echo -e "${YELLOW}功能说明：${NC}"
-    echo -e "  • Reality 是最新的抗审查协议"
-    echo -e "  • 无需域名和证书"
-    echo -e "  • 伪装成任意HTTPS网站"
-    echo -e "  • 自动生成密钥对"
+    echo -e "${YELLOW}说明：${NC}"
+    echo -e "  - 协议层: VLESS (零加密，性能最优)"
+    echo -e "  - 传输层: TCP (稳定可靠)"
+    echo -e "  - 加密层: Reality (最新抗审查技术)"
     echo ""
 
     # 1. 端口配置
@@ -2214,170 +2213,390 @@ quick_setup_vless_reality() {
     port=${port:-443}
 
     if check_port_exists "$port"; then
-        print_error "端口 $port 已被占用，请使用其他端口"
+        print_error "端口 $port 已被占用或已存在，请使用其他端口"
         return 1
     fi
 
-    # 2. 伪装域名（目标网站）
+    # 2. Reality 伪装域名配置
     echo ""
-    echo -e "${CYAN}选择伪装目标网站：${NC}"
-    echo "1. www.apple.com (推荐)"
-    echo "2. www.microsoft.com"
-    echo "3. www.cloudflare.com"
-    echo "4. 自定义域名"
-    read -p "请选择 [1-4]: " dest_choice
+    echo -e "${CYAN}Reality 配置：${NC}"
+    echo ""
+    echo -e "${YELLOW}伪装域名 (SNI) 设置：${NC}"
+    echo -e "  1. 使用默认伪装域名 (www.microsoft.com)"
+    echo -e "  2. 自动优选最佳域名（智能延迟测试）"
+    echo -e "  3. 手动输入域名"
+    echo ""
+    read -p "请选择 [1-3，默认: 2]: " domain_choice
+    domain_choice=${domain_choice:-2}
 
-    local dest_server
-    case $dest_choice in
-        1) dest_server="www.apple.com" ;;
-        2) dest_server="www.microsoft.com" ;;
-        3) dest_server="www.cloudflare.com" ;;
-        4)
-            read -p "请输入目标域名: " dest_server
-            if [[ -z "$dest_server" ]]; then
-                print_error "目标域名不能为空"
-                return 1
-            fi
+    local dest_server=""
+    local server_names=""
+
+    case $domain_choice in
+        1)
+            # 使用默认域名
+            dest_server="www.microsoft.com"
+            server_names=$dest_server
+            print_info "使用默认伪装域名: $dest_server"
             ;;
-        *) dest_server="www.apple.com" ;;
+        2)
+            # 自动优选域名
+            echo ""
+            print_info "开始智能优选伪装域名..."
+            echo ""
+
+            # 测试域名列表（精简版）
+            local test_domains=(
+                www.cloudflare.com
+                www.apple.com
+                www.microsoft.com
+                www.bing.com
+                aws.amazon.com
+                cdn.jsdelivr.net
+                www.intel.com
+                www.sony.com
+                ajax.cloudflare.com
+                www.mozilla.org
+                www.gstatic.com
+                fonts.googleapis.com
+                developer.apple.com
+                www.w3.org
+                www.wikipedia.org
+            )
+
+            local temp_file=$(mktemp)
+            local best_latency=9999
+            local best_domain=""
+            local success_count=0
+
+            echo -e "${BLUE}正在测试域名延迟...${NC}"
+            echo ""
+
+            for domain in "${test_domains[@]}"; do
+                local t1=$(date +%s%3N)
+                if timeout 2 openssl s_client -connect "$domain:443" -servername "$domain" </dev/null >/dev/null 2>&1; then
+                    local t2=$(date +%s%3N)
+                    local latency=$((t2 - t1))
+
+                    if host "$domain" >/dev/null 2>&1; then
+                        echo "$latency $domain" >> "$temp_file"
+                        ((success_count++))
+
+                        if [[ $latency -lt $best_latency ]]; then
+                            best_latency=$latency
+                            best_domain=$domain
+                        fi
+
+                        # 实时显示测试结果
+                        printf "  ${GREEN}✔${NC} %-35s ${CYAN}%4d ms${NC}\n" "$domain" "$latency"
+                    fi
+                else
+                    printf "  ${RED}✘${NC} %-35s ${YELLOW}超时${NC}\n" "$domain"
+                fi
+            done
+            echo ""
+
+            if [[ -n "$best_domain" && $success_count -gt 0 ]]; then
+                dest_server=$best_domain
+                server_names=$best_domain
+
+                echo -e "${GREEN}═══════════════════════════════════${NC}"
+                print_success "优选完成！"
+                echo -e "  最佳域名: ${CYAN}$dest_server${NC}"
+                echo -e "  延迟: ${CYAN}${best_latency}ms${NC}"
+                echo -e "  成功测试: ${CYAN}${success_count}/${#test_domains[@]}${NC} 个域名"
+                echo -e "${GREEN}═══════════════════════════════════${NC}"
+                echo ""
+            else
+                print_warning "自动优选失败，使用默认域名"
+                dest_server="www.microsoft.com"
+                server_names=$dest_server
+            fi
+
+            rm -f "$temp_file"
+            ;;
+        3)
+            # 手动输入
+            echo ""
+            read -p "请输入伪装域名 (SNI): " dest_server
+            while [[ -z "$dest_server" ]]; do
+                print_error "域名不能为空"
+                read -p "请输入伪装域名 (SNI): " dest_server
+            done
+
+            # 测试输入的域名
+            print_info "测试域名连接性..."
+            if timeout 3 openssl s_client -connect "$dest_server:443" -servername "$dest_server" </dev/null >/dev/null 2>&1; then
+                print_success "域名测试通过"
+            else
+                print_warning "域名测试失败，但仍可继续使用"
+            fi
+
+            server_names=$dest_server
+            ;;
+        *)
+            # 默认
+            dest_server="www.microsoft.com"
+            server_names=$dest_server
+            ;;
     esac
 
+    # 确认最终配置
+    echo ""
+    echo -e "${CYAN}最终 Reality 配置：${NC}"
+    echo -e "  伪装目标 (dest): ${YELLOW}$dest_server:443${NC}"
+    echo -e "  伪装域名 (SNI): ${YELLOW}$server_names${NC}"
+    echo ""
+
     # 3. 生成 Reality 密钥对
-    print_info "正在生成 Reality 密钥对..."
-    local keypair_output=$(generate_reality_keypair)
+    print_info "生成 Reality 密钥对..."
+
+    # 先检查 sing-box 是否安装
+    if [[ ! -f "$SINGBOX_BIN" ]]; then
+        print_error "sing-box 未安装！请先通过菜单安装 sing-box 内核"
+        return 1
+    fi
+
+    local keypair=$(generate_reality_keypair)
     if [[ $? -ne 0 ]]; then
         print_error "密钥生成失败"
+        echo ""
+        print_info "调试信息："
+        echo "  sing-box 路径: $SINGBOX_BIN"
+        echo "  sing-box 版本: $("$SINGBOX_BIN" version 2>&1 | head -1)"
+        echo ""
+        print_info "尝试手动生成密钥："
+        echo "  运行命令: $SINGBOX_BIN generate reality-keypair"
         return 1
     fi
 
-    local private_key=$(echo "$keypair_output" | grep -i "Private" | awk '{print $NF}')
-    local public_key=$(echo "$keypair_output" | grep -i "Public" | awk '{print $NF}')
+    # 解析密钥 - 多种格式兼容
+    local private_key=$(echo "$keypair" | grep -i "Private key:" | awk '{print $3}')
+    local public_key=$(echo "$keypair" | grep -i "Public key:" | awk '{print $3}')
 
+    # 如果第一种格式失败，尝试其他格式
     if [[ -z "$private_key" || -z "$public_key" ]]; then
-        print_error "密钥解析失败"
+        private_key=$(echo "$keypair" | grep -i "PrivateKey:" | awk '{print $2}')
+        public_key=$(echo "$keypair" | grep -i "PublicKey:" | awk '{print $2}')
+    fi
+
+    # 如果还是失败，直接按行解析
+    if [[ -z "$private_key" || -z "$public_key" ]]; then
+        private_key=$(echo "$keypair" | sed -n '1p' | awk '{print $NF}')
+        public_key=$(echo "$keypair" | sed -n '2p' | awk '{print $NF}')
+    fi
+
+    # 最后检查
+    if [[ -z "$private_key" || -z "$public_key" ]]; then
+        print_error "无法解析密钥对"
+        echo ""
+        print_info "原始输出："
+        echo "$keypair"
         return 1
     fi
 
-    # 4. Short ID (可选)
-    local short_ids='["","0123456789abcdef"]'
+    print_success "私钥: $private_key"
+    print_success "公钥: $public_key"
 
-    # 5. 构建 extra_config（使用sing-box格式字段名）
-    local dest="${dest_server}:443"  # Reality需要 server:port 格式
-    local extra_config=$(jq -n \
-        --arg dest "$dest" \
+    # 4. 生成 shortId (8-16位十六进制)
+    local short_id=$(openssl rand -hex 8)
+    print_info "ShortId: $short_id"
+
+    # 5. 构建 Reality 额外配置（JSON格式，sing-box格式）
+    local reality_config=$(jq -n \
+        --arg dest "$dest_server:443" \
+        --arg sni "$server_names" \
         --arg private_key "$private_key" \
         --arg public_key "$public_key" \
-        --argjson short_ids "$short_ids" \
-        --argjson server_names "[\"${dest_server}\"]" \
+        --arg short_id "$short_id" \
         --arg flow "xtls-rprx-vision" \
         '{
             dest: $dest,
+            server_names: [$sni],
             private_key: $private_key,
             public_key: $public_key,
-            short_ids: $short_ids,
-            server_names: $server_names,
+            short_ids: [$short_id],
             flow: $flow
         }')
 
     # 6. 保存节点信息
-    save_node_info "vless" "$port" "tcp" "reality" "$extra_config" "vless-reality-$port"
+    save_node_info "vless" "$port" "tcp" "reality" "$reality_config" "vless-reality-$port"
+    if [[ $? -ne 0 ]]; then
+        print_error "保存节点信息失败"
+        return 1
+    fi
 
-    # 7. 绑定 admin 用户
+    # 7. 绑定 admin 用户到节点
     local admin_info=$(bind_admin_to_node "$port" "vless")
     if [[ $? -ne 0 ]]; then
-        print_error "绑定默认用户失败"
+        print_error "绑定默认用户失败，正在回滚..."
+        # 删除刚创建的节点
+        jq --arg port "$port" '.nodes = [.nodes[] | select(.port != $port)]' "$DATA_DIR/nodes.json" > "$DATA_DIR/nodes.json.tmp"
+        mv "$DATA_DIR/nodes.json.tmp" "$DATA_DIR/nodes.json"
         return 1
     fi
 
     IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
 
-    # 8. 生成配置并重启
+    # 8. 重新生成sing-box配置文件
     generate_singbox_config
-    restart_sing-box
+    if [[ $? -ne 0 ]]; then
+        print_error "生成配置文件失败，正在回滚..."
+        # 删除节点和绑定
+        jq --arg port "$port" '.nodes = [.nodes[] | select(.port != $port)]' "$DATA_DIR/nodes.json" > "$DATA_DIR/nodes.json.tmp"
+        mv "$DATA_DIR/nodes.json.tmp" "$DATA_DIR/nodes.json"
+        jq --arg port "$port" '.bindings = [.bindings[] | select(.port != $port)]' "$DATA_DIR/node_users.json" > "$DATA_DIR/node_users.json.tmp"
+        mv "$DATA_DIR/node_users.json.tmp" "$DATA_DIR/node_users.json"
+        return 1
+    fi
 
-    # 9. 显示结果
-    print_success "✅ VLESS + Reality 节点创建成功！"
+    # 9. 重启服务
+    restart_sing-box
+    if [[ $? -ne 0 ]]; then
+        print_error "sing-box 启动失败"
+        return 1
+    fi
+
     echo ""
-    echo -e "${CYAN}═══════════════════════════════════════${NC}"
-    echo -e "${YELLOW}节点信息：${NC}"
-    echo -e "${CYAN}═══════════════════════════════════════${NC}"
-    echo -e "  端口: ${GREEN}$port${NC}"
-    echo -e "  协议: ${GREEN}VLESS + Reality${NC}"
-    echo -e "  伪装域名: ${GREEN}$dest_server${NC}"
-    echo -e "  UUID: ${GREEN}$admin_uuid${NC}"
-    echo -e "  Public Key: ${GREEN}$public_key${NC}"
+    echo -e "${GREEN}═══════════════════════════════════${NC}"
+    echo -e "${GREEN}   VLESS + Reality 节点创建成功！${NC}"
+    echo -e "${GREEN}═══════════════════════════════════${NC}"
+    echo ""
+    echo -e "${CYAN}节点信息：${NC}"
+    echo -e "  端口: ${YELLOW}$port${NC}"
+    echo -e "  协议: ${YELLOW}VLESS${NC}"
+    echo -e "  传输: ${YELLOW}TCP${NC}"
+    echo -e "  安全: ${YELLOW}Reality${NC}"
+    echo -e "  默认用户: ${YELLOW}admin${NC}"
+    echo ""
+    echo -e "${CYAN}Reality 配置：${NC}"
+    echo -e "  伪装域名: ${YELLOW}$server_names${NC}"
+    echo -e "  公钥: ${YELLOW}$public_key${NC}"
+    echo -e "  ShortId: ${YELLOW}$short_id${NC}"
     echo ""
 
     # 生成分享链接
-    local server_ip=$(curl -s4 ifconfig.me || curl -s4 icanhazip.com)
+    local server_ip=$(curl -s4 ifconfig.me 2>/dev/null || curl -s4 icanhazip.com 2>/dev/null)
     if [[ -n "$server_ip" ]]; then
-        local share_link="vless://${admin_uuid}@${server_ip}:${port}?type=tcp&security=reality&pbk=${public_key}&sni=${dest_server}&fp=chrome#Reality-${admin_remark}"
+        local share_link="vless://${admin_uuid}@${server_ip}:${port}?type=tcp&security=reality&pbk=${public_key}&sni=${server_names}&fp=chrome#Reality-${admin_remark}"
         echo -e "${CYAN}分享链接：${NC}"
         echo -e "${GREEN}$share_link${NC}"
+        echo ""
     fi
-    echo ""
 }
 
 # 快速搭建 Hysteria2 节点（一键配置）
 quick_setup_hysteria2() {
     clear
-    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║     快速搭建 Hysteria2 节点         ║${NC}"
-    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo -e "${CYAN}═══════════════════════════════════${NC}"
+    echo -e "${CYAN}   一键搭建 Hysteria2 节点${NC}"
+    echo -e "${CYAN}═══════════════════════════════════${NC}"
     echo ""
-    echo -e "${YELLOW}功能说明：${NC}"
-    echo -e "  • 基于 QUIC 的高性能协议"
-    echo -e "  • 适合高延迟、高丢包环境"
-    echo -e "  • 支持自签名证书"
-    echo -e "  • 自动配置混淆"
+    echo -e "${YELLOW}说明：${NC}"
+    echo -e "  - 基于 QUIC 的高性能协议"
+    echo -e "  - 适合高延迟、高丢包环境"
+    echo -e "  - 支持自签名证书"
+    echo -e "  - 自动配置混淆"
     echo ""
 
-    # 1. 端口配置
+    # 检查 sing-box 是否已安装
+    if [[ ! -f "$SINGBOX_BIN" ]]; then
+        print_error "sing-box 未安装！请先通过菜单安装 sing-box 内核"
+        return 1
+    fi
+
+    echo -e "${BLUE}开始一键快速配置...${NC}"
+    echo ""
+
+    # 步骤 1/6: 端口配置
+    echo -e "${BLUE}步骤 1/6: 端口配置${NC}"
     read -p "请输入监听端口 [默认: 443]: " port
     port=${port:-443}
 
     if check_port_exists "$port"; then
-        print_error "端口 $port 已被占用，请使用其他端口"
+        print_error "端口 $port 已被占用或已存在，请使用其他端口"
         return 1
     fi
+    print_success "端口: $port"
+    echo ""
 
-    # 2. 域名配置
-    read -p "请输入域名 [默认: example.com]: " tls_domain
-    tls_domain=${tls_domain:-example.com}
+    # 步骤 2/6: 伪装域名选择
+    echo -e "${BLUE}步骤 2/6: 选择伪装域名${NC}"
+    local best_domain="cdn.jsdelivr.net"
+    local tls_domain="$best_domain"
 
-    # 3. 自动生成自签名证书
-    print_info "正在生成自签名证书..."
-    if declare -f generate_self_signed_cert &>/dev/null; then
-        generate_self_signed_cert "$tls_domain"
-    else
-        print_error "证书生成函数不存在"
+    # 可以添加简单的域名选择
+    read -p "使用默认伪装域名 ($best_domain)? [Y/n]: " use_default
+    if [[ "$use_default" == "n" || "$use_default" == "N" ]]; then
+        read -p "请输入自定义域名: " custom_domain
+        if [[ -n "$custom_domain" ]]; then
+            tls_domain="$custom_domain"
+        fi
+    fi
+    print_success "伪装域名: $tls_domain"
+    echo ""
+
+    # 步骤 3/6: 生成认证和混淆密码
+    echo -e "${BLUE}步骤 3/6: 生成密码${NC}"
+    local auth_password=$(openssl rand -base64 16)
+    local obfs_password=$(openssl rand -base64 16)
+    print_success "认证密码: $auth_password"
+    print_success "混淆密码: $obfs_password"
+    echo ""
+
+    # 步骤 4/6: 生成自签名证书
+    echo -e "${BLUE}步骤 4/6: 生成自签名证书${NC}"
+
+    # 确保证书目录存在
+    mkdir -p "${SINGBOX_DIR}/certs"
+
+    # 生成自签名证书
+    if ! openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) \
+        -keyout "${SINGBOX_DIR}/certs/${tls_domain}.key" \
+        -out "${SINGBOX_DIR}/certs/${tls_domain}.crt" \
+        -subj "/CN=$tls_domain" \
+        -days 3650 &>/dev/null; then
+        print_error "证书生成失败"
         return 1
     fi
 
     local tls_cert="${SINGBOX_DIR}/certs/${tls_domain}.crt"
     local tls_key="${SINGBOX_DIR}/certs/${tls_domain}.key"
 
+    # 验证证书文件
     if [[ ! -f "$tls_cert" || ! -f "$tls_key" ]]; then
-        print_error "证书生成失败"
+        print_error "证书文件不存在"
         return 1
     fi
 
-    # 4. 速率限制（默认值）
+    print_success "证书生成完成"
+    echo ""
+
+    # 步骤 5/6: 配置速率限制
+    echo -e "${BLUE}步骤 5/6: 配置速率限制${NC}"
     local up_mbps=100
     local down_mbps=100
 
-    # 5. 自动启用混淆
-    local obfs_password=$(openssl rand -base64 16)
-    print_info "已自动生成混淆密码: $obfs_password"
+    read -p "上传速率 (Mbps) [默认: 100]: " input_up
+    read -p "下载速率 (Mbps) [默认: 100]: " input_down
 
-    # 6. 构建 extra_config（使用sing-box格式字段名）
+    [[ -n "$input_up" ]] && up_mbps=$input_up
+    [[ -n "$input_down" ]] && down_mbps=$input_down
+
+    print_success "速率: ${up_mbps}/${down_mbps} Mbps"
+    echo ""
+
+    # 步骤 6/6: 保存配置
+    echo -e "${BLUE}步骤 6/6: 保存配置并启动服务${NC}"
+
+    # 构建 extra_config（使用sing-box格式字段名）
     local extra_config=$(jq -n \
         --arg cert_file "$tls_cert" \
         --arg key_file "$tls_key" \
         --argjson up_mbps "$up_mbps" \
         --argjson down_mbps "$down_mbps" \
         --arg obfs_password "$obfs_password" \
-        --arg masquerade "https://www.bing.com" \
+        --arg masquerade "https://${tls_domain}/" \
         '{
             cert_file: $cert_file,
             key_file: $key_file,
@@ -2387,45 +2606,100 @@ quick_setup_hysteria2() {
             masquerade: $masquerade
         }')
 
-    # 7. 保存节点信息
+    # 保存节点信息
     save_node_info "hysteria2" "$port" "udp" "tls" "$extra_config" "hy2-$port"
-
-    # 8. 绑定 admin 用户
-    local admin_info=$(bind_admin_to_node "$port" "hysteria2")
     if [[ $? -ne 0 ]]; then
-        print_error "绑定默认用户失败"
+        print_error "保存节点信息失败"
+        # 清理证书文件
+        rm -f "$tls_cert" "$tls_key"
         return 1
     fi
 
-    IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
+    # 绑定 admin 用户（Hysteria2 需要密码）
+    # 先创建一个带密码的用户
+    local admin_uuid=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "$(openssl rand -hex 16 | sed 's/\(..\)/\1-/g;s/-$//')")
 
-    # 9. 生成配置并重启
+    # 检查用户是否存在
+    local user_exists=$(jq -r ".users[] | select(.id == \"$admin_uuid\")" "$DATA_DIR/users.json" 2>/dev/null)
+
+    if [[ -z "$user_exists" || "$user_exists" == "null" ]]; then
+        # 创建用户并设置密码
+        local user_entry=$(jq -n \
+            --arg id "$admin_uuid" \
+            --arg email "admin@local" \
+            --arg password "$auth_password" \
+            --argjson level 0 \
+            --argjson enabled true \
+            '{
+                id: $id,
+                email: $email,
+                password: $password,
+                level: $level,
+                enabled: $enabled,
+                remark: "admin"
+            }')
+
+        # 添加到用户列表
+        jq ".users += [$user_entry]" "$DATA_DIR/users.json" > "$DATA_DIR/users.json.tmp"
+        mv "$DATA_DIR/users.json.tmp" "$DATA_DIR/users.json"
+    fi
+
+    # 绑定用户到节点
+    local binding_entry=$(jq -n \
+        --arg port "$port" \
+        --argjson users "[\"$admin_uuid\"]" \
+        '{
+            port: $port,
+            users: $users
+        }')
+
+    jq ".bindings += [$binding_entry]" "$DATA_DIR/node_users.json" > "$DATA_DIR/node_users.json.tmp"
+    mv "$DATA_DIR/node_users.json.tmp" "$DATA_DIR/node_users.json"
+
+    # 重新生成sing-box配置文件
     generate_singbox_config
-    restart_sing-box
+    if [[ $? -ne 0 ]]; then
+        print_error "生成配置文件失败，正在回滚..."
+        # 删除节点和绑定
+        jq --arg port "$port" '.nodes = [.nodes[] | select(.port != $port)]' "$DATA_DIR/nodes.json" > "$DATA_DIR/nodes.json.tmp"
+        mv "$DATA_DIR/nodes.json.tmp" "$DATA_DIR/nodes.json"
+        jq --arg port "$port" '.bindings = [.bindings[] | select(.port != $port)]' "$DATA_DIR/node_users.json" > "$DATA_DIR/node_users.json.tmp"
+        mv "$DATA_DIR/node_users.json.tmp" "$DATA_DIR/node_users.json"
+        # 清理证书文件
+        rm -f "$tls_cert" "$tls_key"
+        return 1
+    fi
 
-    # 10. 显示结果
-    print_success "✅ Hysteria2 节点创建成功！"
+    # 重启服务
+    restart_sing-box
+    if [[ $? -ne 0 ]]; then
+        print_error "sing-box 启动失败"
+        return 1
+    fi
+
     echo ""
-    echo -e "${CYAN}═══════════════════════════════════════${NC}"
-    echo -e "${YELLOW}节点信息：${NC}"
-    echo -e "${CYAN}═══════════════════════════════════════${NC}"
-    echo -e "  端口: ${GREEN}$port${NC}"
-    echo -e "  协议: ${GREEN}Hysteria2${NC}"
-    echo -e "  域名: ${GREEN}$tls_domain${NC}"
-    echo -e "  密码: ${GREEN}$admin_password${NC}"
-    echo -e "  混淆: ${GREEN}Salamander${NC}"
-    echo -e "  混淆密码: ${GREEN}$obfs_password${NC}"
-    echo -e "  速率: ${GREEN}${up_mbps}/${down_mbps} Mbps${NC}"
+    echo -e "${GREEN}═══════════════════════════════════${NC}"
+    echo -e "${GREEN}   Hysteria2 节点创建成功！${NC}"
+    echo -e "${GREEN}═══════════════════════════════════${NC}"
+    echo ""
+    echo -e "${CYAN}节点信息：${NC}"
+    echo -e "  端口: ${YELLOW}$port${NC}"
+    echo -e "  协议: ${YELLOW}Hysteria2${NC}"
+    echo -e "  伪装域名: ${YELLOW}$tls_domain${NC}"
+    echo -e "  认证密码: ${YELLOW}$auth_password${NC}"
+    echo -e "  混淆类型: ${YELLOW}Salamander${NC}"
+    echo -e "  混淆密码: ${YELLOW}$obfs_password${NC}"
+    echo -e "  速率限制: ${YELLOW}${up_mbps}/${down_mbps} Mbps${NC}"
     echo ""
 
     # 生成分享链接
-    local server_ip=$(curl -s4 ifconfig.me || curl -s4 icanhazip.com)
+    local server_ip=$(curl -s4 ifconfig.me 2>/dev/null || curl -s4 icanhazip.com 2>/dev/null)
     if [[ -n "$server_ip" ]]; then
-        local share_link="hysteria2://${admin_password}@${server_ip}:${port}?obfs=salamander&obfs-password=${obfs_password}&sni=${tls_domain}#HY2-${admin_remark}"
+        local share_link="hysteria2://${auth_password}@${server_ip}:${port}?obfs=salamander&obfs-password=${obfs_password}&sni=${tls_domain}#HY2-admin"
         echo -e "${CYAN}分享链接：${NC}"
         echo -e "${GREEN}$share_link${NC}"
+        echo ""
     fi
-    echo ""
 }
 
 # 快速搭建菜单

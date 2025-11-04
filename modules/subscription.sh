@@ -1140,7 +1140,7 @@ show_node_share_link() {
 }
 
 # 生成 sing-box JSON 配置
-generate_singbox_config() {
+generate_singbox_subscription_config() {
     local nodes_array="$1"  # JSON数组格式的节点列表
     local user_id="$2"
     local user_password="$3"
@@ -1924,7 +1924,7 @@ generate_subscription_with_user() {
 
             # 生成 sing-box 配置（分离stdout和stderr）
             local singbox_stderr_file=$(mktemp)
-            local singbox_output=$(generate_singbox_config "$nodes_json_array" "$sub_user_id" "$sub_user_password" 2>"$singbox_stderr_file")
+            local singbox_output=$(generate_singbox_subscription_config "$nodes_json_array" "$sub_user_id" "$sub_user_password" 2>"$singbox_stderr_file")
             local singbox_exit_code=$?
 
             if [[ $singbox_exit_code -ne 0 ]]; then
@@ -2510,7 +2510,7 @@ regenerate_subscription() {
 
             # 生成 sing-box 配置
             local singbox_stderr_file=$(mktemp)
-            local singbox_output=$(generate_singbox_config "$nodes_json_array" "$user_id" "$user_password" 2>"$singbox_stderr_file")
+            local singbox_output=$(generate_singbox_subscription_config "$nodes_json_array" "$user_id" "$user_password" 2>"$singbox_stderr_file")
             local singbox_exit_code=$?
 
             if [[ $singbox_exit_code -ne 0 ]] || [[ -z "$singbox_output" ]]; then
@@ -3071,7 +3071,7 @@ regenerate_subscription_content() {
             [[ "$node_count" -eq 0 ]] && { print_error "没有可用节点"; return 1; }
 
             local singbox_stderr=$(mktemp)
-            sub_content=$(generate_singbox_config "$nodes_json_array" "$sub_user_id" "$sub_user_password" 2>"$singbox_stderr")
+            sub_content=$(generate_singbox_subscription_config "$nodes_json_array" "$sub_user_id" "$sub_user_password" 2>"$singbox_stderr")
 
             if [[ $? -ne 0 ]] || [[ -z "$sub_content" ]]; then
                 print_error "sing-box配置生成失败"

@@ -421,14 +421,15 @@ generate_singbox_tls_config() {
             local server=$(echo "$extra" | jq -r '.dest_server // "www.apple.com"')
             local server_port=$(echo "$extra" | jq -r '.dest_port // 443')
             local private_key=$(echo "$extra" | jq -r '.private_key')
-            local short_ids=$(echo "$extra" | jq -r '.short_ids // ["","0123456789abcdef"]')
+            # short_id 必须是数组格式，不能用 -r
+            local short_ids=$(echo "$extra" | jq '.short_ids // ["","0123456789abcdef"]')
 
             local tls_config=$(jq -n \
                 --argjson enabled "true" \
                 --arg server "$server" \
                 --argjson server_port "$server_port" \
                 --arg private_key "$private_key" \
-                --argjson short_ids "$short_ids" \
+                --argjson short_id "$short_ids" \
                 '{
                     enabled: $enabled,
                     reality: {
@@ -438,7 +439,7 @@ generate_singbox_tls_config() {
                             server_port: $server_port
                         },
                         private_key: $private_key,
-                        short_id: $short_ids
+                        short_id: $short_id
                     }
                 }')
             ;;

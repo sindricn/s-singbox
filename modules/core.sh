@@ -73,7 +73,22 @@ install_sing-box() {
     chmod +x "$SINGBOX_BIN"
     rm -rf "$temp_dir"
 
-    # 创建配置文件
+    # 创建数据目录
+    mkdir -p "$DATA_DIR"
+    mkdir -p "$SUBSCRIPTION_DIR"
+
+    # 初始化数据文件
+    if [[ ! -f "$USERS_FILE" ]]; then
+        echo '{"users":[]}' > "$USERS_FILE"
+    fi
+    if [[ ! -f "$NODES_FILE" ]]; then
+        echo '{"nodes":[]}' > "$NODES_FILE"
+    fi
+    if [[ ! -f "$NODE_USERS_FILE" ]]; then
+        echo '{"bindings":[]}' > "$NODE_USERS_FILE"
+    fi
+
+    # 创建配置文件（简单默认配置，无节点）
     if [[ ! -f "$SINGBOX_CONFIG" ]]; then
         create_default_config
     fi
@@ -81,13 +96,14 @@ install_sing-box() {
     # 创建 systemd 服务
     create_systemd_service
 
-    # 启动服务
+    # 重新加载 systemd
     systemctl daemon-reload
     systemctl enable sing-box
-    systemctl start sing-box
 
+    # 不要立即启动服务，让用户添加节点后再启动
     print_success "sing-box 安装完成！版本: v${latest_version}"
-    print_info "运行状态: $(systemctl is-active sing-box)"
+    print_info "请先添加节点，然后启动服务"
+    print_info "启动命令: systemctl start sing-box"
 }
 
 # 卸载 sing-box
@@ -162,7 +178,7 @@ uninstall_sing-box() {
         fi
     fi
 
-    # 5. 删除配置和数据目录
+    # 5. 删除配置和数据目录（包括所有子目录）
     if [[ -d "$SINGBOX_DIR" ]]; then
         print_info "删除配置和数据目录..."
         rm -rf "$SINGBOX_DIR"
@@ -173,20 +189,39 @@ uninstall_sing-box() {
         fi
     fi
 
-    # 6. 重新加载 systemd
+    # 6. 清理可能的备份文件
+    print_info "清理备份文件..."
+    rm -f "${SINGBOX_DIR}.backup"* 2>/dev/null || true
+    rm -f /tmp/singbox_* 2>/dev/null || true
+
+    # 7. 重新加载 systemd
     print_info "重新加载 systemd..."
     systemctl daemon-reload
 
+    # 8. 清理systemd缓存
+    systemctl reset-failed sing-box 2>/dev/null || true
+
     echo ""
     # 验证卸载结果
-    if [[ ! -f "$SINGBOX_BIN" && ! -f "$SINGBOX_SERVICE" && ! -d "$SINGBOX_DIR" ]]; then
+    local failed=0
+    if [[ -f "$SINGBOX_BIN" ]]; then
+        echo "  ${RED}✗${NC} 二进制文件仍存在: $SINGBOX_BIN"
+        failed=1
+    fi
+    if [[ -f "$SINGBOX_SERVICE" ]]; then
+        echo "  ${RED}✗${NC} 服务文件仍存在: $SINGBOX_SERVICE"
+        failed=1
+    fi
+    if [[ -d "$SINGBOX_DIR" ]]; then
+        echo "  ${RED}✗${NC} 目录仍存在: $SINGBOX_DIR"
+        failed=1
+    fi
+
+    if [[ $failed -eq 0 ]]; then
         print_success "✅ sing-box 卸载完成"
         return 0
     else
-        print_error "❌ 卸载未完全成功，请检查："
-        [[ -f "$SINGBOX_BIN" ]] && echo "  - 二进制文件仍存在: $SINGBOX_BIN"
-        [[ -f "$SINGBOX_SERVICE" ]] && echo "  - 服务文件仍存在: $SINGBOX_SERVICE"
-        [[ -d "$SINGBOX_DIR" ]] && echo "  - 目录仍存在: $SINGBOX_DIR"
+        print_error "❌ 卸载未完全成功，请手动检查上述文件"
         return 1
     fi
 }

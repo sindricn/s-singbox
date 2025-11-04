@@ -946,8 +946,7 @@ main() {
                 ;;
             4)
                 # 订阅管理
-                print_warning "订阅管理功能开发中..."
-                read -p "按回车键继续..."
+                menu_subscription
                 ;;
             5)
                 # 域名管理

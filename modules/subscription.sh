@@ -574,6 +574,53 @@ generate_ss_link_from_config() {
     echo "$share_link"
 }
 
+# 从节点JSON生成Hysteria2分享链接（新架构）
+generate_hysteria2_link_from_config() {
+    local password=$1
+    local remark=$2
+    local node_json=$3
+
+    local port=$(echo "$node_json" | jq -r '.port')
+    local extra=$(echo "$node_json" | jq -c '.extra // {}')
+
+    # 从extra提取参数
+    local obfs_password=$(echo "$extra" | jq -r '.obfs_password // ""')
+    local cert_file=$(echo "$extra" | jq -r '.cert_file // ""')
+
+    # 提取域名作为SNI（从证书文件名）
+    local sni=""
+    if [[ -n "$cert_file" ]]; then
+        sni=$(basename "$cert_file" .crt)
+    fi
+
+    local server_host
+    server_host=$(resolve_subscription_host "$node_json")
+
+    # 构建Hysteria2链接
+    # 格式: hysteria2://password@host:port?obfs=salamander&obfs-password=xxx&sni=xxx#remark
+    local share_link="hysteria2://${password}@${server_host}:${port}?"
+
+    # 添加混淆参数
+    if [[ -n "$obfs_password" ]]; then
+        share_link+="obfs=salamander&obfs-password=${obfs_password}"
+    fi
+
+    # 添加SNI
+    if [[ -n "$sni" ]]; then
+        [[ "$share_link" != *"?" ]] && share_link+="&"
+        share_link+="sni=${sni}"
+    fi
+
+    # 添加insecure参数（自签名证书）
+    [[ "$share_link" != *"?" ]] && share_link+="&"
+    share_link+="insecure=1"
+
+    # 添加备注
+    share_link+="#$(urlencode "$remark")"
+
+    echo "$share_link"
+}
+
 # 智能生成分享链接（根据节点类型）- 新架构
 generate_share_link_smart() {
     local user_id=$1
@@ -591,9 +638,9 @@ generate_share_link_smart() {
     # 组合remark: 节点名-用户名（流量和期限信息将显示在订阅响应头中）
     local remark="${node_name}-${username}"
 
-    # 获取用户密码（Trojan和SS需要）
+    # 获取用户密码（Trojan、SS和Hysteria2需要）
     local user_password=""
-    if [[ "$protocol" == "trojan" || "$protocol" == "shadowsocks" ]]; then
+    if [[ "$protocol" == "trojan" || "$protocol" == "shadowsocks" || "$protocol" == "hysteria2" ]]; then
         user_password=$(jq -r ".users[] | select(.id == \"$user_id\") | .password // \"\"" "$USERS_FILE" 2>/dev/null)
     fi
 
@@ -616,6 +663,9 @@ generate_share_link_smart() {
             ;;
         shadowsocks)
             generate_ss_link_from_config "$user_password" "$remark" "$node_json"
+            ;;
+        hysteria2)
+            generate_hysteria2_link_from_config "$user_password" "$remark" "$node_json"
             ;;
         *)
             echo ""
@@ -3057,4 +3107,184 @@ regenerate_subscription_content() {
        "$sub_db" > "${sub_db}.tmp" && mv "${sub_db}.tmp" "$sub_db"
 
     return 0
+}
+
+#================================================================
+# 订阅管理菜单
+#================================================================
+
+# 订阅管理主菜单
+menu_subscription() {
+    while true; do
+        clear
+        echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║           订阅管理                   ║${NC}"
+        echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+        echo ""
+        echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${GREEN}1.${NC}  生成订阅链接"
+        echo -e "${GREEN}2.${NC}  查看单个节点链接"
+        echo -e "${GREEN}3.${NC}  查看所有订阅"
+        echo -e "${GREEN}4.${NC}  删除订阅"
+        echo ""
+        echo -e "${GREEN}0.${NC}  返回主菜单"
+        echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo ""
+        read -p "请选择 [0-4]: " choice
+
+        case $choice in
+            1)
+                generate_subscription_with_user
+                read -p "按 Enter 键继续..."
+                ;;
+            2)
+                show_node_share_link
+                read -p "按 Enter 键继续..."
+                ;;
+            3)
+                list_subscriptions
+                read -p "按 Enter 键继续..."
+                ;;
+            4)
+                delete_subscription
+                read -p "按 Enter 键继续..."
+                ;;
+            0)
+                return
+                ;;
+            *)
+                print_error "无效选择"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# 查看所有订阅
+list_subscriptions() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║           订阅列表                   ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    local sub_db="${DATA_DIR}/subscriptions.json"
+    if [[ ! -f "$sub_db" ]]; then
+        print_warning "暂无订阅"
+        return 0
+    fi
+
+    local sub_count=$(jq -r '.subscriptions | length' "$sub_db" 2>/dev/null)
+    if [[ "$sub_count" -eq 0 ]]; then
+        print_warning "暂无订阅"
+        return 0
+    fi
+
+    echo -e "${YELLOW}共有 $sub_count 个订阅：${NC}"
+    echo ""
+
+    local index=1
+    while IFS= read -r sub; do
+        if [[ -z "$sub" || "$sub" == "null" ]]; then
+            continue
+        fi
+
+        local name=$(echo "$sub" | jq -r '.name // "未命名"')
+        local url=$(echo "$sub" | jq -r '.url // "N/A"')
+        local type=$(echo "$sub" | jq -r '.type // "N/A"')
+        local created=$(echo "$sub" | jq -r '.created // "N/A"')
+
+        echo -e "${CYAN}[$index]${NC} ${YELLOW}$name${NC}"
+        echo -e "  类型: ${GREEN}$type${NC}"
+        echo -e "  创建时间: $created"
+        echo -e "  订阅URL: ${BLUE}$url${NC}"
+        echo ""
+
+        ((index++))
+    done < <(jq -c '.subscriptions[]' "$sub_db" 2>/dev/null)
+}
+
+# 删除订阅
+delete_subscription() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║           删除订阅                   ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    local sub_db="${DATA_DIR}/subscriptions.json"
+    if [[ ! -f "$sub_db" ]]; then
+        print_warning "暂无订阅"
+        return 0
+    fi
+
+    local sub_count=$(jq -r '.subscriptions | length' "$sub_db" 2>/dev/null)
+    if [[ "$sub_count" -eq 0 ]]; then
+        print_warning "暂无订阅"
+        return 0
+    fi
+
+    # 显示订阅列表
+    echo -e "${YELLOW}订阅列表：${NC}"
+    echo ""
+
+    local index=1
+    while IFS= read -r sub; do
+        if [[ -z "$sub" || "$sub" == "null" ]]; then
+            continue
+        fi
+
+        local name=$(echo "$sub" | jq -r '.name // "未命名"')
+        local type=$(echo "$sub" | jq -r '.type // "N/A"')
+
+        printf "${CYAN}[%d]${NC} ${YELLOW}%-30s${NC} (类型: %s)\n" "$index" "$name" "$type"
+        ((index++))
+    done < <(jq -c '.subscriptions[]' "$sub_db" 2>/dev/null)
+
+    echo ""
+    read -p "请输入订阅序号 (0取消): " sub_index
+
+    if [[ "$sub_index" == "0" ]]; then
+        print_info "取消删除"
+        return 0
+    fi
+
+    # 验证输入
+    if [[ ! "$sub_index" =~ ^[0-9]+$ ]] || [[ "$sub_index" -lt 1 ]] || [[ "$sub_index" -gt "$((index-1))" ]]; then
+        print_error "无效的序号"
+        return 1
+    fi
+
+    # 获取订阅信息
+    local sub=$(jq -c ".subscriptions[$((sub_index-1))]" "$sub_db" 2>/dev/null)
+    if [[ -z "$sub" || "$sub" == "null" ]]; then
+        print_error "订阅不存在"
+        return 1
+    fi
+
+    local name=$(echo "$sub" | jq -r '.name // "未命名"')
+    local file=$(echo "$sub" | jq -r '.file // ""')
+
+    echo ""
+    read -p "确认删除订阅 '$name'? [y/N]: " confirm
+
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        print_info "取消删除"
+        return 0
+    fi
+
+    # 删除订阅文件
+    if [[ -n "$file" && -f "$file" ]]; then
+        rm -f "$file"
+        print_success "已删除订阅文件: $file"
+    fi
+
+    # 从数据库删除
+    jq ".subscriptions |= del(.[$((sub_index-1))])" "$sub_db" > "${sub_db}.tmp"
+    mv "${sub_db}.tmp" "$sub_db"
+
+    # 删除元数据
+    delete_subscription_metadata "$name"
+
+    print_success "订阅 '$name' 已删除"
 }

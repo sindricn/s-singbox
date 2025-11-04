@@ -100,10 +100,22 @@ install_sing-box() {
     systemctl daemon-reload
     systemctl enable sing-box
 
-    # 不要立即启动服务，让用户添加节点后再启动
-    print_success "sing-box 安装完成！版本: v${latest_version}"
-    print_info "请先添加节点，然后启动服务"
-    print_info "启动命令: systemctl start sing-box"
+    # 启动服务
+    print_info "启动 sing-box 服务..."
+    systemctl start sing-box
+    sleep 2
+
+    # 检查启动状态
+    if systemctl is-active --quiet sing-box; then
+        print_success "sing-box 安装完成！版本: v${latest_version}"
+        print_success "服务运行状态: $(systemctl is-active sing-box)"
+    else
+        print_success "sing-box 安装完成！版本: v${latest_version}"
+        print_warning "服务启动失败，请检查配置"
+        print_info "查看日志: journalctl -u sing-box -n 50"
+        print_info "验证配置: $SINGBOX_BIN check -c $SINGBOX_CONFIG"
+        systemctl status sing-box --no-pager -l
+    fi
 }
 
 # 卸载 sing-box

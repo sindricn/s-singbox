@@ -297,8 +297,11 @@ show_main_menu() {
     echo -e "${CYAN}│${NC}  ${GREEN}7.${NC}  出站规则                       ${CYAN}│${NC}"
     echo -e "${CYAN}│${NC}  ${GREEN}8.${NC}  防火墙管理                     ${CYAN}│${NC}"
     echo -e "${CYAN}├─────────────────────────────────────┤${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}9.${NC}  脚本管理                       ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}10.${NC} 关于脚本                       ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}9.${NC}  CF 隧道管理 ${YELLOW}[NEW]${NC}            ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}10.${NC} BBR 加速管理 ${YELLOW}[NEW]${NC}           ${CYAN}│${NC}"
+    echo -e "${CYAN}├─────────────────────────────────────┤${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}11.${NC} 脚本管理                       ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}12.${NC} 关于脚本                       ${CYAN}│${NC}"
     echo -e "${CYAN}│${NC}  ${GREEN}0.${NC}  退出脚本                       ${CYAN}│${NC}"
     echo -e "${CYAN}└─────────────────────────────────────┘${NC}"
     echo ""
@@ -568,6 +571,9 @@ menu_node_add() {
         echo -e "${CYAN}║          添加节点                    ║${NC}"
         echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
         echo ""
+        echo -e "${YELLOW}━━━━━━━ 🚀 快速搭建（推荐） ━━━━━━━${NC}"
+        echo -e "${GREEN}Q.${NC}  ${CYAN}快速搭建${NC} - 一键配置常用节点"
+        echo ""
         echo -e "${YELLOW}━━━━━━━ 主流代理协议 ━━━━━━━${NC}"
         echo -e "${GREEN}1.${NC}  VLESS    - 通用代理（支持 XTLS）"
         echo -e "${GREEN}2.${NC}  VMess    - V2Ray 经典协议"
@@ -587,9 +593,10 @@ menu_node_add() {
         echo ""
         echo -e "${GREEN}0.${NC}  返回上级菜单"
         echo ""
-        read -p "请选择协议 [0-11]: " choice
+        read -p "请选择协议 [0-11/Q]: " choice
 
         case $choice in
+            q|Q) menu_quick_setup ;;
             1) add_vless_node ;;
             2) add_vmess_node ;;
             3) add_trojan_node ;;
@@ -961,10 +968,18 @@ main() {
                 read -p "按回车键继续..."
                 ;;
             9)
+                # CF 隧道管理
+                menu_cf_tunnel
+                ;;
+            10)
+                # BBR 加速管理
+                menu_bbr
+                ;;
+            11)
                 # 脚本管理
                 menu_script
                 ;;
-            10)
+            12)
                 # 关于脚本
                 show_about
                 ;;

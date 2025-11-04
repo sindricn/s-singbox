@@ -2190,3 +2190,271 @@ add_anytls_node() {
         echo -e "${YELLOW}提示：未启用 TLS 可能降低安全性${NC}"
     fi
 }
+
+# ============================================================================
+# 快速搭建节点功能
+# ============================================================================
+
+# 快速搭建 VLESS + Reality 节点（一键配置）
+quick_setup_vless_reality() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║   快速搭建 VLESS + Reality 节点    ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${YELLOW}功能说明：${NC}"
+    echo -e "  • Reality 是最新的抗审查协议"
+    echo -e "  • 无需域名和证书"
+    echo -e "  • 伪装成任意HTTPS网站"
+    echo -e "  • 自动生成密钥对"
+    echo ""
+
+    # 1. 端口配置
+    read -p "请输入监听端口 [默认: 443]: " port
+    port=${port:-443}
+
+    if check_port_exists "$port"; then
+        print_error "端口 $port 已被占用，请使用其他端口"
+        return 1
+    fi
+
+    # 2. 伪装域名（目标网站）
+    echo ""
+    echo -e "${CYAN}选择伪装目标网站：${NC}"
+    echo "1. www.apple.com (推荐)"
+    echo "2. www.microsoft.com"
+    echo "3. www.cloudflare.com"
+    echo "4. 自定义域名"
+    read -p "请选择 [1-4]: " dest_choice
+
+    local dest_server
+    case $dest_choice in
+        1) dest_server="www.apple.com" ;;
+        2) dest_server="www.microsoft.com" ;;
+        3) dest_server="www.cloudflare.com" ;;
+        4)
+            read -p "请输入目标域名: " dest_server
+            if [[ -z "$dest_server" ]]; then
+                print_error "目标域名不能为空"
+                return 1
+            fi
+            ;;
+        *) dest_server="www.apple.com" ;;
+    esac
+
+    # 3. 生成 Reality 密钥对
+    print_info "正在生成 Reality 密钥对..."
+    local keypair_output=$(generate_reality_keypair)
+    if [[ $? -ne 0 ]]; then
+        print_error "密钥生成失败"
+        return 1
+    fi
+
+    local private_key=$(echo "$keypair_output" | grep -i "Private" | awk '{print $NF}')
+    local public_key=$(echo "$keypair_output" | grep -i "Public" | awk '{print $NF}')
+
+    if [[ -z "$private_key" || -z "$public_key" ]]; then
+        print_error "密钥解析失败"
+        return 1
+    fi
+
+    # 4. Short ID (可选)
+    local short_ids='["","0123456789abcdef"]'
+
+    # 5. 构建 extra_config
+    local extra_config=$(jq -n \
+        --arg dest "$dest_server" \
+        --arg private_key "$private_key" \
+        --arg public_key "$public_key" \
+        --argjson short_ids "$short_ids" \
+        '{
+            dest_server: $dest,
+            private_key: $private_key,
+            public_key: $public_key,
+            short_ids: $short_ids
+        }')
+
+    # 6. 保存节点信息
+    save_node_info "vless" "$port" "tcp" "reality" "$extra_config" "vless-reality-$port"
+
+    # 7. 绑定 admin 用户
+    local admin_info=$(bind_admin_to_node "$port" "vless")
+    if [[ $? -ne 0 ]]; then
+        print_error "绑定默认用户失败"
+        return 1
+    fi
+
+    IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
+
+    # 8. 生成配置并重启
+    generate_singbox_config
+    restart_sing-box
+
+    # 9. 显示结果
+    print_success "✅ VLESS + Reality 节点创建成功！"
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════${NC}"
+    echo -e "${YELLOW}节点信息：${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════${NC}"
+    echo -e "  端口: ${GREEN}$port${NC}"
+    echo -e "  协议: ${GREEN}VLESS + Reality${NC}"
+    echo -e "  伪装域名: ${GREEN}$dest_server${NC}"
+    echo -e "  UUID: ${GREEN}$admin_uuid${NC}"
+    echo -e "  Public Key: ${GREEN}$public_key${NC}"
+    echo ""
+
+    # 生成分享链接
+    local server_ip=$(curl -s4 ifconfig.me || curl -s4 icanhazip.com)
+    if [[ -n "$server_ip" ]]; then
+        local share_link="vless://${admin_uuid}@${server_ip}:${port}?type=tcp&security=reality&pbk=${public_key}&sni=${dest_server}&fp=chrome#Reality-${admin_remark}"
+        echo -e "${CYAN}分享链接：${NC}"
+        echo -e "${GREEN}$share_link${NC}"
+    fi
+    echo ""
+}
+
+# 快速搭建 Hysteria2 节点（一键配置）
+quick_setup_hysteria2() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║     快速搭建 Hysteria2 节点         ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${YELLOW}功能说明：${NC}"
+    echo -e "  • 基于 QUIC 的高性能协议"
+    echo -e "  • 适合高延迟、高丢包环境"
+    echo -e "  • 支持自签名证书"
+    echo -e "  • 自动配置混淆"
+    echo ""
+
+    # 1. 端口配置
+    read -p "请输入监听端口 [默认: 443]: " port
+    port=${port:-443}
+
+    if check_port_exists "$port"; then
+        print_error "端口 $port 已被占用，请使用其他端口"
+        return 1
+    fi
+
+    # 2. 域名配置
+    read -p "请输入域名 [默认: example.com]: " tls_domain
+    tls_domain=${tls_domain:-example.com}
+
+    # 3. 自动生成自签名证书
+    print_info "正在生成自签名证书..."
+    if declare -f generate_self_signed_cert &>/dev/null; then
+        generate_self_signed_cert "$tls_domain"
+    else
+        print_error "证书生成函数不存在"
+        return 1
+    fi
+
+    local tls_cert="${SINGBOX_DIR}/certs/${tls_domain}.crt"
+    local tls_key="${SINGBOX_DIR}/certs/${tls_domain}.key"
+
+    if [[ ! -f "$tls_cert" || ! -f "$tls_key" ]]; then
+        print_error "证书生成失败"
+        return 1
+    fi
+
+    # 4. 速率限制（默认值）
+    local up_mbps=100
+    local down_mbps=100
+
+    # 5. 自动启用混淆
+    local obfs_password=$(openssl rand -base64 16)
+    print_info "已自动生成混淆密码: $obfs_password"
+
+    # 6. 构建 extra_config
+    local extra_config=$(jq -n \
+        --arg tls_domain "$tls_domain" \
+        --arg tls_cert "$tls_cert" \
+        --arg tls_key "$tls_key" \
+        --argjson up_mbps "$up_mbps" \
+        --argjson down_mbps "$down_mbps" \
+        --arg obfs_password "$obfs_password" \
+        '{
+            tls_domain: $tls_domain,
+            tls_cert: $tls_cert,
+            tls_key: $tls_key,
+            up_mbps: $up_mbps,
+            down_mbps: $down_mbps,
+            obfs_password: $obfs_password
+        }')
+
+    # 7. 保存节点信息
+    save_node_info "hysteria2" "$port" "udp" "tls" "$extra_config" "hy2-$port"
+
+    # 8. 绑定 admin 用户
+    local admin_info=$(bind_admin_to_node "$port" "hysteria2")
+    if [[ $? -ne 0 ]]; then
+        print_error "绑定默认用户失败"
+        return 1
+    fi
+
+    IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
+
+    # 9. 生成配置并重启
+    generate_singbox_config
+    restart_sing-box
+
+    # 10. 显示结果
+    print_success "✅ Hysteria2 节点创建成功！"
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════${NC}"
+    echo -e "${YELLOW}节点信息：${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════${NC}"
+    echo -e "  端口: ${GREEN}$port${NC}"
+    echo -e "  协议: ${GREEN}Hysteria2${NC}"
+    echo -e "  域名: ${GREEN}$tls_domain${NC}"
+    echo -e "  密码: ${GREEN}$admin_password${NC}"
+    echo -e "  混淆: ${GREEN}Salamander${NC}"
+    echo -e "  混淆密码: ${GREEN}$obfs_password${NC}"
+    echo -e "  速率: ${GREEN}${up_mbps}/${down_mbps} Mbps${NC}"
+    echo ""
+
+    # 生成分享链接
+    local server_ip=$(curl -s4 ifconfig.me || curl -s4 icanhazip.com)
+    if [[ -n "$server_ip" ]]; then
+        local share_link="hysteria2://${admin_password}@${server_ip}:${port}?obfs=salamander&obfs-password=${obfs_password}&sni=${tls_domain}#HY2-${admin_remark}"
+        echo -e "${CYAN}分享链接：${NC}"
+        echo -e "${GREEN}$share_link${NC}"
+    fi
+    echo ""
+}
+
+# 快速搭建菜单
+menu_quick_setup() {
+    while true; do
+        clear
+        echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║        快速搭建节点                  ║${NC}"
+        echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+        echo ""
+        echo -e "${YELLOW}━━━━━━━ 一键快速搭建 ━━━━━━━${NC}"
+        echo -e "${GREEN}1.${NC}  VLESS + Reality   - 无需证书，抗审查"
+        echo -e "${GREEN}2.${NC}  Hysteria2         - 高性能 QUIC 协议"
+        echo ""
+        echo -e "${GREEN}0.${NC}  返回上级菜单"
+        echo ""
+        read -p "请选择 [0-2]: " choice
+
+        case $choice in
+            1)
+                quick_setup_vless_reality
+                read -p "按 Enter 键继续..."
+                ;;
+            2)
+                quick_setup_hysteria2
+                read -p "按 Enter 键继续..."
+                ;;
+            0)
+                return
+                ;;
+            *)
+                print_error "无效选择"
+                sleep 1
+                ;;
+        esac
+    done
+}

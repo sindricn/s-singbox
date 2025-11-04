@@ -93,6 +93,21 @@ install_sing-box() {
 # 卸载 sing-box
 uninstall_sing-box() {
     print_warning "开始卸载 sing-box..."
+    echo ""
+
+    # 检查是否已安装
+    if [[ ! -f "$SINGBOX_BIN" && ! -f "$SINGBOX_SERVICE" ]]; then
+        print_error "sing-box 未安装"
+        return 1
+    fi
+
+    # 显示将要删除的内容
+    echo -e "${YELLOW}将删除以下内容：${NC}"
+    [[ -f "$SINGBOX_BIN" ]] && echo "  - 二进制文件: $SINGBOX_BIN"
+    [[ -f "$SINGBOX_SERVICE" ]] && echo "  - 服务文件: $SINGBOX_SERVICE"
+    [[ -d "$SINGBOX_DIR" ]] && echo "  - 配置目录: $SINGBOX_DIR"
+    [[ -d "$DATA_DIR" ]] && echo "  - 数据目录: $DATA_DIR"
+    echo ""
 
     read -p "确认卸载 sing-box？[y/N]: " confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
@@ -100,18 +115,80 @@ uninstall_sing-box() {
         return 0
     fi
 
-    # 停止服务
-    if systemctl is-active --quiet sing-box; then
+    echo ""
+    print_info "正在卸载..."
+
+    # 1. 停止服务
+    if systemctl is-active --quiet sing-box 2>/dev/null; then
+        print_info "停止 sing-box 服务..."
         systemctl stop sing-box
+        if [[ $? -eq 0 ]]; then
+            print_success "服务已停止"
+        else
+            print_warning "停止服务失败"
+        fi
     fi
-    systemctl disable sing-box 2>/dev/null
 
-    # 删除文件
-    rm -f "$SINGBOX_SERVICE"
-    rm -rf "$SINGBOX_DIR"
+    # 2. 禁用服务
+    if systemctl is-enabled --quiet sing-box 2>/dev/null; then
+        print_info "禁用 sing-box 服务..."
+        systemctl disable sing-box 2>/dev/null
+        if [[ $? -eq 0 ]]; then
+            print_success "服务已禁用"
+        else
+            print_warning "禁用服务失败"
+        fi
+    fi
 
+    # 3. 删除服务文件
+    if [[ -f "$SINGBOX_SERVICE" ]]; then
+        print_info "删除服务文件..."
+        rm -f "$SINGBOX_SERVICE"
+        if [[ ! -f "$SINGBOX_SERVICE" ]]; then
+            print_success "服务文件已删除"
+        else
+            print_error "删除服务文件失败"
+        fi
+    fi
+
+    # 4. 删除二进制文件
+    if [[ -f "$SINGBOX_BIN" ]]; then
+        print_info "删除二进制文件..."
+        rm -f "$SINGBOX_BIN"
+        if [[ ! -f "$SINGBOX_BIN" ]]; then
+            print_success "二进制文件已删除"
+        else
+            print_error "删除二进制文件失败"
+        fi
+    fi
+
+    # 5. 删除配置和数据目录
+    if [[ -d "$SINGBOX_DIR" ]]; then
+        print_info "删除配置和数据目录..."
+        rm -rf "$SINGBOX_DIR"
+        if [[ ! -d "$SINGBOX_DIR" ]]; then
+            print_success "目录已删除"
+        else
+            print_error "删除目录失败"
+        fi
+    fi
+
+    # 6. 重新加载 systemd
+    print_info "重新加载 systemd..."
     systemctl daemon-reload
-    print_success "sing-box 卸载完成"
+
+    echo ""
+    # 验证卸载结果
+    if [[ ! -f "$SINGBOX_BIN" && ! -f "$SINGBOX_SERVICE" && ! -d "$SINGBOX_DIR" ]]; then
+        print_success "✅ sing-box 卸载完成"
+        return 0
+    else
+        print_error "❌ 卸载未完全成功，请检查："
+        [[ -f "$SINGBOX_BIN" ]] && echo "  - 二进制文件仍存在: $SINGBOX_BIN"
+        [[ -f "$SINGBOX_SERVICE" ]] && echo "  - 服务文件仍存在: $SINGBOX_SERVICE"
+        [[ -d "$SINGBOX_DIR" ]] && echo "  - 目录仍存在: $SINGBOX_DIR"
+        return 1
+    fi
 }
 
 # 更新 sing-box

@@ -97,17 +97,51 @@ install_sing-box() {
         echo '{"bindings":[]}' > "$NODE_USERS_FILE"
     fi
 
+    # 创建配置目录（如果不存在）
+    mkdir -p "$(dirname "$SINGBOX_CONFIG")"
+
     # 创建配置文件（简单默认配置，无节点）
     print_info "创建默认配置..."
     if [[ ! -f "$SINGBOX_CONFIG" ]]; then
         create_default_config
     fi
 
-    # 检查 systemd 服务
-    if systemctl list-unit-files | grep -q "sing-box.service"; then
-        print_success "systemd 服务已配置"
+    # 重新加载 systemd
+    print_info "重新加载 systemd..."
+    systemctl daemon-reload
 
+    # 检查 systemd 服务（多种可能的位置）
+    local service_found=false
+    local service_path=""
+
+    if [[ -f "/etc/systemd/system/sing-box.service" ]]; then
+        service_found=true
+        service_path="/etc/systemd/system/sing-box.service"
+    elif [[ -f "/lib/systemd/system/sing-box.service" ]]; then
+        service_found=true
+        service_path="/lib/systemd/system/sing-box.service"
+    elif [[ -f "/usr/lib/systemd/system/sing-box.service" ]]; then
+        service_found=true
+        service_path="/usr/lib/systemd/system/sing-box.service"
+    fi
+
+    if [[ "$service_found" == "true" ]]; then
+        print_success "systemd 服务已配置: $service_path"
+    else
+        print_warning "官方脚本未创建 systemd 服务，正在手动创建..."
+        create_systemd_service
+        systemctl daemon-reload
+        if [[ -f "/etc/systemd/system/sing-box.service" ]]; then
+            print_success "systemd 服务创建成功"
+            service_found=true
+        else
+            print_error "systemd 服务创建失败"
+        fi
+    fi
+
+    if [[ "$service_found" == "true" ]]; then
         # 启用并启动服务
+        print_info "启用并启动服务..."
         systemctl enable sing-box >/dev/null 2>&1
         systemctl restart sing-box
 
@@ -120,9 +154,10 @@ install_sing-box() {
             print_warning "服务启动失败，请检查配置"
             print_info "查看日志: journalctl -u sing-box -n 50"
             print_info "验证配置: sing-box check -c $SINGBOX_CONFIG"
+            echo ""
+            print_info "显示服务状态："
+            systemctl status sing-box --no-pager -l | head -20
         fi
-    else
-        print_warning "systemd 服务未找到，可能需要手动配置"
     fi
 
     echo ""
@@ -130,7 +165,12 @@ install_sing-box() {
     echo ""
     print_info "配置文件: $SINGBOX_CONFIG"
     print_info "数据目录: $DATA_DIR"
-    print_info "服务管理: systemctl {start|stop|restart|status} sing-box"
+    if [[ "$service_found" == "true" ]]; then
+        print_info "服务管理: systemctl {start|stop|restart|status} sing-box"
+    else
+        print_warning "systemd 服务未配置，需要手动启动"
+        print_info "手动启动: sing-box run -c $SINGBOX_CONFIG"
+    fi
 }
 
 # 卸载 sing-box（使用包管理器）
@@ -532,6 +572,19 @@ EOF
 # 创建 systemd 服务
 # 注意：官方安装脚本会自动创建服务，此函数仅用于特殊情况
 create_systemd_service() {
+    # 确定 sing-box 二进制路径
+    local singbox_bin_path=$(which sing-box 2>/dev/null || echo "/usr/local/bin/sing-box")
+
+    # 确定配置文件路径（优先使用官方路径）
+    local config_path="$SINGBOX_CONFIG"
+    if [[ -f "/etc/sing-box/config.json" ]]; then
+        config_path="/etc/sing-box/config.json"
+    fi
+
+    print_info "创建 systemd 服务..."
+    print_info "二进制路径: $singbox_bin_path"
+    print_info "配置路径: $config_path"
+
     cat > "$SINGBOX_SERVICE" <<EOF
 [Unit]
 Description=sing-box service
@@ -543,7 +596,7 @@ Type=simple
 User=root
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
-ExecStart=${SINGBOX_BIN} run -c ${SINGBOX_CONFIG}
+ExecStart=${singbox_bin_path} run -c ${config_path}
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=10s

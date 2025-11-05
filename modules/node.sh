@@ -103,11 +103,13 @@ test_reality_keygen() {
 
     # 检查 sing-box 路径
     echo -e "${YELLOW}1. 检查 sing-box 安装：${NC}"
-    if [[ -f "$SINGBOX_BIN" ]]; then
-        print_success "sing-box 已安装: $SINGBOX_BIN"
-        echo "   版本: $("$SINGBOX_BIN" version 2>&1 | head -1)"
+    if command -v sing-box &>/dev/null; then
+        local singbox_path=$(command -v sing-box)
+        print_success "sing-box 已安装: $singbox_path"
+        echo "   版本: $(sing-box version 2>&1 | head -1)"
     else
-        print_error "sing-box 未安装: $SINGBOX_BIN"
+        print_error "sing-box 未安装"
+        echo "   请先安装 sing-box（菜单选项 1 -> 1）"
         return 1
     fi
 
@@ -159,13 +161,13 @@ test_reality_keygen() {
 # 生成 Reality 密钥对
 generate_reality_keypair() {
     # 检查 sing-box 是否安装
-    if [[ ! -f "$SINGBOX_BIN" ]]; then
+    if ! command -v sing-box &>/dev/null; then
         print_error "sing-box 未安装，请先安装 sing-box 内核"
         return 1
     fi
 
     # 尝试生成密钥对
-    local output=$("$SINGBOX_BIN" x25519 2>&1)
+    local output=$(sing-box x25519 2>&1)
     local exit_code=$?
 
     # 检查是否成功
@@ -372,7 +374,7 @@ quick_add_vless_reality() {
     print_info "生成 Reality 密钥对..."
 
     # 先检查 sing-box 是否安装
-    if [[ ! -f "$SINGBOX_BIN" ]]; then
+    if ! command -v sing-box &>/dev/null; then
         print_error "sing-box 未安装！请先通过菜单安装 sing-box 内核"
         echo ""
         print_info "安装路径: 主菜单 -> 1. 内核管理 -> 1. 安装 sing-box"
@@ -384,11 +386,12 @@ quick_add_vless_reality() {
         print_error "密钥生成失败"
         echo ""
         print_info "调试信息："
-        echo "  sing-box 路径: $SINGBOX_BIN"
-        echo "  sing-box 版本: $("$SINGBOX_BIN" version 2>&1 | head -1)"
+        local singbox_path=$(command -v sing-box)
+        echo "  sing-box 路径: $singbox_path"
+        echo "  sing-box 版本: $(sing-box version 2>&1 | head -1)"
         echo ""
         print_info "尝试手动生成密钥："
-        echo "  运行命令: $SINGBOX_BIN x25519"
+        echo "  运行命令: sing-box x25519"
         return 1
     fi
 
@@ -2352,7 +2355,7 @@ quick_setup_vless_reality() {
     print_info "生成 Reality 密钥对..."
 
     # 先检查 sing-box 是否安装
-    if [[ ! -f "$SINGBOX_BIN" ]]; then
+    if ! command -v sing-box &>/dev/null; then
         print_error "sing-box 未安装！请先通过菜单安装 sing-box 内核"
         return 1
     fi
@@ -2362,11 +2365,12 @@ quick_setup_vless_reality() {
         print_error "密钥生成失败"
         echo ""
         print_info "调试信息："
-        echo "  sing-box 路径: $SINGBOX_BIN"
-        echo "  sing-box 版本: $("$SINGBOX_BIN" version 2>&1 | head -1)"
+        local singbox_path=$(command -v sing-box)
+        echo "  sing-box 路径: $singbox_path"
+        echo "  sing-box 版本: $(sing-box version 2>&1 | head -1)"
         echo ""
         print_info "尝试手动生成密钥："
-        echo "  运行命令: $SINGBOX_BIN generate reality-keypair"
+        echo "  运行命令: sing-box generate reality-keypair"
         return 1
     fi
 
@@ -2500,7 +2504,7 @@ quick_setup_hysteria2() {
     echo ""
 
     # 检查 sing-box 是否已安装
-    if [[ ! -f "$SINGBOX_BIN" ]]; then
+    if ! command -v sing-box &>/dev/null; then
         print_error "sing-box 未安装！请先通过菜单安装 sing-box 内核"
         return 1
     fi

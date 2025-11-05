@@ -516,18 +516,18 @@ generate_singbox_transport_config() {
 
 # 验证配置文件
 validate_singbox_config() {
-    if [[ ! -f "$SINGBOX_BIN" ]]; then
+    if ! command -v sing-box &>/dev/null; then
         print_error "sing-box未安装"
         return 1
     fi
 
     print_info "验证配置文件..."
-    if "$SINGBOX_BIN" check -c "$SINGBOX_CONFIG" &>/dev/null; then
+    if sing-box check -c "$SINGBOX_CONFIG" &>/dev/null; then
         print_success "配置文件验证通过"
         return 0
     else
         print_error "配置文件验证失败"
-        "$SINGBOX_BIN" check -c "$SINGBOX_CONFIG"
+        sing-box check -c "$SINGBOX_CONFIG"
         return 1
     fi
 }

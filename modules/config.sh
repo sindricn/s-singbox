@@ -178,13 +178,13 @@ validate_config() {
     fi
 
     # 使用 sing-box 内置验证
-    if [[ -f "$SINGBOX_BIN" ]]; then
-        if "$SINGBOX_BIN" test -config "$SINGBOX_CONFIG" >/dev/null 2>&1; then
+    if command -v sing-box &>/dev/null; then
+        if sing-box test -config "$SINGBOX_CONFIG" >/dev/null 2>&1; then
             print_success "配置验证通过"
             return 0
         else
             print_error "配置验证失败"
-            "$SINGBOX_BIN" test -config "$SINGBOX_CONFIG"
+            sing-box test -config "$SINGBOX_CONFIG"
             return 1
         fi
     else

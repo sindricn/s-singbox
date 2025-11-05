@@ -86,13 +86,14 @@ check_service_health() {
 
 # 检查sing-box二进制文件
 check_binary() {
-    if [[ ! -f "$SINGBOX_BIN" ]]; then
+    if ! command -v sing-box &>/dev/null; then
         add_tip "$TIP_LEVEL_CRITICAL" "安装" "sing-box 程序未安装" "请先安装 sing-box"
         return 1
     fi
 
-    if [[ ! -x "$SINGBOX_BIN" ]]; then
-        add_tip "$TIP_LEVEL_ERROR" "权限" "sing-box 程序无执行权限" "运行: chmod +x $SINGBOX_BIN"
+    local singbox_path=$(command -v sing-box)
+    if [[ ! -x "$singbox_path" ]]; then
+        add_tip "$TIP_LEVEL_ERROR" "权限" "sing-box 程序无执行权限" "运行: chmod +x $singbox_path"
         return 1
     fi
 

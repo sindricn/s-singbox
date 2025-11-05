@@ -528,13 +528,13 @@ restart_sing-box() {
 
 # 查看版本
 show_version() {
-    if [[ ! -f "$SINGBOX_BIN" ]]; then
+    if ! command -v sing-box &>/dev/null; then
         print_error "sing-box 未安装"
         return 1
     fi
 
     echo -e "${CYAN}sing-box 版本信息：${NC}"
-    "$SINGBOX_BIN" version
+    sing-box version
 }
 
 # 创建默认配置

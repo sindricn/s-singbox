@@ -551,22 +551,18 @@ create_default_config() {
   "dns": {
     "servers": [
       {
+        "type": "https",
         "tag": "dns-remote",
-        "address": "https://1.1.1.1/dns-query",
-        "detour": "direct-out"
+        "server": "1.1.1.1",
+        "server_port": 443,
+        "path": "/dns-query"
       },
       {
-        "tag": "dns-local",
-        "address": "local",
-        "detour": "direct-out"
+        "type": "local",
+        "tag": "dns-local"
       }
     ],
-    "rules": [
-      {
-        "outbound": "any",
-        "server": "dns-local"
-      }
-    ],
+    "rules": [],
     "final": "dns-remote"
   },
   "inbounds": [],

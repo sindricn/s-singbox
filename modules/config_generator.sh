@@ -149,22 +149,18 @@ generate_singbox_config() {
             dns: {
                 servers: [
                     {
+                        type: "https",
                         tag: "dns-remote",
-                        address: "https://1.1.1.1/dns-query",
-                        detour: "direct-out"
+                        server: "1.1.1.1",
+                        server_port: 443,
+                        path: "/dns-query"
                     },
                     {
-                        tag: "dns-local",
-                        address: "local",
-                        detour: "direct-out"
+                        type: "local",
+                        tag: "dns-local"
                     }
                 ],
-                rules: [
-                    {
-                        outbound: "any",
-                        server: "dns-local"
-                    }
-                ],
+                rules: [],
                 final: "dns-remote"
             },
             inbounds: $inbounds,
@@ -435,9 +431,17 @@ generate_singbox_tls_config() {
             # Reality配置
             local server=$(echo "$extra" | jq -r '.dest_server // "www.apple.com"')
             local server_port=$(echo "$extra" | jq -r '.dest_port // 443')
-            local private_key=$(echo "$extra" | jq -r '.private_key')
+            local private_key=$(echo "$extra" | jq -r '.private_key // empty')
             # short_id 必须是数组格式，不能用 -r
             local short_ids=$(echo "$extra" | jq '.short_ids // ["","0123456789abcdef"]')
+
+            # 验证私钥
+            if [[ -z "$private_key" || "$private_key" == "null" ]]; then
+                print_error "Reality 节点私钥缺失 (端口: $port)"
+                print_error "节点数据: $(echo "$extra" | jq -c '.')"
+                print_error "请删除此节点并重新创建"
+                return 1
+            fi
 
             local tls_config=$(jq -n \
                 --argjson enabled "true" \

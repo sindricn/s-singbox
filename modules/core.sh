@@ -98,12 +98,32 @@ install_sing-box() {
     fi
 
     # 创建配置目录（如果不存在）
+    print_info "创建配置目录..."
     mkdir -p "$(dirname "$SINGBOX_CONFIG")"
+    if [[ ! -d "$(dirname "$SINGBOX_CONFIG")" ]]; then
+        print_error "配置目录创建失败: $(dirname "$SINGBOX_CONFIG")"
+        return 1
+    fi
+    print_success "配置目录: $(dirname "$SINGBOX_CONFIG")"
 
     # 创建配置文件（简单默认配置，无节点）
-    print_info "创建默认配置..."
     if [[ ! -f "$SINGBOX_CONFIG" ]]; then
-        create_default_config
+        if ! create_default_config; then
+            print_error "默认配置创建失败，安装中止"
+            return 1
+        fi
+    else
+        print_info "配置文件已存在: $SINGBOX_CONFIG"
+        # 验证现有配置
+        if command -v sing-box &>/dev/null; then
+            if ! sing-box check -c "$SINGBOX_CONFIG" &>/dev/null; then
+                print_warning "现有配置文件无效，重新创建..."
+                if ! create_default_config; then
+                    print_error "默认配置创建失败，安装中止"
+                    return 1
+                fi
+            fi
+        fi
     fi
 
     # 重新加载 systemd
@@ -519,6 +539,8 @@ show_version() {
 
 # 创建默认配置
 create_default_config() {
+    print_info "生成默认配置文件: $SINGBOX_CONFIG"
+
     cat > "$SINGBOX_CONFIG" <<'EOF'
 {
   "log": {
@@ -567,6 +589,43 @@ create_default_config() {
   }
 }
 EOF
+
+    # 验证配置文件
+    if [[ ! -f "$SINGBOX_CONFIG" ]]; then
+        print_error "配置文件创建失败"
+        return 1
+    fi
+
+    # 检查文件大小
+    local file_size=$(stat -c%s "$SINGBOX_CONFIG" 2>/dev/null || stat -f%z "$SINGBOX_CONFIG" 2>/dev/null)
+    if [[ -z "$file_size" || "$file_size" -eq 0 ]]; then
+        print_error "配置文件为空"
+        return 1
+    fi
+
+    # 验证 JSON 格式
+    if command -v jq &>/dev/null; then
+        if ! jq empty "$SINGBOX_CONFIG" 2>/dev/null; then
+            print_error "配置文件 JSON 格式错误"
+            cat "$SINGBOX_CONFIG"
+            return 1
+        fi
+    fi
+
+    # 使用 sing-box 验证配置
+    if command -v sing-box &>/dev/null; then
+        print_info "使用 sing-box 验证配置..."
+        if sing-box check -c "$SINGBOX_CONFIG" 2>&1 | tee /tmp/singbox_check.log; then
+            print_success "配置文件验证通过"
+        else
+            print_error "配置文件验证失败"
+            cat /tmp/singbox_check.log
+            return 1
+        fi
+    fi
+
+    print_success "配置文件创建成功 (大小: ${file_size} 字节)"
+    return 0
 }
 
 # 创建 systemd 服务

@@ -22,7 +22,6 @@ NC='\033[0m' # No Color
 # 全局变量（使用官方标准路径）
 # 官方标准路径参考: https://sing-box.sagernet.org/
 readonly SINGBOX_DIR="/etc/sing-box"                    # 配置目录（官方标准）
-readonly SINGBOX_BIN="/usr/local/bin/sing-box"         # 二进制文件
 readonly SINGBOX_CONFIG="${SINGBOX_DIR}/config.json"   # 配置文件（官方标准）
 readonly SINGBOX_SERVICE="/etc/systemd/system/sing-box.service"
 readonly DATA_DIR="/var/lib/sing-box"                  # 数据目录（官方标准）
@@ -30,6 +29,16 @@ readonly USERS_FILE="${DATA_DIR}/users.json"
 readonly NODES_FILE="${DATA_DIR}/nodes.json"
 readonly NODE_USERS_FILE="${DATA_DIR}/node_users.json"
 readonly SUBSCRIPTION_DIR="${DATA_DIR}/subscriptions"
+
+# 动态查找 sing-box 二进制文件位置
+# 优先使用系统中实际安装的位置，而不是固定路径
+if command -v sing-box &>/dev/null; then
+    # sing-box 已安装，获取实际路径
+    readonly SINGBOX_BIN="$(command -v sing-box)"
+else
+    # 未安装，使用默认路径（用于安装过程）
+    readonly SINGBOX_BIN="/usr/local/bin/sing-box"
+fi
 
 # 日志配置
 export LOG_FILE="/var/log/singbox-manager.log"
@@ -193,10 +202,13 @@ get_singbox_status() {
     local version="未安装"
     local status="${RED}未运行${NC}"
 
-    if [[ -f "$SINGBOX_BIN" ]]; then
-        version=$("$SINGBOX_BIN" version 2>/dev/null | head -1 | awk '{print $3}')
+    # 动态查找 sing-box 二进制位置（而不是只检查固定路径）
+    if command -v sing-box &>/dev/null; then
+        # 获取版本信息
+        version=$(sing-box version 2>/dev/null | head -1 | awk '{print $3}')
         [[ -z "$version" ]] && version="unknown"
 
+        # 检查服务运行状态
         if systemctl is-active --quiet sing-box; then
             status="${GREEN}运行中${NC}"
         else

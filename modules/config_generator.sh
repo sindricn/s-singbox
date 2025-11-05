@@ -429,8 +429,21 @@ generate_singbox_tls_config() {
     case $security in
         reality)
             # Reality配置
-            local server=$(echo "$extra" | jq -r '.dest_server // "www.apple.com"')
-            local server_port=$(echo "$extra" | jq -r '.dest_port // 443')
+            # 兼容两种格式：新格式 (dest_server/dest_port) 和旧格式 (dest)
+            local server=$(echo "$extra" | jq -r '.dest_server // empty')
+            local server_port=$(echo "$extra" | jq -r '.dest_port // empty')
+
+            # 如果新格式不存在，从旧格式 dest 中解析
+            if [[ -z "$server" || "$server" == "null" ]]; then
+                local dest=$(echo "$extra" | jq -r '.dest // "www.apple.com:443"')
+                server=$(echo "$dest" | cut -d':' -f1)
+                server_port=$(echo "$dest" | cut -d':' -f2)
+            fi
+
+            # 设置默认值
+            server=${server:-"www.apple.com"}
+            server_port=${server_port:-443}
+
             local private_key=$(echo "$extra" | jq -r '.private_key // empty')
             # short_id 必须是数组格式，不能用 -r
             local short_ids=$(echo "$extra" | jq '.short_ids // ["","0123456789abcdef"]')

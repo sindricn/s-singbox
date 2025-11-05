@@ -137,7 +137,7 @@ generate_singbox_config() {
         done < <(jq -c '.nodes[]' "$nodes_file" 2>/dev/null)
     fi
 
-    # 生成完整配置
+    # 生成完整配置（sing-box 1.11.0+ 兼容格式）
     local full_config=$(jq -n \
         --argjson inbounds "$inbounds" \
         '{
@@ -146,28 +146,43 @@ generate_singbox_config() {
                 level: "info",
                 timestamp: true
             },
+            dns: {
+                servers: [
+                    {
+                        tag: "dns-remote",
+                        address: "https://1.1.1.1/dns-query",
+                        detour: "direct-out"
+                    },
+                    {
+                        tag: "dns-local",
+                        address: "local",
+                        detour: "direct-out"
+                    }
+                ],
+                rules: [
+                    {
+                        outbound: "any",
+                        server: "dns-local"
+                    }
+                ],
+                final: "dns-remote"
+            },
             inbounds: $inbounds,
             outbounds: [
                 {
                     type: "direct",
-                    tag: "direct"
-                },
-                {
-                    type: "block",
-                    tag: "block"
-                },
-                {
-                    type: "dns",
-                    tag: "dns-out"
+                    tag: "direct-out"
                 }
             ],
             route: {
                 rules: [
                     {
                         protocol: "dns",
-                        outbound: "dns-out"
+                        action: "route",
+                        outbound: "direct-out"
                     }
                 ],
+                final: "direct-out",
                 auto_detect_interface: true
             }
         }')

@@ -10,6 +10,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # 加载模块
 source "${SCRIPT_DIR}/modules/common.sh"
 
+# 使用官方标准路径
+readonly SINGBOX_CONFIG_DIR="/etc/sing-box"
+readonly SINGBOX_CONFIG_FILE="/etc/sing-box/config.json"
+readonly SINGBOX_DATA_DIR="/var/lib/sing-box"
+
 # =============================================================================
 # 诊断报告
 # =============================================================================
@@ -138,18 +143,18 @@ check_singbox() {
     fi
 
     # 配置目录
-    if [[ -d /usr/local/singbox ]]; then
+    if [[ -d ${SINGBOX_CONFIG_DIR} ]]; then
         check_item "配置目录存在" "ok"
     else
         check_item "配置目录不存在" "warn"
     fi
 
     # 配置文件
-    if [[ -f /usr/local/singbox/config.json ]]; then
+    if [[ -f ${SINGBOX_CONFIG_FILE} ]]; then
         check_item "配置文件存在" "ok"
 
         # 验证配置
-        if /usr/local/bin/sing-box check -c /usr/local/singbox/config.json &>/dev/null; then
+        if /usr/local/bin/sing-box check -c ${SINGBOX_CONFIG_FILE} &>/dev/null; then
             check_item "配置文件有效" "ok"
         else
             check_item "配置文件无效" "fail"

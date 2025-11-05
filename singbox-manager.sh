@@ -19,12 +19,13 @@ CYAN='\033[0;36m'
 GRAY='\033[0;90m'
 NC='\033[0m' # No Color
 
-# 全局变量
-readonly SINGBOX_DIR="/usr/local/singbox"
-readonly SINGBOX_BIN="/usr/local/bin/sing-box"
-readonly SINGBOX_CONFIG="${SINGBOX_DIR}/config.json"
+# 全局变量（使用官方标准路径）
+# 官方标准路径参考: https://sing-box.sagernet.org/
+readonly SINGBOX_DIR="/etc/sing-box"                    # 配置目录（官方标准）
+readonly SINGBOX_BIN="/usr/local/bin/sing-box"         # 二进制文件
+readonly SINGBOX_CONFIG="${SINGBOX_DIR}/config.json"   # 配置文件（官方标准）
 readonly SINGBOX_SERVICE="/etc/systemd/system/sing-box.service"
-readonly DATA_DIR="${SINGBOX_DIR}/data"
+readonly DATA_DIR="/var/lib/sing-box"                  # 数据目录（官方标准）
 readonly USERS_FILE="${DATA_DIR}/users.json"
 readonly NODES_FILE="${DATA_DIR}/nodes.json"
 readonly NODE_USERS_FILE="${DATA_DIR}/node_users.json"

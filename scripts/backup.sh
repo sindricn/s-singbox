@@ -14,6 +14,10 @@ source "${SCRIPT_DIR}/modules/common.sh"
 # 配置
 # =============================================================================
 
+# 使用官方标准路径
+readonly SINGBOX_CONFIG_DIR="/etc/sing-box"
+readonly SINGBOX_DATA_DIR="/var/lib/sing-box"
+
 BACKUP_ROOT_DIR="${SCRIPT_DIR}/backups"
 MAX_BACKUPS=10
 
@@ -41,17 +45,17 @@ create_backup() {
     fi
 
     # 备份 sing-box 配置
-    if [[ -f /usr/local/singbox/config.json ]]; then
+    if [[ -f ${SINGBOX_CONFIG_DIR}/config.json ]]; then
         log_info "备份 sing-box 配置..."
         mkdir -p "${backup_dir}/singbox"
-        cp /usr/local/singbox/config.json "${backup_dir}/singbox/"
+        cp ${SINGBOX_CONFIG_DIR}/config.json "${backup_dir}/singbox/"
         check_item "sing-box 配置" "ok"
     fi
 
     # 备份证书（如果存在）
-    if [[ -d /usr/local/singbox/certs ]]; then
+    if [[ -d ${SINGBOX_CONFIG_DIR}/certs ]]; then
         log_info "备份证书..."
-        cp -r /usr/local/singbox/certs "${backup_dir}/singbox/"
+        cp -r ${SINGBOX_CONFIG_DIR}/certs "${backup_dir}/singbox/"
         check_item "证书文件" "ok"
     fi
 
@@ -221,15 +225,16 @@ restore_backup() {
     # 恢复 sing-box 配置
     if [[ -f "${extracted_dir}/singbox/config.json" ]]; then
         log_info "恢复 sing-box 配置..."
-        cp "${extracted_dir}/singbox/config.json" /usr/local/singbox/config.json
+        mkdir -p "${SINGBOX_CONFIG_DIR}"
+        cp "${extracted_dir}/singbox/config.json" ${SINGBOX_CONFIG_DIR}/config.json
         check_item "sing-box 配置" "ok"
     fi
 
     # 恢复证书
     if [[ -d "${extracted_dir}/singbox/certs" ]]; then
         log_info "恢复证书..."
-        rm -rf /usr/local/singbox/certs
-        cp -r "${extracted_dir}/singbox/certs" /usr/local/singbox/
+        rm -rf ${SINGBOX_CONFIG_DIR}/certs
+        cp -r "${extracted_dir}/singbox/certs" ${SINGBOX_CONFIG_DIR}/
         check_item "证书文件" "ok"
     fi
 

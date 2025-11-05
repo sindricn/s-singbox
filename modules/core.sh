@@ -634,15 +634,13 @@ create_systemd_service() {
     # 确定 sing-box 二进制路径
     local singbox_bin_path=$(which sing-box 2>/dev/null || echo "/usr/local/bin/sing-box")
 
-    # 确定配置文件路径（优先使用官方路径）
+    # 使用官方标准配置路径
     local config_path="$SINGBOX_CONFIG"
-    if [[ -f "/etc/sing-box/config.json" ]]; then
-        config_path="/etc/sing-box/config.json"
-    fi
 
     print_info "创建 systemd 服务..."
     print_info "二进制路径: $singbox_bin_path"
     print_info "配置路径: $config_path"
+    print_info "数据目录: $DATA_DIR"
 
     cat > "$SINGBOX_SERVICE" <<EOF
 [Unit]
@@ -653,6 +651,7 @@ After=network.target nss-lookup.target
 [Service]
 Type=simple
 User=root
+WorkingDirectory=${DATA_DIR}
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
 ExecStart=${singbox_bin_path} run -c ${config_path}

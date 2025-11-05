@@ -5,9 +5,11 @@
 # 功能：TLS 证书申请、续期、管理
 # =============================================================================
 
-# 证书存储目录
-CERT_DIR="/usr/local/singbox/certs"
-ACME_DIR="/usr/local/singbox/acme"
+# 证书存储目录（使用官方标准路径）
+# 证书存放在配置目录下
+CERT_DIR="${SINGBOX_DIR:-/etc/sing-box}/certs"
+# acme.sh 存放在数据目录下
+ACME_DIR="${DATA_DIR:-/var/lib/sing-box}/acme"
 ACME_SH="${ACME_DIR}/acme.sh"
 
 # =============================================================================

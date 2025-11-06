@@ -129,10 +129,17 @@ generate_singbox_config() {
             fi
 
             # 生成inbound配置（sing-box格式）
-            local inbound=$(generate_singbox_inbound "$port" "$protocol" "$transport" "$security" "$extra" "$users")
+            local inbound
+            if ! inbound=$(generate_singbox_inbound "$port" "$protocol" "$transport" "$security" "$extra" "$users"); then
+                print_error "生成入站配置失败: ${protocol}/${port}"
+                return 1
+            fi
 
             # 添加到inbounds列表
-            inbounds=$(echo "$inbounds" | jq ". += [$inbound]")
+            if ! inbounds=$(echo "$inbounds" | jq ". += [$inbound]"); then
+                print_error "合并入站配置失败: ${protocol}/${port}"
+                return 1
+            fi
 
         done < <(jq -c '.nodes[]' "$nodes_file" 2>/dev/null)
     fi
@@ -221,18 +228,24 @@ generate_singbox_inbound() {
                     listen: $listen,
                     listen_port: $listen_port,
                     users: $users
-                }')
+                }') || return 1
 
             # 添加TLS配置
             if [[ "$security" == "tls" || "$security" == "reality" ]]; then
-                local tls_config=$(generate_singbox_tls_config "$security" "$extra")
-                inbound=$(echo "$inbound" | jq --argjson tls "$tls_config" '. + {tls: $tls}')
+                local tls_config
+                if ! tls_config=$(generate_singbox_tls_config "$security" "$extra"); then
+                    return 1
+                fi
+                inbound=$(echo "$inbound" | jq --argjson tls "$tls_config" '. + {tls: $tls}') || return 1
             fi
 
             # 添加传输层配置
             if [[ "$transport" != "tcp" && "$transport" != "" ]]; then
-                local transport_config=$(generate_singbox_transport_config "$transport" "$extra")
-                inbound=$(echo "$inbound" | jq --argjson trans "$transport_config" '. + {transport: $trans}')
+                local transport_config
+                if ! transport_config=$(generate_singbox_transport_config "$transport" "$extra"); then
+                    return 1
+                fi
+                inbound=$(echo "$inbound" | jq --argjson trans "$transport_config" '. + {transport: $trans}') || return 1
             fi
             ;;
 
@@ -250,18 +263,24 @@ generate_singbox_inbound() {
                     listen: $listen,
                     listen_port: $listen_port,
                     users: $users
-                }')
+                }') || return 1
 
             # 添加TLS配置
             if [[ "$security" == "tls" ]]; then
-                local tls_config=$(generate_singbox_tls_config "$security" "$extra")
-                inbound=$(echo "$inbound" | jq --argjson tls "$tls_config" '. + {tls: $tls}')
+                local tls_config
+                if ! tls_config=$(generate_singbox_tls_config "$security" "$extra"); then
+                    return 1
+                fi
+                inbound=$(echo "$inbound" | jq --argjson tls "$tls_config" '. + {tls: $tls}') || return 1
             fi
 
             # 添加传输层配置
             if [[ "$transport" != "tcp" && "$transport" != "" ]]; then
-                local transport_config=$(generate_singbox_transport_config "$transport" "$extra")
-                inbound=$(echo "$inbound" | jq --argjson trans "$transport_config" '. + {transport: $trans}')
+                local transport_config
+                if ! transport_config=$(generate_singbox_transport_config "$transport" "$extra"); then
+                    return 1
+                fi
+                inbound=$(echo "$inbound" | jq --argjson trans "$transport_config" '. + {transport: $trans}') || return 1
             fi
             ;;
 
@@ -279,16 +298,22 @@ generate_singbox_inbound() {
                     listen: $listen,
                     listen_port: $listen_port,
                     users: $users
-                }')
+                }') || return 1
 
             # Trojan 必须启用TLS
-            local tls_config=$(generate_singbox_tls_config "tls" "$extra")
-            inbound=$(echo "$inbound" | jq --argjson tls "$tls_config" '. + {tls: $tls}')
+            local tls_config
+            if ! tls_config=$(generate_singbox_tls_config "tls" "$extra"); then
+                return 1
+            fi
+            inbound=$(echo "$inbound" | jq --argjson tls "$tls_config" '. + {tls: $tls}') || return 1
 
             # 添加传输层配置
             if [[ "$transport" != "tcp" && "$transport" != "" ]]; then
-                local transport_config=$(generate_singbox_transport_config "$transport" "$extra")
-                inbound=$(echo "$inbound" | jq --argjson trans "$transport_config" '. + {transport: $trans}')
+                local transport_config
+                if ! transport_config=$(generate_singbox_transport_config "$transport" "$extra"); then
+                    return 1
+                fi
+                inbound=$(echo "$inbound" | jq --argjson trans "$transport_config" '. + {transport: $trans}') || return 1
             fi
             ;;
 
@@ -310,7 +335,7 @@ generate_singbox_inbound() {
                     listen_port: $listen_port,
                     method: $method,
                     users: $users
-                }')
+                }') || return 1
             ;;
 
         hysteria2)
@@ -335,29 +360,35 @@ generate_singbox_inbound() {
                     up_mbps: $up_mbps,
                     down_mbps: $down_mbps,
                     users: $users
-                }')
+                }') || return 1
 
             # 添加混淆配置
             if [[ -n "$obfs_password" && "$obfs_password" != "null" ]]; then
-                local obfs_config=$(jq -n \
+                local obfs_config
+                if ! obfs_config=$(jq -n \
                     --arg password "$obfs_password" \
                     '{
                         type: "salamander",
                         salamander: {
                             password: $password
                         }
-                    }')
-                inbound=$(echo "$inbound" | jq --argjson obfs "$obfs_config" '. + {obfs: $obfs}')
+                    }'); then
+                    return 1
+                fi
+                inbound=$(echo "$inbound" | jq --argjson obfs "$obfs_config" '. + {obfs: $obfs}') || return 1
             fi
 
             # Hysteria2 必须启用TLS
-            local tls_config=$(generate_singbox_tls_config "tls" "$extra")
-            inbound=$(echo "$inbound" | jq --argjson tls "$tls_config" '. + {tls: $tls}')
+            local tls_config
+            if ! tls_config=$(generate_singbox_tls_config "tls" "$extra"); then
+                return 1
+            fi
+            inbound=$(echo "$inbound" | jq --argjson tls "$tls_config" '. + {tls: $tls}') || return 1
 
             # 添加伪装配置
             local masquerade=$(echo "$extra" | jq -r '.masquerade // "https://bing.com"')
             if [[ -n "$masquerade" && "$masquerade" != "null" ]]; then
-                inbound=$(echo "$inbound" | jq --arg masq "$masquerade" '. + {masquerade: $masq}')
+                inbound=$(echo "$inbound" | jq --arg masq "$masquerade" '. + {masquerade: $masq}') || return 1
             fi
             ;;
 
@@ -375,7 +406,7 @@ generate_singbox_inbound() {
                     listen: $listen,
                     listen_port: $listen_port,
                     users: $users
-                }')
+                }') || return 1
             ;;
 
         socks)
@@ -392,7 +423,7 @@ generate_singbox_inbound() {
                     listen: $listen,
                     listen_port: $listen_port,
                     users: $users
-                }')
+                }') || return 1
             ;;
 
         mixed)
@@ -409,7 +440,7 @@ generate_singbox_inbound() {
                     listen: $listen,
                     listen_port: $listen_port,
                     users: $users
-                }')
+                }') || return 1
             ;;
 
         *)
@@ -425,6 +456,7 @@ generate_singbox_inbound() {
 generate_singbox_tls_config() {
     local security=$1
     local extra=$2
+    local tls_config=""
 
     case $security in
         reality)
@@ -445,22 +477,26 @@ generate_singbox_tls_config() {
             server_port=${server_port:-443}
 
             local private_key=$(echo "$extra" | jq -r '.private_key // empty')
-            local short_ids=$(echo "$extra" | jq -r '.short_ids // ["","0123456789abcdef"]')
+            local short_id_json
+            if ! short_id_json=$(echo "$extra" | jq '.short_ids // ["","0123456789abcdef"]'); then
+                print_error "Reality 节点 short_id 解析失败"
+                return 1
+            fi
 
             # 验证私钥
             if [[ -z "$private_key" || "$private_key" == "null" ]]; then
-                print_error "Reality 节点私钥缺失 (端口: $port)"
+                print_error "Reality 节点私钥缺失"
                 print_error "节点数据: $(echo "$extra" | jq -c '.')"
                 print_error "请删除此节点并重新创建"
                 return 1
             fi
 
-            local tls_config=$(jq -n \
-                --argjson enabled "true" \
+            if ! tls_config=$(jq -n \
+                --argjson enabled true \
                 --arg server "$server" \
                 --argjson server_port "$server_port" \
                 --arg private_key "$private_key" \
-                --argjson short_ids "$short_ids" \
+                --argjson short_id "$short_id_json" \
                 '{
                     enabled: $enabled,
                     reality: {
@@ -470,9 +506,11 @@ generate_singbox_tls_config() {
                             server_port: $server_port
                         },
                         private_key: $private_key,
-                        short_id: $short_ids
+                        short_id: $short_id
                     }
-                }')
+                }'); then
+                return 1
+            fi
             ;;
 
         tls)
@@ -481,23 +519,25 @@ generate_singbox_tls_config() {
             local key_path=$(echo "$extra" | jq -r '.tls_key // ""')
 
             if [[ -n "$cert_path" && -n "$key_path" ]]; then
-                local tls_config=$(jq -n \
-                    --argjson enabled "true" \
+                if ! tls_config=$(jq -n \
+                    --argjson enabled true \
                     --arg cert "$cert_path" \
                     --arg key "$key_path" \
                     '{
                         enabled: $enabled,
                         certificate_path: $cert,
                         key_path: $key
-                    }')
+                    }'); then
+                    return 1
+                fi
             else
                 # 没有证书路径，返回基本TLS配置
-                local tls_config='{"enabled": true}'
+                tls_config='{"enabled": true}'
             fi
             ;;
 
         *)
-            local tls_config='{"enabled": false}'
+            tls_config='{"enabled": false}'
             ;;
     esac
 

@@ -508,6 +508,7 @@ show_config_menu() {
     echo -e "${GREEN}2.${NC} 查看配置"
     echo -e "${GREEN}3.${NC} 验证配置"
     echo -e "${GREEN}4.${NC} 恢复备份"
+    echo -e "${GREEN}5.${NC} 恢复默认配置 ${GRAY}(保留节点用户)${NC}"
     echo -e "${GREEN}0.${NC} 返回主菜单"
     echo ""
 }
@@ -761,6 +762,15 @@ handle_config_menu() {
             4)
                 # 恢复备份
                 restore_config
+                read -p "按回车键继续..."
+                ;;
+            5)
+                # 恢复默认配置（保留节点和用户数据）
+                if declare -f restore_default_config &>/dev/null; then
+                    restore_default_config
+                else
+                    print_error "restore_default_config 函数未加载"
+                fi
                 read -p "按回车键继续..."
                 ;;
             0)

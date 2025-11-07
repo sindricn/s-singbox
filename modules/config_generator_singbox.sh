@@ -478,7 +478,8 @@ generate_singbox_tls_config() {
 
             local private_key=$(echo "$extra" | jq -r '.private_key // empty')
             local short_id_json
-            if ! short_id_json=$(echo "$extra" | jq '.short_ids // ["","0123456789abcdef"]'); then
+            # 修复：移除空字符串，避免sing-box启动失败
+            if ! short_id_json=$(echo "$extra" | jq '.short_ids // ["0123456789abcdef"]'); then
                 print_error "Reality 节点 short_id 解析失败"
                 return 1
             fi

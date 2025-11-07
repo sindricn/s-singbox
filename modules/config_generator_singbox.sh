@@ -46,7 +46,8 @@ generate_singbox_config() {
             local protocol=$(echo "$node" | jq -r '.protocol')
             local transport=$(echo "$node" | jq -r '.transport // "tcp"')
             local security=$(echo "$node" | jq -r '.security // "none"')
-            local extra=$(echo "$node" | jq -r '.extra // "{}"')
+            # 修复：不使用-r参数，保持extra为JSON格式
+            local extra=$(echo "$node" | jq '.extra // {}')
 
             print_info "  处理节点: $protocol/$port (security: $security)"
 

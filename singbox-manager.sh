@@ -336,11 +336,14 @@ menu_core() {
         echo -e "${GREEN}6.${NC} 更新 sing-box"
         echo -e "${GREEN}7.${NC} 查看日志"
         echo -e "${GREEN}8.${NC} 查看版本"
-        echo -e "${GREEN}9.${NC} 恢复默认配置 ${GRAY}(保留数据)${NC}"
-        echo -e "${GREEN}10.${NC} 重置配置 ${RED}(删除所有)${NC}"
+        echo ""
+        echo -e "${YELLOW}数据管理：${NC}"
+        echo -e "${GREEN}9.${NC} 重置用户数据 ${GRAY}(保留节点)${NC}"
+        echo -e "${GREEN}10.${NC} 重置节点数据 ${GRAY}(保留用户)${NC}"
+        echo -e "${GREEN}11.${NC} 重置所有数据 ${RED}(删除所有)${NC}"
         echo -e "${GREEN}0.${NC} 返回主菜单"
         echo ""
-        read -p "请选择操作 [0-10]: " choice
+        read -p "请选择操作 [0-11]: " choice
 
         case $choice in
             1)
@@ -411,20 +414,29 @@ menu_core() {
                 read -p "按回车键继续..."
                 ;;
             9)
-                # 恢复默认配置（保留节点和用户数据）
-                if declare -f restore_default_config &>/dev/null; then
-                    restore_default_config
+                # 重置用户数据
+                if declare -f reset_users &>/dev/null; then
+                    reset_users
                 else
-                    print_error "restore_default_config 函数未加载"
+                    print_error "reset_users 函数未加载"
                 fi
                 read -p "按回车键继续..."
                 ;;
             10)
-                # 重置配置（删除所有数据）
-                if declare -f reset_config &>/dev/null; then
-                    reset_config
+                # 重置节点数据
+                if declare -f reset_nodes &>/dev/null; then
+                    reset_nodes
                 else
-                    print_error "reset_config 函数未加载"
+                    print_error "reset_nodes 函数未加载"
+                fi
+                read -p "按回车键继续..."
+                ;;
+            11)
+                # 重置所有数据
+                if declare -f reset_all_data &>/dev/null; then
+                    reset_all_data
+                else
+                    print_error "reset_all_data 函数未加载"
                 fi
                 read -p "按回车键继续..."
                 ;;

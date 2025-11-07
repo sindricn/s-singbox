@@ -287,123 +287,165 @@ import_config() {
     fi
 }
 
-# 恢复默认配置（保留节点和用户数据）
-restore_default_config() {
+# 重置用户数据
+reset_users() {
     clear
-    echo -e "${CYAN}====== 恢复默认配置 ======${NC}\n"
+    echo -e "${CYAN}====== 重置用户数据 ======${NC}\n"
 
-    print_warning "此操作将重置sing-box配置文件为默认值"
-    print_info "节点和用户数据将被保留"
+    print_warning "此操作将删除所有用户数据和绑定关系！"
+    echo -e "${YELLOW}节点配置将被保留${NC}"
     echo ""
-    read -p "确认恢复默认配置? [y/N]: " confirm
-    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-        print_info "取消操作"
-        return 0
-    fi
-
-    # 停止服务
-    print_info "停止sing-box服务..."
-    systemctl stop sing-box 2>/dev/null
-
-    # 备份当前配置
-    if [[ -f "$SINGBOX_CONFIG" ]]; then
-        local backup_file="${SINGBOX_CONFIG}.backup.$(date +%Y%m%d_%H%M%S)"
-        cp "$SINGBOX_CONFIG" "$backup_file"
-        print_success "已备份当前配置到: $backup_file"
-    fi
-
-    # 创建默认配置文件
-    if declare -f create_default_config &>/dev/null; then
-        create_default_config
-    else
-        print_error "create_default_config 函数未找到"
-        return 1
-    fi
-
-    # 使用现有数据重新生成配置
-    echo ""
-    print_info "使用现有节点和用户数据重新生成配置..."
-    if declare -f generate_singbox_config &>/dev/null; then
-        if generate_singbox_config; then
-            print_success "配置文件已重新生成"
-        else
-            print_error "配置生成失败，已恢复为空配置"
-            print_warning "请使用【生成配置】功能重新生成"
-        fi
-    else
-        print_warning "配置生成模块未加载"
-        print_info "已创建默认空配置，请使用【生成配置】功能"
-    fi
-
-    # 验证配置
-    echo ""
-    if command -v sing-box &>/dev/null; then
-        print_info "验证配置文件..."
-        if sing-box check -c "$SINGBOX_CONFIG" 2>&1 | grep -q "configuration is valid\|ok"; then
-            print_success "配置文件验证通过"
-
-            # 询问是否重启服务
-            echo ""
-            read -p "是否重启sing-box服务? [Y/n]: " restart_confirm
-            if [[ "$restart_confirm" != "n" && "$restart_confirm" != "N" ]]; then
-                if declare -f restart_sing-box &>/dev/null; then
-                    restart_sing-box
-                else
-                    systemctl restart sing-box
-                    sleep 2
-                    if systemctl is-active --quiet sing-box; then
-                        print_success "服务重启成功"
-                    else
-                        print_error "服务重启失败"
-                    fi
-                fi
-            fi
-        else
-            print_error "配置文件验证失败"
-            sing-box check -c "$SINGBOX_CONFIG"
-            return 1
-        fi
-    else
-        print_warning "sing-box未安装，无法验证配置"
-    fi
-
-    echo ""
-    print_success "默认配置恢复完成"
-}
-
-# 重置配置（删除所有数据）
-reset_config() {
-    clear
-    echo -e "${CYAN}====== 重置配置 ======${NC}\n"
-
-    print_warning "此操作将删除所有节点和用户配置！"
-    read -p "确认重置配置? [y/N]: " confirm
+    read -p "确认重置用户数据? [y/N]: " confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
         print_info "取消重置"
         return 0
     fi
 
     # 二次确认
-    read -p "再次确认重置配置? 输入 YES 继续: " confirm2
+    read -p "再次确认? 输入 YES 继续: " confirm2
     if [[ "$confirm2" != "YES" ]]; then
         print_info "取消重置"
         return 0
     fi
 
-    # 备份当前配置
-    backup_config
+    # 备份
+    if [[ -f "$USERS_FILE" ]]; then
+        cp "$USERS_FILE" "${USERS_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    fi
+    if [[ -f "$NODE_USERS_FILE" ]]; then
+        cp "$NODE_USERS_FILE" "${NODE_USERS_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    fi
 
-    # 创建默认配置
-    create_default_config
+    # 重置用户数据
+    echo '{"users":[]}' > "$USERS_FILE"
+    echo '{"bindings":[]}' > "$NODE_USERS_FILE"
 
-    # 重置数据文件
+    # 重新初始化admin用户
+    if declare -f init_admin_user &>/dev/null; then
+        init_admin_user
+    fi
+
+    # 重新生成配置
+    if declare -f generate_singbox_config &>/dev/null; then
+        generate_singbox_config
+    fi
+
+    # 重启服务
+    if declare -f restart_sing-box &>/dev/null; then
+        restart_sing-box
+    else
+        systemctl restart sing-box
+    fi
+
+    print_success "用户数据已重置"
+}
+
+# 重置节点数据
+reset_nodes() {
+    clear
+    echo -e "${CYAN}====== 重置节点数据 ======${NC}\n"
+
+    print_warning "此操作将删除所有节点配置和绑定关系！"
+    echo -e "${YELLOW}用户数据将被保留${NC}"
+    echo ""
+    read -p "确认重置节点数据? [y/N]: " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        print_info "取消重置"
+        return 0
+    fi
+
+    # 二次确认
+    read -p "再次确认? 输入 YES 继续: " confirm2
+    if [[ "$confirm2" != "YES" ]]; then
+        print_info "取消重置"
+        return 0
+    fi
+
+    # 备份
+    if [[ -f "$NODES_FILE" ]]; then
+        cp "$NODES_FILE" "${NODES_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    fi
+    if [[ -f "$NODE_USERS_FILE" ]]; then
+        cp "$NODE_USERS_FILE" "${NODE_USERS_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    fi
+
+    # 重置节点数据
+    echo '{"nodes":[]}' > "$NODES_FILE"
+    echo '{"bindings":[]}' > "$NODE_USERS_FILE"
+
+    # 重新生成配置
+    if declare -f generate_singbox_config &>/dev/null; then
+        generate_singbox_config
+    fi
+
+    # 重启服务
+    if declare -f restart_sing-box &>/dev/null; then
+        restart_sing-box
+    else
+        systemctl restart sing-box
+    fi
+
+    print_success "节点数据已重置"
+}
+
+# 重置所有数据
+reset_all_data() {
+    clear
+    echo -e "${CYAN}====== 重置所有数据 ======${NC}\n"
+
+    print_warning "此操作将删除所有节点和用户配置！"
+    echo -e "${RED}所有数据将被清空！${NC}"
+    echo ""
+    read -p "确认重置所有数据? [y/N]: " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        print_info "取消重置"
+        return 0
+    fi
+
+    # 二次确认
+    read -p "再次确认? 输入 YES 继续: " confirm2
+    if [[ "$confirm2" != "YES" ]]; then
+        print_info "取消重置"
+        return 0
+    fi
+
+    # 备份所有数据
+    if [[ -f "$USERS_FILE" ]]; then
+        cp "$USERS_FILE" "${USERS_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    fi
+    if [[ -f "$NODES_FILE" ]]; then
+        cp "$NODES_FILE" "${NODES_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    fi
+    if [[ -f "$NODE_USERS_FILE" ]]; then
+        cp "$NODE_USERS_FILE" "${NODE_USERS_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    fi
+    if [[ -f "$SINGBOX_CONFIG" ]]; then
+        cp "$SINGBOX_CONFIG" "${SINGBOX_CONFIG}.backup.$(date +%Y%m%d_%H%M%S)"
+    fi
+
+    # 重置所有数据文件
     echo '{"users":[]}' > "$USERS_FILE"
     echo '{"nodes":[]}' > "$NODES_FILE"
     echo '{"bindings":[]}' > "$NODE_USERS_FILE"
 
-    restart_sing-box
+    # 重新初始化admin用户
+    if declare -f init_admin_user &>/dev/null; then
+        init_admin_user
+    fi
 
-    print_success "配置已重置为默认值"
+    # 创建默认配置
+    if declare -f create_default_config &>/dev/null; then
+        create_default_config
+    fi
+
+    # 重启服务
+    if declare -f restart_sing-box &>/dev/null; then
+        restart_sing-box
+    else
+        systemctl restart sing-box
+    fi
+
+    print_success "所有数据已重置"
 }
 
 # 配置优化建议

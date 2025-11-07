@@ -273,24 +273,44 @@ wizard_step_add_user() {
         fi
     done
 
-    # 添加用户
+    # 添加用户（使用全局用户模式）
     echo ""
     echo -e "${CYAN}正在创建用户...${NC}"
 
-    if declare -f add_user &>/dev/null; then
-        # 调用user.sh的add_user函数
-        # 需要模拟交互输入
-        echo -e "$username\n$email\n" | add_user
-        if [[ $? -eq 0 ]]; then
-            WIZARD_STEP_2_DONE=true
-            show_step_complete "用户 '$username' 创建成功"
-            return 0
-        else
-            print_error "用户创建失败"
-            return 1
-        fi
+    # 生成UUID和密码
+    local uuid=$(generate_uuid)
+    local password=$(openssl rand -base64 16 | tr -d '/+=' | cut -c1-16)
+
+    # 创建用户数据
+    if [[ ! -f "$USERS_FILE" ]]; then
+        echo '{"users":[]}' > "$USERS_FILE"
+    fi
+
+    local user_data=$(jq -n \
+        --arg id "$uuid" \
+        --arg username "$username" \
+        --arg password "$password" \
+        --arg email "$email" \
+        '{id: $id, username: $username, password: $password, email: $email, level: 0, traffic_limit_gb: "unlimited", traffic_used_gb: "0", expire_date: "unlimited", created: (now|todate), enabled: true}')
+
+    if jq --argjson user_data "$user_data" '.users += [$user_data]' "$USERS_FILE" > "${USERS_FILE}.tmp"; then
+        mv "${USERS_FILE}.tmp" "$USERS_FILE"
+
+        WIZARD_STEP_2_DONE=true
+        show_step_complete "用户 '$username' 创建成功"
+
+        # 显示用户信息
+        echo ""
+        echo -e "${CYAN}用户信息：${NC}"
+        echo -e "  用户名: ${YELLOW}$username${NC}"
+        echo -e "  密码: ${YELLOW}$password${NC}"
+        echo -e "  UUID: ${YELLOW}$uuid${NC}"
+        echo -e "  邮箱: ${YELLOW}$email${NC}"
+        echo ""
+
+        return 0
     else
-        print_error "用户管理模块未加载"
+        print_error "用户创建失败"
         return 1
     fi
 }

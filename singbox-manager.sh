@@ -336,9 +336,11 @@ menu_core() {
         echo -e "${GREEN}6.${NC} 更新 sing-box"
         echo -e "${GREEN}7.${NC} 查看日志"
         echo -e "${GREEN}8.${NC} 查看版本"
+        echo -e "${GREEN}9.${NC} 恢复默认配置 ${GRAY}(保留数据)${NC}"
+        echo -e "${GREEN}10.${NC} 重置配置 ${RED}(删除所有)${NC}"
         echo -e "${GREEN}0.${NC} 返回主菜单"
         echo ""
-        read -p "请选择操作 [0-8]: " choice
+        read -p "请选择操作 [0-10]: " choice
 
         case $choice in
             1)
@@ -406,6 +408,24 @@ menu_core() {
             8)
                 # 查看版本
                 show_version
+                read -p "按回车键继续..."
+                ;;
+            9)
+                # 恢复默认配置（保留节点和用户数据）
+                if declare -f restore_default_config &>/dev/null; then
+                    restore_default_config
+                else
+                    print_error "restore_default_config 函数未加载"
+                fi
+                read -p "按回车键继续..."
+                ;;
+            10)
+                # 重置配置（删除所有数据）
+                if declare -f reset_config &>/dev/null; then
+                    reset_config
+                else
+                    print_error "reset_config 函数未加载"
+                fi
                 read -p "按回车键继续..."
                 ;;
             0)
@@ -496,7 +516,7 @@ show_binding_menu() {
     echo ""
 }
 
-# 配置管理菜单
+# 配置管理菜单（已废弃，功能移至singbox管理）
 show_config_menu() {
     clear
 
@@ -508,8 +528,9 @@ show_config_menu() {
     echo -e "${GREEN}2.${NC} 查看配置"
     echo -e "${GREEN}3.${NC} 验证配置"
     echo -e "${GREEN}4.${NC} 恢复备份"
-    echo -e "${GREEN}5.${NC} 恢复默认配置 ${GRAY}(保留节点用户)${NC}"
     echo -e "${GREEN}0.${NC} 返回主菜单"
+    echo ""
+    echo -e "${YELLOW}提示: 配置重置功能已移至【sing-box管理】菜单${NC}"
     echo ""
 }
 
@@ -762,15 +783,6 @@ handle_config_menu() {
             4)
                 # 恢复备份
                 restore_config
-                read -p "按回车键继续..."
-                ;;
-            5)
-                # 恢复默认配置（保留节点和用户数据）
-                if declare -f restore_default_config &>/dev/null; then
-                    restore_default_config
-                else
-                    print_error "restore_default_config 函数未加载"
-                fi
                 read -p "按回车键继续..."
                 ;;
             0)

@@ -1355,6 +1355,21 @@ save_node_info() {
         name="${protocol}-${port}"
     fi
 
+    # 调试：显示Reality配置
+    if [[ "$security" == "reality" ]]; then
+        echo "[调试 save_node_info] Reality配置保存"
+        echo "  端口: $port"
+        echo "  extra_config类型: $(echo "$extra_config" | jq type 2>/dev/null || echo 'invalid')"
+        echo "  extra_config内容: $(echo "$extra_config" | jq -c '.' 2>/dev/null || echo 'parse error')"
+        if echo "$extra_config" | jq -e '.private_key' >/dev/null 2>&1; then
+            local pk=$(echo "$extra_config" | jq -r '.private_key')
+            echo "  private_key长度: ${#pk}"
+            echo "  private_key前10字符: ${pk:0:10}..."
+        else
+            echo "  ⚠️  private_key字段缺失！"
+        fi
+    fi
+
     local node_data=$(jq -n \
         --arg name "$name" \
         --arg protocol "$protocol" \

@@ -51,6 +51,12 @@ generate_singbox_config() {
 
             print_info "  处理节点: $protocol/$port (security: $security)"
 
+            # 调试：显示extra内容
+            if [[ "$security" == "reality" ]]; then
+                echo "    [调试] extra类型: $(echo "$extra" | jq type 2>/dev/null || echo 'invalid')"
+                echo "    [调试] extra内容: $(echo "$extra" | jq -c '.' 2>/dev/null || echo 'parse error')"
+            fi
+
             # 获取该节点的用户列表
             local user_uuids=$(jq -r ".bindings[] | select(.port == \"$port\") | .users[]" "$node_users_file" 2>/dev/null)
 
@@ -477,7 +483,13 @@ generate_singbox_tls_config() {
             server=${server:-"www.apple.com"}
             server_port=${server_port:-443}
 
-            local private_key=$(echo "$extra" | jq -r '.private_key // empty')
+            # 修复：使用正确的方式提取private_key
+            local private_key=$(echo "$extra" | jq -r '.private_key // ""')
+
+            # 调试输出
+            echo "    [调试] 提取的private_key: [$private_key]"
+            echo "    [调试] private_key长度: ${#private_key}"
+
             local short_id_json
             # 修复：移除空字符串，避免sing-box启动失败
             if ! short_id_json=$(echo "$extra" | jq '.short_ids // ["0123456789abcdef"]'); then
@@ -485,10 +497,20 @@ generate_singbox_tls_config() {
                 return 1
             fi
 
-            # 验证私钥
+            # 验证私钥（必须存在且非空）
             if [[ -z "$private_key" || "$private_key" == "null" ]]; then
-                print_error "Reality 节点私钥缺失"
+                print_error "Reality 节点私钥缺失或为空"
+                print_error "端口: $port"
                 print_error "节点数据: $(echo "$extra" | jq -c '.')"
+                print_error "请删除此节点并重新创建"
+                return 1
+            fi
+
+            # 验证私钥格式（应该是base64字符串）
+            if ! echo "$private_key" | grep -qE '^[A-Za-z0-9+/=]+$'; then
+                print_error "Reality 节点私钥格式无效"
+                print_error "端口: $port"
+                print_error "私钥: $private_key"
                 print_error "请删除此节点并重新创建"
                 return 1
             fi

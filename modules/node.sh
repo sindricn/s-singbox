@@ -167,8 +167,14 @@ generate_reality_keypair() {
     fi
 
     # 尝试生成密钥对
-    local output=$(sing-box x25519 2>&1)
+    local output=$(sing-box generate reality-keypair 2>&1)
     local exit_code=$?
+
+    # 如果新命令失败，尝试旧命令
+    if [[ $exit_code -ne 0 ]]; then
+        output=$(sing-box x25519 2>&1)
+        exit_code=$?
+    fi
 
     # 检查是否成功
     if [[ $exit_code -ne 0 ]]; then
@@ -176,6 +182,11 @@ generate_reality_keypair() {
         echo "$output"
         return 1
     fi
+
+    # 调试：显示原始输出
+    echo "[调试] sing-box密钥生成原始输出：" >&2
+    echo "$output" >&2
+    echo "[调试] ----" >&2
 
     # 返回结果
     echo "$output"
@@ -395,26 +406,57 @@ quick_add_vless_reality() {
         return 1
     fi
 
-    # 解析密钥
-    local private_key=$(echo "$keypair" | grep -i "Private key:" | awk '{print $3}')
-    local public_key=$(echo "$keypair" | grep -i "Public key:" | awk '{print $3}')
+    # 解析密钥 - 尝试多种格式
+    local private_key=""
+    local public_key=""
 
-    # 如果第一种格式失败，尝试其他格式
-    if [[ -z "$private_key" || -z "$public_key" ]]; then
-        # 尝试 "Private:" 格式
-        private_key=$(echo "$keypair" | grep -i "Private:" | awk '{print $2}')
-        public_key=$(echo "$keypair" | grep -i "Public:" | awk '{print $2}')
+    # 格式1: "PrivateKey: xxx" (新版sing-box)
+    if [[ -z "$private_key" ]]; then
+        private_key=$(echo "$keypair" | grep -i "^PrivateKey:" | cut -d: -f2- | tr -d ' ')
+        public_key=$(echo "$keypair" | grep -i "^PublicKey:" | cut -d: -f2- | tr -d ' ')
     fi
 
-    # 如果还是失败，直接按行解析
-    if [[ -z "$private_key" || -z "$public_key" ]]; then
-        private_key=$(echo "$keypair" | sed -n '1p' | awk '{print $NF}')
-        public_key=$(echo "$keypair" | sed -n '2p' | awk '{print $NF}')
+    # 格式2: "Private key: xxx" (旧版sing-box)
+    if [[ -z "$private_key" ]]; then
+        private_key=$(echo "$keypair" | grep -i "Private key:" | sed 's/.*Private key:[[:space:]]*//' | tr -d ' ')
+        public_key=$(echo "$keypair" | grep -i "Public key:" | sed 's/.*Public key:[[:space:]]*//' | tr -d ' ')
     fi
 
-    # 最后检查
+    # 格式3: 纯两行base64字符串（每行40-50个字符）
+    if [[ -z "$private_key" ]]; then
+        local line1=$(echo "$keypair" | sed -n '1p' | tr -d ' ')
+        local line2=$(echo "$keypair" | sed -n '2p' | tr -d ' ')
+        # 验证是否为base64格式且长度合理
+        if [[ "$line1" =~ ^[A-Za-z0-9+/=]{40,}$ ]] && [[ "$line2" =~ ^[A-Za-z0-9+/=]{40,}$ ]]; then
+            private_key="$line1"
+            public_key="$line2"
+        fi
+    fi
+
+    # 验证密钥有效性
     if [[ -z "$private_key" || -z "$public_key" ]]; then
         print_error "无法解析密钥对"
+        echo ""
+        print_info "原始输出："
+        echo "$keypair"
+        echo ""
+        print_info "尝试手动生成密钥："
+        echo "  运行: sing-box generate reality-keypair"
+        echo "  或: sing-box x25519"
+        return 1
+    fi
+
+    # 验证密钥格式（应为base64）
+    if ! [[ "$private_key" =~ ^[A-Za-z0-9+/=]{40,}$ ]]; then
+        print_error "私钥格式无效（不是base64）: $private_key"
+        echo ""
+        print_info "原始输出："
+        echo "$keypair"
+        return 1
+    fi
+
+    if ! [[ "$public_key" =~ ^[A-Za-z0-9+/=]{40,}$ ]]; then
+        print_error "公钥格式无效（不是base64）: $public_key"
         echo ""
         print_info "原始输出："
         echo "$keypair"

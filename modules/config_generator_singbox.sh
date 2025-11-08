@@ -404,18 +404,34 @@ generate_singbox_inbound() {
 
             # 添加混淆配置
             if [[ -n "$obfs_password" && "$obfs_password" != "null" ]]; then
+                echo "    [调试] 添加Salamander混淆配置..." >&2
                 local obfs_config
-                if ! obfs_config=$(jq -n \
+                obfs_config=$(jq -n \
                     --arg password "$obfs_password" \
                     '{
                         type: "salamander",
-                        salamander: {
-                            password: $password
-                        }
-                    }'); then
+                        password: $password
+                    }')
+
+                local obfs_exit=$?
+                if [[ $obfs_exit -ne 0 ]]; then
+                    echo "    [错误] Obfs配置生成失败" >&2
                     return 1
                 fi
-                inbound=$(echo "$inbound" | jq --argjson obfs "$obfs_config" '. + {obfs: $obfs}') || return 1
+
+                echo "    [调试] Obfs配置: $(echo "$obfs_config" | jq -c .)" >&2
+
+                local merged
+                merged=$(echo "$inbound" | jq --argjson obfs "$obfs_config" '. + {obfs: $obfs}' 2>&1)
+                local merge_exit=$?
+
+                if [[ $merge_exit -ne 0 ]]; then
+                    echo "    [错误] 合并Obfs配置失败: $merged" >&2
+                    return 1
+                fi
+
+                inbound="$merged"
+                echo "    [调试] Obfs配置合并成功" >&2
             fi
 
             # Hysteria2 必须启用TLS

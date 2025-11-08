@@ -2562,7 +2562,7 @@ quick_setup_vless_reality() {
     # 生成分享链接
     local server_ip=$(curl -s4 ifconfig.me 2>/dev/null || curl -s4 icanhazip.com 2>/dev/null)
     if [[ -n "$server_ip" ]]; then
-        local share_link="vless://${admin_uuid}@${server_ip}:${port}?type=tcp&security=reality&pbk=${public_key}&sni=${server_names}&fp=chrome#Reality-${admin_remark}"
+        local share_link="vless://${admin_uuid}@${server_ip}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${server_names}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=tcp&headerType=none#Reality-${admin_remark}"
         echo -e "${CYAN}分享链接：${NC}"
         echo -e "${GREEN}$share_link${NC}"
         echo ""
@@ -2673,17 +2673,19 @@ quick_setup_hysteria2() {
     # 步骤 6/6: 保存配置
     echo -e "${BLUE}步骤 6/6: 保存配置并启动服务${NC}"
 
-    # 构建 extra_config（使用sing-box格式字段名）
+    # 构建 extra_config（使用标准字段名）
     local extra_config=$(jq -n \
-        --arg cert_file "$tls_cert" \
-        --arg key_file "$tls_key" \
+        --arg tls_domain "$tls_domain" \
+        --arg tls_cert "$tls_cert" \
+        --arg tls_key "$tls_key" \
         --argjson up_mbps "$up_mbps" \
         --argjson down_mbps "$down_mbps" \
         --arg obfs_password "$obfs_password" \
         --arg masquerade "https://${tls_domain}/" \
         '{
-            cert_file: $cert_file,
-            key_file: $key_file,
+            tls_domain: $tls_domain,
+            tls_cert: $tls_cert,
+            tls_key: $tls_key,
             up_mbps: $up_mbps,
             down_mbps: $down_mbps,
             obfs_password: $obfs_password,

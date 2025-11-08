@@ -537,19 +537,33 @@ generate_singbox_tls_config() {
                 return 1
             fi
 
+            # 提取server_names（用于SNI）
+            local server_names_json=$(echo "$extra" | jq -r '.server_names // []')
+            local server_name=""
+            if [[ "$server_names_json" != "[]" && "$server_names_json" != "null" ]]; then
+                server_name=$(echo "$server_names_json" | jq -r '.[0] // ""')
+            fi
+            # 如果没有server_names，使用handshake server作为SNI
+            if [[ -z "$server_name" || "$server_name" == "null" ]]; then
+                server_name="$server"
+            fi
+
             echo "    [调试] 准备生成Reality TLS配置..." >&2
             echo "    [调试] server=$server, server_port=$server_port" >&2
+            echo "    [调试] server_name=$server_name (SNI)" >&2
             echo "    [调试] private_key长度=${#private_key}" >&2
             echo "    [调试] short_id_json=$short_id_json" >&2
 
             tls_config=$(jq -n \
                 --argjson enabled true \
+                --arg server_name "$server_name" \
                 --arg server "$server" \
                 --argjson server_port "$server_port" \
                 --arg private_key "$private_key" \
                 --argjson short_id "$short_id_json" \
                 '{
                     enabled: $enabled,
+                    server_name: $server_name,
                     reality: {
                         enabled: true,
                         handshake: {

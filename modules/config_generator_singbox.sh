@@ -383,9 +383,9 @@ generate_singbox_inbound() {
             local listen_addr="::"
             local listen_port_value="$port"
             if [[ -n "$port_hopping" && "$port_hopping" != "null" ]]; then
-                # 端口跳跃模式：将端口范围组合到listen字段
-                listen_addr="::${port_hopping}"
-                echo "    [调试] Hysteria2: 端口跳跃模式 $port_hopping" >&2
+                # 端口跳跃模式：使用 :port-range 格式
+                listen_addr=":${port_hopping}"
+                echo "    [调试] Hysteria2: 端口跳跃模式 $port_hopping (listen: $listen_addr)" >&2
             fi
 
             if [[ $up_mbps -eq 0 && $down_mbps -eq 0 ]]; then

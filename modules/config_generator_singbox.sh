@@ -507,9 +507,9 @@ generate_singbox_tls_config() {
             # 修复：使用正确的方式提取private_key
             local private_key=$(echo "$extra" | jq -r '.private_key // ""')
 
-            # 调试输出
-            echo "    [调试] 提取的private_key: [$private_key]"
-            echo "    [调试] private_key长度: ${#private_key}"
+            # 调试输出（重定向到stderr避免污染返回值）
+            echo "    [调试] 提取的private_key: [$private_key]" >&2
+            echo "    [调试] private_key长度: ${#private_key}" >&2
 
             local short_id_json
             # 修复：移除空字符串，避免sing-box启动失败

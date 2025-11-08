@@ -371,29 +371,51 @@ generate_singbox_inbound() {
 
         hysteria2)
             # Hysteria2 inbound
-            local up_mbps=$(echo "$extra" | jq -r '.up_mbps // 100')
-            local down_mbps=$(echo "$extra" | jq -r '.down_mbps // 100')
+            local up_mbps=$(echo "$extra" | jq -r '.up_mbps // 0')
+            local down_mbps=$(echo "$extra" | jq -r '.down_mbps // 0')
             local obfs_password=$(echo "$extra" | jq -r '.obfs_password // ""')
+            local port_hopping=$(echo "$extra" | jq -r '.port_hopping // ""')
 
-            echo "    [调试] Hysteria2配置: up_mbps=$up_mbps, down_mbps=$down_mbps" >&2
+            echo "    [调试] Hysteria2配置: up_mbps=$up_mbps, down_mbps=$down_mbps, port_hopping=$port_hopping" >&2
 
-            inbound=$(jq -n \
-                --arg type "hysteria2" \
-                --arg tag "hysteria2-$port" \
-                --arg listen "::" \
-                --argjson listen_port "$port" \
-                --argjson up_mbps "$up_mbps" \
-                --argjson down_mbps "$down_mbps" \
-                --argjson users "$users" \
-                '{
-                    type: $type,
-                    tag: $tag,
-                    listen: $listen,
-                    listen_port: $listen_port,
-                    up_mbps: $up_mbps,
-                    down_mbps: $down_mbps,
-                    users: $users
-                }')
+            # 构建基础配置
+            if [[ $up_mbps -eq 0 && $down_mbps -eq 0 ]]; then
+                # 不限速配置（不包含up_mbps和down_mbps字段）
+                echo "    [调试] Hysteria2: 不限速模式" >&2
+                inbound=$(jq -n \
+                    --arg type "hysteria2" \
+                    --arg tag "hysteria2-$port" \
+                    --arg listen "::" \
+                    --argjson listen_port "$port" \
+                    --argjson users "$users" \
+                    '{
+                        type: $type,
+                        tag: $tag,
+                        listen: $listen,
+                        listen_port: $listen_port,
+                        users: $users
+                    }')
+            else
+                # 有速率限制
+                echo "    [调试] Hysteria2: 限速模式 ${up_mbps}/${down_mbps} Mbps" >&2
+                inbound=$(jq -n \
+                    --arg type "hysteria2" \
+                    --arg tag "hysteria2-$port" \
+                    --arg listen "::" \
+                    --argjson listen_port "$port" \
+                    --argjson up_mbps "$up_mbps" \
+                    --argjson down_mbps "$down_mbps" \
+                    --argjson users "$users" \
+                    '{
+                        type: $type,
+                        tag: $tag,
+                        listen: $listen,
+                        listen_port: $listen_port,
+                        up_mbps: $up_mbps,
+                        down_mbps: $down_mbps,
+                        users: $users
+                    }')
+            fi
 
             local jq_exit=$?
             if [[ $jq_exit -ne 0 ]]; then
@@ -465,6 +487,18 @@ generate_singbox_inbound() {
             local masquerade=$(echo "$extra" | jq -r '.masquerade // "https://bing.com"')
             if [[ -n "$masquerade" && "$masquerade" != "null" ]]; then
                 inbound=$(echo "$inbound" | jq --arg masq "$masquerade" '. + {masquerade: $masq}') || return 1
+            fi
+
+            # 添加端口跳跃配置
+            if [[ -n "$port_hopping" && "$port_hopping" != "null" ]]; then
+                echo "    [调试] 添加端口跳跃配置: $port_hopping" >&2
+                inbound=$(echo "$inbound" | jq --arg hopping "$port_hopping" '. + {listen_fields: {mport: $hopping}}')
+                local hopping_exit=$?
+                if [[ $hopping_exit -eq 0 ]]; then
+                    echo "    [调试] 端口跳跃配置添加成功" >&2
+                else
+                    echo "    [警告] 端口跳跃配置添加失败" >&2
+                fi
             fi
             ;;
 

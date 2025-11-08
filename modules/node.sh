@@ -2606,18 +2606,62 @@ quick_setup_hysteria2() {
 
     # 步骤 2/6: 伪装域名选择
     echo -e "${BLUE}步骤 2/6: 选择伪装域名${NC}"
-    local best_domain="cdn.jsdelivr.net"
-    local tls_domain="$best_domain"
+    echo -e "${YELLOW}伪装域名选项：${NC}"
+    echo -e "  1. 使用默认域名 (cdn.jsdelivr.net)"
+    echo -e "  2. 自动优选最佳域名（延迟测试）"
+    echo -e "  3. 手动输入域名"
+    echo ""
+    read -p "请选择 [1-3，默认: 2]: " domain_choice
+    domain_choice=${domain_choice:-2}
 
-    # 可以添加简单的域名选择
-    read -p "使用默认伪装域名 ($best_domain)? [Y/n]: " use_default
-    if [[ "$use_default" == "n" || "$use_default" == "N" ]]; then
-        read -p "请输入自定义域名: " custom_domain
-        if [[ -n "$custom_domain" ]]; then
-            tls_domain="$custom_domain"
-        fi
-    fi
-    print_success "伪装域名: $tls_domain"
+    local tls_domain=""
+    case $domain_choice in
+        1)
+            tls_domain="cdn.jsdelivr.net"
+            print_info "使用默认域名: $tls_domain"
+            ;;
+        2)
+            print_info "开始智能优选伪装域名..."
+            local test_domains=(
+                www.cloudflare.com
+                cdn.jsdelivr.net
+                www.microsoft.com
+                www.apple.com
+                www.bing.com
+                www.mozilla.org
+            )
+
+            local best_latency=9999
+            local best_domain="cdn.jsdelivr.net"
+
+            for domain in "${test_domains[@]}"; do
+                local latency=$(ping -c 1 -W 1 "$domain" 2>/dev/null | grep 'time=' | awk -F'time=' '{print $2}' | awk '{print $1}' | cut -d'.' -f1)
+                if [[ -n "$latency" && "$latency" =~ ^[0-9]+$ ]]; then
+                    echo "  测试 $domain: ${latency}ms"
+                    if [[ $latency -lt $best_latency ]]; then
+                        best_latency=$latency
+                        best_domain="$domain"
+                    fi
+                fi
+            done
+
+            tls_domain="$best_domain"
+            print_success "优选域名: $tls_domain (${best_latency}ms)"
+            ;;
+        3)
+            read -p "请输入自定义域名: " custom_domain
+            if [[ -n "$custom_domain" ]]; then
+                tls_domain="$custom_domain"
+            else
+                tls_domain="cdn.jsdelivr.net"
+                print_warning "未输入域名，使用默认: $tls_domain"
+            fi
+            ;;
+        *)
+            tls_domain="cdn.jsdelivr.net"
+            print_warning "无效选择，使用默认: $tls_domain"
+            ;;
+    esac
     echo ""
 
     # 步骤 3/6: 生成认证和混淆密码
@@ -2656,25 +2700,50 @@ quick_setup_hysteria2() {
     print_success "证书生成完成"
     echo ""
 
-    # 步骤 5/6: 配置速率限制
-    echo -e "${BLUE}步骤 5/6: 配置速率限制${NC}"
-    local up_mbps=100
-    local down_mbps=100
+    # 步骤 5/6: 配置速率限制和跳跃端口
+    echo -e "${BLUE}步骤 5/6: 配置速率限制和跳跃端口${NC}"
 
-    read -p "上传速率 (Mbps) [默认: 100]: " input_up
-    read -p "下载速率 (Mbps) [默认: 100]: " input_down
+    # 速率限制（默认不限速）
+    echo -e "${YELLOW}速率限制设置：${NC}"
+    read -p "是否启用速率限制? [y/N]: " enable_limit
 
-    [[ -n "$input_up" ]] && up_mbps=$input_up
-    [[ -n "$input_down" ]] && down_mbps=$input_down
+    local up_mbps=0
+    local down_mbps=0
 
-    print_success "速率: ${up_mbps}/${down_mbps} Mbps"
+    if [[ "$enable_limit" == "y" || "$enable_limit" == "Y" ]]; then
+        read -p "上传速率 (Mbps) [默认: 100]: " input_up
+        read -p "下载速率 (Mbps) [默认: 100]: " input_down
+        up_mbps=${input_up:-100}
+        down_mbps=${input_down:-100}
+        print_success "速率限制: ${up_mbps}/${down_mbps} Mbps"
+    else
+        print_success "速率限制: 不限速"
+    fi
+
+    # 跳跃端口（Port Hopping）
+    echo ""
+    echo -e "${YELLOW}跳跃端口设置：${NC}"
+    read -p "是否启用端口跳跃? [y/N]: " enable_hopping
+
+    local port_hopping=""
+    if [[ "$enable_hopping" == "y" || "$enable_hopping" == "Y" ]]; then
+        read -p "跳跃端口范围 [默认: ${port}-$((port+99))]: " hopping_range
+        if [[ -z "$hopping_range" ]]; then
+            port_hopping="${port}-$((port+99))"
+        else
+            port_hopping="$hopping_range"
+        fi
+        print_success "跳跃端口: $port_hopping"
+    else
+        print_info "不启用端口跳跃"
+    fi
     echo ""
 
     # 步骤 6/6: 保存配置
     echo -e "${BLUE}步骤 6/6: 保存配置并启动服务${NC}"
 
     # 构建 extra_config（使用标准字段名）
-    local extra_config=$(jq -n \
+    local extra_config_base=$(jq -n \
         --arg tls_domain "$tls_domain" \
         --arg tls_cert "$tls_cert" \
         --arg tls_key "$tls_key" \
@@ -2691,6 +2760,14 @@ quick_setup_hysteria2() {
             obfs_password: $obfs_password,
             masquerade: $masquerade
         }')
+
+    # 添加端口跳跃参数（如果启用）
+    local extra_config
+    if [[ -n "$port_hopping" ]]; then
+        extra_config=$(echo "$extra_config_base" | jq --arg hopping "$port_hopping" '. + {port_hopping: $hopping}')
+    else
+        extra_config="$extra_config_base"
+    fi
 
     # 保存节点信息
     save_node_info "hysteria2" "$port" "udp" "tls" "$extra_config" "hy2-$port"
@@ -2770,20 +2847,52 @@ quick_setup_hysteria2() {
     echo ""
     echo -e "${CYAN}节点信息：${NC}"
     echo -e "  端口: ${YELLOW}$port${NC}"
+    if [[ -n "$port_hopping" ]]; then
+        echo -e "  跳跃端口: ${YELLOW}$port_hopping${NC}"
+    fi
     echo -e "  协议: ${YELLOW}Hysteria2${NC}"
     echo -e "  伪装域名: ${YELLOW}$tls_domain${NC}"
     echo -e "  认证密码: ${YELLOW}$auth_password${NC}"
     echo -e "  混淆类型: ${YELLOW}Salamander${NC}"
     echo -e "  混淆密码: ${YELLOW}$obfs_password${NC}"
-    echo -e "  速率限制: ${YELLOW}${up_mbps}/${down_mbps} Mbps${NC}"
+
+    if [[ $up_mbps -eq 0 && $down_mbps -eq 0 ]]; then
+        echo -e "  速率限制: ${YELLOW}不限速${NC}"
+    else
+        echo -e "  速率限制: ${YELLOW}${up_mbps}/${down_mbps} Mbps${NC}"
+    fi
     echo ""
 
     # 生成分享链接
     local server_ip=$(curl -s4 ifconfig.me 2>/dev/null || curl -s4 icanhazip.com 2>/dev/null)
     if [[ -n "$server_ip" ]]; then
-        local share_link="hysteria2://${auth_password}@${server_ip}:${port}?obfs=salamander&obfs-password=${obfs_password}&sni=${tls_domain}#HY2-admin"
+        # 基础链接
+        local share_link="hysteria2://${auth_password}@${server_ip}:${port}?"
+
+        # 添加混淆参数
+        share_link+="obfs=salamander&obfs-password=${obfs_password}"
+
+        # 添加SNI
+        share_link+="&sni=${tls_domain}"
+
+        # 添加insecure（自签名证书）
+        share_link+="&insecure=1"
+
+        # 添加端口跳跃（如果启用）
+        if [[ -n "$port_hopping" ]]; then
+            share_link+="&mport=${port_hopping}"
+        fi
+
+        # 添加备注
+        share_link+="#HY2-admin"
+
         echo -e "${CYAN}分享链接：${NC}"
         echo -e "${GREEN}$share_link${NC}"
+        echo ""
+        echo -e "${YELLOW}提示：${NC}"
+        echo -e "  • 混淆密码已包含在链接中"
+        [[ -n "$port_hopping" ]] && echo -e "  • 端口跳跃已启用：$port_hopping"
+        echo -e "  • 使用自签名证书，客户端需启用 insecure"
         echo ""
     fi
 }

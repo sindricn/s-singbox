@@ -379,87 +379,48 @@ generate_singbox_inbound() {
             echo "    [调试] Hysteria2配置: up_mbps=$up_mbps, down_mbps=$down_mbps, port_hopping=$port_hopping" >&2
 
             # 构建基础配置
-            # 处理listen地址（支持端口跳跃）
-            local listen_addr="::"
-            local listen_port_value="$port"
-            if [[ -n "$port_hopping" && "$port_hopping" != "null" ]]; then
-                # 端口跳跃模式：使用 :port-range 格式
-                listen_addr=":${port_hopping}"
-                echo "    [调试] Hysteria2: 端口跳跃模式 $port_hopping (listen: $listen_addr)" >&2
-            fi
-
+            # 端口跳跃通过iptables实现，配置中只使用单端口监听
             if [[ $up_mbps -eq 0 && $down_mbps -eq 0 ]]; then
                 # 不限速配置（不包含up_mbps和down_mbps字段）
                 echo "    [调试] Hysteria2: 不限速模式" >&2
-                if [[ -n "$port_hopping" && "$port_hopping" != "null" ]]; then
-                    # 端口跳跃：只用listen字段
-                    inbound=$(jq -n \
-                        --arg type "hysteria2" \
-                        --arg tag "hysteria2-$port" \
-                        --arg listen "$listen_addr" \
-                        --argjson users "$users" \
-                        '{
-                            type: $type,
-                            tag: $tag,
-                            listen: $listen,
-                            users: $users
-                        }')
-                else
-                    # 单端口：使用listen + listen_port
-                    inbound=$(jq -n \
-                        --arg type "hysteria2" \
-                        --arg tag "hysteria2-$port" \
-                        --arg listen "::" \
-                        --argjson listen_port "$port" \
-                        --argjson users "$users" \
-                        '{
-                            type: $type,
-                            tag: $tag,
-                            listen: $listen,
-                            listen_port: $listen_port,
-                            users: $users
-                        }')
-                fi
+                inbound=$(jq -n \
+                    --arg type "hysteria2" \
+                    --arg tag "hysteria2-$port" \
+                    --arg listen "::" \
+                    --argjson listen_port "$port" \
+                    --argjson users "$users" \
+                    '{
+                        type: $type,
+                        tag: $tag,
+                        listen: $listen,
+                        listen_port: $listen_port,
+                        users: $users
+                    }')
             else
                 # 有速率限制
                 echo "    [调试] Hysteria2: 限速模式 ${up_mbps}/${down_mbps} Mbps" >&2
-                if [[ -n "$port_hopping" && "$port_hopping" != "null" ]]; then
-                    # 端口跳跃：只用listen字段
-                    inbound=$(jq -n \
-                        --arg type "hysteria2" \
-                        --arg tag "hysteria2-$port" \
-                        --arg listen "$listen_addr" \
-                        --argjson up_mbps "$up_mbps" \
-                        --argjson down_mbps "$down_mbps" \
-                        --argjson users "$users" \
-                        '{
-                            type: $type,
-                            tag: $tag,
-                            listen: $listen,
-                            up_mbps: $up_mbps,
-                            down_mbps: $down_mbps,
-                            users: $users
-                        }')
-                else
-                    # 单端口：使用listen + listen_port
-                    inbound=$(jq -n \
-                        --arg type "hysteria2" \
-                        --arg tag "hysteria2-$port" \
-                        --arg listen "::" \
-                        --argjson listen_port "$port" \
-                        --argjson up_mbps "$up_mbps" \
-                        --argjson down_mbps "$down_mbps" \
-                        --argjson users "$users" \
-                        '{
-                            type: $type,
-                            tag: $tag,
-                            listen: $listen,
-                            listen_port: $listen_port,
-                            up_mbps: $up_mbps,
-                            down_mbps: $down_mbps,
-                            users: $users
-                        }')
-                fi
+                inbound=$(jq -n \
+                    --arg type "hysteria2" \
+                    --arg tag "hysteria2-$port" \
+                    --arg listen "::" \
+                    --argjson listen_port "$port" \
+                    --argjson up_mbps "$up_mbps" \
+                    --argjson down_mbps "$down_mbps" \
+                    --argjson users "$users" \
+                    '{
+                        type: $type,
+                        tag: $tag,
+                        listen: $listen,
+                        listen_port: $listen_port,
+                        up_mbps: $up_mbps,
+                        down_mbps: $down_mbps,
+                        users: $users
+                    }')
+            fi
+
+            # 端口跳跃信息保存在extra中，用于设置iptables规则
+            if [[ -n "$port_hopping" && "$port_hopping" != "null" ]]; then
+                echo "    [调试] Hysteria2: 端口跳跃 $port_hopping (通过iptables转发到端口 $port)" >&2
             fi
 
             local jq_exit=$?

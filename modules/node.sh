@@ -2833,6 +2833,58 @@ quick_setup_hysteria2() {
         return 1
     fi
 
+    # 配置端口跳跃（如果启用）
+    if [[ -n "$port_hopping" ]]; then
+        echo ""
+        echo -e "${BLUE}配置端口跳跃iptables规则...${NC}"
+
+        # 提取端口范围的起始和结束端口
+        local start_port=$(echo "$port_hopping" | cut -d'-' -f1)
+        local end_port=$(echo "$port_hopping" | cut -d'-' -f2)
+
+        # 获取主网络接口
+        local main_interface=$(ip route | grep default | head -n1 | awk '{print $5}')
+        if [[ -z "$main_interface" ]]; then
+            main_interface="eth0"  # 默认值
+        fi
+
+        # 删除旧规则（如果存在）
+        iptables -t nat -D PREROUTING -i "$main_interface" -p udp --dport ${start_port}:${end_port} -j REDIRECT --to-ports $port 2>/dev/null
+        ip6tables -t nat -D PREROUTING -i "$main_interface" -p udp --dport ${start_port}:${end_port} -j REDIRECT --to-ports $port 2>/dev/null
+
+        # 添加新规则
+        # IPv4
+        iptables -t nat -A PREROUTING -i "$main_interface" -p udp --dport ${start_port}:${end_port} -j REDIRECT --to-ports $port
+        if [[ $? -eq 0 ]]; then
+            print_success "IPv4端口跳跃规则已添加: $port_hopping → $port"
+        else
+            print_warning "IPv4端口跳跃规则添加失败"
+        fi
+
+        # IPv6
+        ip6tables -t nat -A PREROUTING -i "$main_interface" -p udp --dport ${start_port}:${end_port} -j REDIRECT --to-ports $port 2>/dev/null
+        if [[ $? -eq 0 ]]; then
+            print_success "IPv6端口跳跃规则已添加: $port_hopping → $port"
+        else
+            print_info "IPv6端口跳跃规则添加失败（可能不支持IPv6）"
+        fi
+
+        # 保存iptables规则（持久化）
+        if command -v iptables-save >/dev/null 2>&1; then
+            if command -v netfilter-persistent >/dev/null 2>&1; then
+                netfilter-persistent save >/dev/null 2>&1
+            elif [[ -f /etc/debian_version ]]; then
+                iptables-save > /etc/iptables/rules.v4 2>/dev/null
+                ip6tables-save > /etc/iptables/rules.v6 2>/dev/null
+            elif [[ -f /etc/redhat-release ]]; then
+                service iptables save >/dev/null 2>&1
+                service ip6tables save >/dev/null 2>&1
+            fi
+            print_success "iptables规则已持久化"
+        fi
+        echo ""
+    fi
+
     # 重启服务
     restart_sing-box
     if [[ $? -ne 0 ]]; then

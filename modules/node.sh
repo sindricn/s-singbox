@@ -2723,13 +2723,13 @@ quick_setup_hysteria2() {
     # 跳跃端口（Port Hopping）
     echo ""
     echo -e "${YELLOW}跳跃端口设置：${NC}"
-    read -p "是否启用端口跳跃? [y/N]: " enable_hopping
+    read -p "是否启用端口跳跃? [Y/n]: " enable_hopping
 
     local port_hopping=""
-    if [[ "$enable_hopping" == "y" || "$enable_hopping" == "Y" ]]; then
-        read -p "跳跃端口范围 [默认: ${port}-$((port+99))]: " hopping_range
+    if [[ "$enable_hopping" != "n" && "$enable_hopping" != "N" ]]; then
+        read -p "跳跃端口范围 [默认: 2000-3000]: " hopping_range
         if [[ -z "$hopping_range" ]]; then
-            port_hopping="${port}-$((port+99))"
+            port_hopping="2000-3000"
         else
             port_hopping="$hopping_range"
         fi
@@ -2866,22 +2866,49 @@ quick_setup_hysteria2() {
     # 生成分享链接
     local server_ip=$(curl -s4 ifconfig.me 2>/dev/null || curl -s4 icanhazip.com 2>/dev/null)
     if [[ -n "$server_ip" ]]; then
-        # 基础链接
-        local share_link="hysteria2://${auth_password}@${server_ip}:${port}?"
+        # URL编码函数（简化版）
+        urlencode_simple() {
+            local string="$1"
+            local encoded=""
+            local pos c
+            for (( pos=0 ; pos<${#string} ; pos++ )); do
+                c=${string:$pos:1}
+                case "$c" in
+                    [-_.~a-zA-Z0-9] ) encoded+="${c}" ;;
+                    * ) printf -v hex '%%%02x' "'$c"; encoded+="${hex}" ;;
+                esac
+            done
+            echo "${encoded}"
+        }
 
-        # 添加混淆参数
-        share_link+="obfs=salamander&obfs-password=${obfs_password}"
+        # 对密码进行URL编码
+        local encoded_auth_password=$(urlencode_simple "$auth_password")
+        local encoded_obfs_password=$(urlencode_simple "$obfs_password")
 
-        # 添加SNI
-        share_link+="&sni=${tls_domain}"
+        # 构建分享链接（标准Hysteria2格式）
+        local share_link="hysteria2://${encoded_auth_password}@${server_ip}:${port}?"
 
-        # 添加insecure（自签名证书）
-        share_link+="&insecure=1"
+        # 添加参数（顺序很重要）
+        local params=()
 
-        # 添加端口跳跃（如果启用）
+        # 混淆配置
+        params+=("obfs=salamander")
+        params+=("obfs-password=${encoded_obfs_password}")
+
+        # SNI
+        params+=("sni=${tls_domain}")
+
+        # 自签名证书
+        params+=("insecure=1")
+
+        # 端口跳跃
         if [[ -n "$port_hopping" ]]; then
-            share_link+="&mport=${port_hopping}"
+            params+=("mport=${port_hopping}")
         fi
+
+        # 拼接参数
+        local IFS='&'
+        share_link+="${params[*]}"
 
         # 添加备注
         share_link+="#HY2-admin"
@@ -2889,10 +2916,17 @@ quick_setup_hysteria2() {
         echo -e "${CYAN}分享链接：${NC}"
         echo -e "${GREEN}$share_link${NC}"
         echo ""
+
+        # 显示解码后的密码用于调试
+        echo -e "${YELLOW}节点凭证：${NC}"
+        echo -e "  • 认证密码: ${CYAN}$auth_password${NC}"
+        echo -e "  • 混淆密码: ${CYAN}$obfs_password${NC}"
+        echo ""
+
         echo -e "${YELLOW}提示：${NC}"
-        echo -e "  • 混淆密码已包含在链接中"
-        [[ -n "$port_hopping" ]] && echo -e "  • 端口跳跃已启用：$port_hopping"
-        echo -e "  • 使用自签名证书，客户端需启用 insecure"
+        echo -e "  • 链接已包含所有配置参数（密码已URL编码）"
+        [[ -n "$port_hopping" ]] && echo -e "  • 端口跳跃：$port_hopping"
+        echo -e "  • 自签名证书，客户端需启用跳过证书验证"
         echo ""
     fi
 }

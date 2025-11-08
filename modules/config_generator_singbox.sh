@@ -239,11 +239,32 @@ generate_singbox_inbound() {
 
             # 添加TLS配置
             if [[ "$security" == "tls" || "$security" == "reality" ]]; then
+                echo "    [调试] 开始生成TLS配置 (security=$security)" >&2
                 local tls_config
-                if ! tls_config=$(generate_singbox_tls_config "$security" "$extra"); then
+                tls_config=$(generate_singbox_tls_config "$security" "$extra")
+                local tls_exit_code=$?
+
+                if [[ $tls_exit_code -ne 0 ]]; then
+                    echo "    [错误] TLS配置生成失败，退出码: $tls_exit_code" >&2
                     return 1
                 fi
-                inbound=$(echo "$inbound" | jq --argjson tls "$tls_config" '. + {tls: $tls}') || return 1
+
+                echo "    [调试] TLS配置生成成功，长度: ${#tls_config}" >&2
+                echo "    [调试] 合并TLS配置到inbound..." >&2
+
+                local merged_inbound
+                merged_inbound=$(echo "$inbound" | jq --argjson tls "$tls_config" '. + {tls: $tls}' 2>&1)
+                local merge_exit_code=$?
+
+                if [[ $merge_exit_code -ne 0 ]]; then
+                    echo "    [错误] 合并TLS配置失败，退出码: $merge_exit_code" >&2
+                    echo "    [错误] jq输出: $merged_inbound" >&2
+                    echo "    [调试] tls_config内容: $tls_config" >&2
+                    return 1
+                fi
+
+                inbound="$merged_inbound"
+                echo "    [调试] TLS配置合并成功" >&2
             fi
 
             # 添加传输层配置
@@ -515,7 +536,12 @@ generate_singbox_tls_config() {
                 return 1
             fi
 
-            if ! tls_config=$(jq -n \
+            echo "    [调试] 准备生成Reality TLS配置..." >&2
+            echo "    [调试] server=$server, server_port=$server_port" >&2
+            echo "    [调试] private_key长度=${#private_key}" >&2
+            echo "    [调试] short_id_json=$short_id_json" >&2
+
+            tls_config=$(jq -n \
                 --argjson enabled true \
                 --arg server "$server" \
                 --argjson server_port "$server_port" \
@@ -532,9 +558,16 @@ generate_singbox_tls_config() {
                         private_key: $private_key,
                         short_id: $short_id
                     }
-                }'); then
+                }' 2>&1)
+
+            local jq_exit_code=$?
+            if [[ $jq_exit_code -ne 0 ]]; then
+                echo "    [错误] jq命令失败，退出码: $jq_exit_code" >&2
+                echo "    [错误] jq输出: $tls_config" >&2
                 return 1
             fi
+
+            echo "    [调试] Reality TLS配置生成成功" >&2
             ;;
 
         tls)

@@ -527,12 +527,13 @@ generate_singbox_tls_config() {
                 return 1
             fi
 
-            # 验证私钥格式（应该是base64字符串）
-            if ! echo "$private_key" | grep -qE '^[A-Za-z0-9+/=]+$'; then
-                print_error "Reality 节点私钥格式无效"
-                print_error "端口: $port"
-                print_error "私钥: $private_key"
-                print_error "请删除此节点并重新创建"
+            # 验证私钥格式（base64或base64url格式）
+            # base64url使用 - 和 _ 代替 + 和 /
+            if ! echo "$private_key" | grep -qE '^[A-Za-z0-9+/_=-]{40,}$'; then
+                print_error "Reality 节点私钥格式无效" >&2
+                print_error "端口: $port" >&2
+                print_error "私钥: $private_key" >&2
+                print_error "请删除此节点并重新创建" >&2
                 return 1
             fi
 

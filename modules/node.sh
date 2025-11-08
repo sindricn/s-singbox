@@ -446,17 +446,18 @@ quick_add_vless_reality() {
         return 1
     fi
 
-    # 验证密钥格式（应为base64）
-    if ! [[ "$private_key" =~ ^[A-Za-z0-9+/=]{40,}$ ]]; then
-        print_error "私钥格式无效（不是base64）: $private_key"
+    # 验证密钥格式（base64或base64url）
+    # Reality使用base64url格式：- 代替 +，_ 代替 /
+    if ! [[ "$private_key" =~ ^[A-Za-z0-9+/_=-]{40,}$ ]]; then
+        print_error "私钥格式无效（不是base64/base64url）: $private_key"
         echo ""
         print_info "原始输出："
         echo "$keypair"
         return 1
     fi
 
-    if ! [[ "$public_key" =~ ^[A-Za-z0-9+/=]{40,}$ ]]; then
-        print_error "公钥格式无效（不是base64）: $public_key"
+    if ! [[ "$public_key" =~ ^[A-Za-z0-9+/_=-]{40,}$ ]]; then
+        print_error "公钥格式无效（不是base64/base64url）: $public_key"
         echo ""
         print_info "原始输出："
         echo "$keypair"

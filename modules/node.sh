@@ -523,6 +523,15 @@ quick_add_vless_reality() {
     echo -e "  ShortId: ${YELLOW}$short_id${NC}"
     echo ""
 
+    # 调试：在调用前检查变量
+    echo -e "${YELLOW}[调试] 准备生成分享链接，参数检查：${NC}"
+    echo "  admin_uuid: [$admin_uuid] (长度: ${#admin_uuid})"
+    echo "  admin_remark: [$admin_remark] (长度: ${#admin_remark})"
+    echo "  port: [$port] (长度: ${#port})"
+    echo "  server_names: [$server_names] (长度: ${#server_names})"
+    echo "  public_key: [$public_key] (长度: ${#public_key})"
+    echo "  short_id: [$short_id] (长度: ${#short_id})"
+
     # 生成并显示分享链接
     generate_vless_reality_share "$admin_uuid" "$admin_remark" "$port" "$server_names" "$public_key" "$short_id"
 
@@ -541,12 +550,25 @@ generate_vless_reality_share() {
     local public_key=$5
     local short_id=$6
 
+    # 调试输出
+    echo ""
+    echo -e "${YELLOW}[调试] 分享链接参数：${NC}"
+    echo "  UUID: $uuid"
+    echo "  Email: $email"
+    echo "  端口: $port"
+    echo "  SNI: $sni"
+    echo "  公钥: $public_key"
+    echo "  ShortID: $short_id"
+    echo ""
+
     # 获取服务器 IP
     local server_ip=$(curl -s ip.sb 2>/dev/null || echo "YOUR_SERVER_IP")
+    echo -e "${YELLOW}[调试] 服务器IP: $server_ip${NC}"
 
     # 构建分享链接
     local share_link="vless://${uuid}@${server_ip}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=tcp&headerType=none#${email}"
 
+    echo ""
     echo -e "${CYAN}分享链接：${NC}"
     echo -e "${GREEN}$share_link${NC}"
     echo ""

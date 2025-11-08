@@ -84,6 +84,8 @@ generate_singbox_config() {
                                     flow="xtls-rprx-vision"
                                 fi
 
+                                echo "      [调试] VLESS用户: $username, security=$security, flow=$flow" >&2
+
                                 if [[ -n "$flow" ]]; then
                                     user_item=$(jq -n \
                                         --arg name "$username" \
@@ -96,6 +98,7 @@ generate_singbox_config() {
                                         --arg uuid "$uuid" \
                                         '{name: $name, uuid: $uuid}')
                                 fi
+                                echo "      [调试] user_item: $(echo "$user_item" | jq -c .)" >&2
                                 ;;
                             vmess)
                                 user_item=$(jq -n \
@@ -372,6 +375,8 @@ generate_singbox_inbound() {
             local down_mbps=$(echo "$extra" | jq -r '.down_mbps // 100')
             local obfs_password=$(echo "$extra" | jq -r '.obfs_password // ""')
 
+            echo "    [调试] Hysteria2配置: up_mbps=$up_mbps, down_mbps=$down_mbps" >&2
+
             inbound=$(jq -n \
                 --arg type "hysteria2" \
                 --arg tag "hysteria2-$port" \
@@ -388,7 +393,14 @@ generate_singbox_inbound() {
                     up_mbps: $up_mbps,
                     down_mbps: $down_mbps,
                     users: $users
-                }') || return 1
+                }')
+
+            local jq_exit=$?
+            if [[ $jq_exit -ne 0 ]]; then
+                echo "    [错误] Hysteria2 inbound生成失败" >&2
+                return 1
+            fi
+            echo "    [调试] Hysteria2 inbound基础配置生成成功" >&2
 
             # 添加混淆配置
             if [[ -n "$obfs_password" && "$obfs_password" != "null" ]]; then
@@ -407,11 +419,31 @@ generate_singbox_inbound() {
             fi
 
             # Hysteria2 必须启用TLS
+            echo "    [调试] 开始生成Hysteria2 TLS配置..." >&2
             local tls_config
-            if ! tls_config=$(generate_singbox_tls_config "tls" "$extra"); then
+            tls_config=$(generate_singbox_tls_config "tls" "$extra")
+            local tls_exit=$?
+
+            if [[ $tls_exit -ne 0 ]]; then
+                echo "    [错误] Hysteria2 TLS配置生成失败，退出码: $tls_exit" >&2
                 return 1
             fi
-            inbound=$(echo "$inbound" | jq --argjson tls "$tls_config" '. + {tls: $tls}') || return 1
+
+            echo "    [调试] Hysteria2 TLS配置生成成功，长度: ${#tls_config}" >&2
+            echo "    [调试] TLS配置内容: $(echo "$tls_config" | jq -c .)" >&2
+
+            local merged
+            merged=$(echo "$inbound" | jq --argjson tls "$tls_config" '. + {tls: $tls}' 2>&1)
+            local merge_exit=$?
+
+            if [[ $merge_exit -ne 0 ]]; then
+                echo "    [错误] Hysteria2合并TLS配置失败，退出码: $merge_exit" >&2
+                echo "    [错误] jq输出: $merged" >&2
+                return 1
+            fi
+
+            inbound="$merged"
+            echo "    [调试] Hysteria2 TLS配置合并成功" >&2
 
             # 添加伪装配置
             local masquerade=$(echo "$extra" | jq -r '.masquerade // "https://bing.com"')
@@ -589,22 +621,50 @@ generate_singbox_tls_config() {
             # 普通TLS配置
             local cert_path=$(echo "$extra" | jq -r '.tls_cert // ""')
             local key_path=$(echo "$extra" | jq -r '.tls_key // ""')
+            local tls_domain=$(echo "$extra" | jq -r '.tls_domain // ""')
+
+            echo "    [调试] TLS配置: domain=$tls_domain, cert=$cert_path, key=$key_path" >&2
 
             if [[ -n "$cert_path" && -n "$key_path" ]]; then
-                if ! tls_config=$(jq -n \
-                    --argjson enabled true \
-                    --arg cert "$cert_path" \
-                    --arg key "$key_path" \
-                    '{
-                        enabled: $enabled,
-                        certificate_path: $cert,
-                        key_path: $key
-                    }'); then
+                # 完整TLS配置（带证书）
+                if [[ -n "$tls_domain" && "$tls_domain" != "null" ]]; then
+                    tls_config=$(jq -n \
+                        --argjson enabled true \
+                        --arg server_name "$tls_domain" \
+                        --arg cert "$cert_path" \
+                        --arg key "$key_path" \
+                        '{
+                            enabled: $enabled,
+                            server_name: $server_name,
+                            certificate_path: $cert,
+                            key_path: $key
+                        }')
+                else
+                    tls_config=$(jq -n \
+                        --argjson enabled true \
+                        --arg cert "$cert_path" \
+                        --arg key "$key_path" \
+                        '{
+                            enabled: $enabled,
+                            certificate_path: $cert,
+                            key_path: $key
+                        }')
+                fi
+
+                local tls_exit=$?
+                if [[ $tls_exit -ne 0 ]]; then
+                    echo "    [错误] TLS配置生成失败" >&2
                     return 1
                 fi
+                echo "    [调试] TLS配置生成成功: $(echo "$tls_config" | jq -c .)" >&2
             else
+                echo "    [警告] 缺少证书路径，使用基本TLS配置" >&2
                 # 没有证书路径，返回基本TLS配置
-                tls_config='{"enabled": true}'
+                if [[ -n "$tls_domain" && "$tls_domain" != "null" ]]; then
+                    tls_config=$(jq -n --arg server_name "$tls_domain" '{enabled: true, server_name: $server_name}')
+                else
+                    tls_config='{"enabled": true}'
+                fi
             fi
             ;;
 

@@ -1365,7 +1365,13 @@ view_users_menu() {
         case "$choice" in
             1)
                 echo ""
-                read -p "请输入要查看的用户名: " username
+                read -p "请输入要查看的用户名 (0 返回): " username
+
+                # 支持返回
+                if [[ "$username" == "0" ]]; then
+                    continue
+                fi
+
                 if [[ -n "$username" ]]; then
                     show_user_detail "$username"
                     echo ""
@@ -1435,9 +1441,16 @@ modify_user_basic_info() {
     list_global_users
 
     echo ""
-    read -p "请输入要修改的用户名: " username
+    read -p "请输入要修改的用户名 (0 返回): " username
+
+    # 支持返回上一级
+    if [[ "$username" == "0" ]]; then
+        return 0
+    fi
+
     if [[ -z "$username" ]]; then
         print_error "用户名不能为空"
+        sleep 1
         return 1
     fi
 
@@ -1445,89 +1458,166 @@ modify_user_basic_info() {
     local user=$(jq -r ".users[] | select(.username == \"$username\")" "$USERS_FILE" 2>/dev/null)
     if [[ -z "$user" || "$user" == "null" ]]; then
         print_error "用户不存在: $username"
+        sleep 1
         return 1
     fi
 
     local uuid=$(echo "$user" | jq -r '.id')
-    local current_password=$(echo "$user" | jq -r '.password // ""')
-    local current_email=$(echo "$user" | jq -r '.email // ""')
-    local current_enabled=$(echo "$user" | jq -r '.enabled // true')
 
-    echo ""
-    echo -e "${CYAN}当前信息：${NC}"
-    echo -e "  用户名: ${YELLOW}$username${NC}"
-    echo -e "  密码: ${YELLOW}$current_password${NC}"
-    echo -e "  邮箱: ${YELLOW}$current_email${NC}"
-    echo -e "  状态: ${YELLOW}$current_enabled${NC}"
-    echo ""
+    # 进入修改菜单
+    while true; do
+        # 重新获取最新的用户信息
+        user=$(jq -r ".users[] | select(.id == \"$uuid\")" "$USERS_FILE" 2>/dev/null)
+        local current_password=$(echo "$user" | jq -r '.password // ""')
+        local current_email=$(echo "$user" | jq -r '.email // ""')
+        local current_enabled=$(echo "$user" | jq -r '.enabled // true')
 
-    # 修改密码
-    echo -e "${GREEN}修改密码${NC} ${GRAY}(直接回车跳过)${NC}"
-    read -p "请输入新密码: " new_password
-    if [[ -z "$new_password" ]]; then
-        new_password="$current_password"
-    fi
+        local status_display=""
+        if [[ "$current_enabled" == "true" ]]; then
+            status_display="${GREEN}启用${NC}"
+        else
+            status_display="${RED}禁用${NC}"
+        fi
 
-    # 修改邮箱
-    echo -e "${GREEN}修改邮箱${NC} ${GRAY}(直接回车跳过)${NC}"
-    read -p "请输入新邮箱: " new_email
-    if [[ -z "$new_email" ]]; then
-        new_email="$current_email"
-    fi
+        clear
+        echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║      修改用户: $username                ${NC}"
+        echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+        echo ""
+        echo -e "${CYAN}当前信息：${NC}"
+        echo -e "  用户名: ${YELLOW}$username${NC}"
+        echo -e "  密码: ${YELLOW}$current_password${NC}"
+        echo -e "  邮箱: ${YELLOW}$current_email${NC}"
+        echo -e "  状态: $status_display"
+        echo ""
+        echo -e "${GREEN}1.${NC} 修改密码"
+        echo -e "${GREEN}2.${NC} 修改邮箱"
+        echo -e "${GREEN}3.${NC} 修改状态"
+        echo -e "${GREEN}0.${NC} 返回上级菜单"
+        echo ""
+        read -p "请选择要修改的项目: " choice
 
-    # 修改状态
-    echo -e "${GREEN}修改状态${NC} ${GRAY}(直接回车跳过)${NC}"
-    read -p "启用用户? [Y/n]: " enable_choice
-    local new_enabled
-    if [[ -z "$enable_choice" ]]; then
-        new_enabled="$current_enabled"
-    elif [[ "$enable_choice" == "n" || "$enable_choice" == "N" ]]; then
-        new_enabled="false"
-    else
-        new_enabled="true"
-    fi
+        case "$choice" in
+            1)
+                # 修改密码
+                echo ""
+                read -p "请输入新密码 (0 取消): " new_password
+                if [[ "$new_password" == "0" ]]; then
+                    continue
+                fi
+                if [[ -z "$new_password" ]]; then
+                    print_error "密码不能为空"
+                    sleep 1
+                    continue
+                fi
 
-    # 确认修改
-    echo ""
-    echo -e "${YELLOW}确认修改：${NC}"
-    echo -e "  密码: ${CYAN}$new_password${NC}"
-    echo -e "  邮箱: ${CYAN}$new_email${NC}"
-    echo -e "  状态: ${CYAN}$new_enabled${NC}"
-    echo ""
-    read -p "确认修改? [y/N]: " confirm
-    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-        print_info "取消修改"
-        return 0
-    fi
+                # 更新密码
+                local tmp_file="${USERS_FILE}.tmp"
+                if ! jq --arg uuid "$uuid" --arg password "$new_password" \
+                    '(.users[] | select(.id == $uuid)) |= (.password = $password)' \
+                    "$USERS_FILE" > "$tmp_file"; then
+                    print_error "修改密码失败"
+                    rm -f "$tmp_file"
+                    sleep 1
+                    continue
+                fi
+                mv "$tmp_file" "$USERS_FILE"
+                print_success "密码修改成功"
 
-    # 更新用户信息
-    local tmp_file="${USERS_FILE}.tmp"
-    if ! jq --arg uuid "$uuid" \
-            --arg password "$new_password" \
-            --arg email "$new_email" \
-            --arg enabled "$new_enabled" \
-            '(.users[] | select(.id == $uuid)) |= (
-                .password = $password |
-                .email = $email |
-                .enabled = ($enabled == "true")
-            )' "$USERS_FILE" > "$tmp_file"; then
-        print_error "修改用户信息失败"
-        rm -f "$tmp_file"
-        return 1
-    fi
-    mv "$tmp_file" "$USERS_FILE"
+                # 重新生成配置并重启
+                generate_singbox_config && restart_sing-box
+                sleep 1
+                ;;
+            2)
+                # 修改邮箱
+                echo ""
+                read -p "请输入新邮箱 (0 取消): " new_email
+                if [[ "$new_email" == "0" ]]; then
+                    continue
+                fi
+                if [[ -z "$new_email" ]]; then
+                    print_error "邮箱不能为空"
+                    sleep 1
+                    continue
+                fi
 
-    print_success "用户信息修改成功"
+                # 更新邮箱
+                local tmp_file="${USERS_FILE}.tmp"
+                if ! jq --arg uuid "$uuid" --arg email "$new_email" \
+                    '(.users[] | select(.id == $uuid)) |= (.email = $email)' \
+                    "$USERS_FILE" > "$tmp_file"; then
+                    print_error "修改邮箱失败"
+                    rm -f "$tmp_file"
+                    sleep 1
+                    continue
+                fi
+                mv "$tmp_file" "$USERS_FILE"
+                print_success "邮箱修改成功"
 
-    # 重新生成配置
-    generate_singbox_config
-    if [[ $? -eq 0 ]]; then
-        restart_sing-box
-        print_success "配置已更新并重启服务"
-    else
-        print_error "配置生成失败"
-        return 1
-    fi
+                # 重新生成配置并重启
+                generate_singbox_config && restart_sing-box
+                sleep 1
+                ;;
+            3)
+                # 修改状态
+                echo ""
+                echo -e "${CYAN}当前状态: $status_display${NC}"
+                echo ""
+                echo -e "${GREEN}1.${NC} 启用"
+                echo -e "${GREEN}2.${NC} 禁用"
+                echo -e "${GREEN}0.${NC} 取消"
+                echo ""
+                read -p "请选择: " status_choice
+
+                local new_enabled=""
+                case "$status_choice" in
+                    1)
+                        new_enabled="true"
+                        ;;
+                    2)
+                        new_enabled="false"
+                        ;;
+                    0)
+                        continue
+                        ;;
+                    *)
+                        print_error "无效选择"
+                        sleep 1
+                        continue
+                        ;;
+                esac
+
+                # 更新状态
+                local tmp_file="${USERS_FILE}.tmp"
+                if ! jq --arg uuid "$uuid" --argjson enabled "$new_enabled" \
+                    '(.users[] | select(.id == $uuid)) |= (.enabled = $enabled)' \
+                    "$USERS_FILE" > "$tmp_file"; then
+                    print_error "修改状态失败"
+                    rm -f "$tmp_file"
+                    sleep 1
+                    continue
+                fi
+                mv "$tmp_file" "$USERS_FILE"
+
+                if [[ "$new_enabled" == "true" ]]; then
+                    print_success "用户已启用"
+                else
+                    print_success "用户已禁用"
+                fi
+
+                # 重新生成配置并重启
+                generate_singbox_config && restart_sing-box
+                sleep 1
+                ;;
+            0)
+                return 0
+                ;;
+            *)
+                print_error "无效选择"
+                sleep 1
+                ;;
+        esac
+    done
 }
 
 # 修改用户绑定节点
@@ -1542,10 +1632,16 @@ modify_user_bindings() {
         list_global_users
 
         echo ""
-        read -p "请输入要修改的用户名: " username
+        read -p "请输入要修改的用户名 (0 返回): " username
+
+        # 支持返回上一级
+        if [[ "$username" == "0" ]]; then
+            return 0
+        fi
+
         if [[ -z "$username" ]]; then
             print_error "用户名不能为空"
-            read -p "按回车键继续..."
+            sleep 1
             continue
         fi
 
@@ -1553,7 +1649,7 @@ modify_user_bindings() {
         local uuid=$(jq -r ".users[] | select(.username == \"$username\") | .id" "$USERS_FILE" 2>/dev/null)
         if [[ -z "$uuid" || "$uuid" == "null" ]]; then
             print_error "用户不存在: $username"
-            read -p "按回车键继续..."
+            sleep 1
             continue
         fi
 
@@ -1635,8 +1731,14 @@ add_user_node_bindings() {
     fi
 
     echo ""
-    echo -e "${YELLOW}提示：可以输入多个端口，用空格分隔${NC}"
+    echo -e "${YELLOW}提示：可以输入多个端口，用空格分隔 (0 取消)${NC}"
     read -p "请输入要绑定的节点端口: " ports
+
+    # 支持返回
+    if [[ "$ports" == "0" ]]; then
+        return 0
+    fi
+
     if [[ -z "$ports" ]]; then
         print_info "取消操作"
         return 0
@@ -1729,8 +1831,14 @@ remove_user_node_bindings() {
     done <<< "$bound_ports"
 
     echo ""
-    echo -e "${YELLOW}提示：可以输入多个端口，用空格分隔${NC}"
+    echo -e "${YELLOW}提示：可以输入多个端口，用空格分隔 (0 取消)${NC}"
     read -p "请输入要移除的节点端口: " ports
+
+    # 支持返回
+    if [[ "$ports" == "0" ]]; then
+        return 0
+    fi
+
     if [[ -z "$ports" ]]; then
         print_info "取消操作"
         return 0
@@ -1781,8 +1889,14 @@ delete_users_batch() {
     list_global_users
 
     echo ""
-    echo -e "${YELLOW}提示：可以输入多个用户名，用空格分隔${NC}"
+    echo -e "${YELLOW}提示：可以输入多个用户名，用空格分隔 (0 返回)${NC}"
     read -p "请输入要删除的用户名: " usernames
+
+    # 支持返回
+    if [[ "$usernames" == "0" ]]; then
+        return 0
+    fi
+
     if [[ -z "$usernames" ]]; then
         print_error "用户名不能为空"
         return 1

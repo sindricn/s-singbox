@@ -96,7 +96,9 @@ list_global_users() {
     fi
 
     echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
-    printf "${CYAN}║${NC} %-10s  %-16s  %-20s  %-36s  %s  %s ${CYAN}║${NC}\n" "用户名" "密码" "邮箱" "UUID" "状态  " "在线    "
+    # 表头：手动对齐（中文字符每个占2显示宽度）
+    # 用户名(6)+4空格=10, 密码(4)+12空格=16, 邮箱(4)+16空格=20, UUID=36, 状态(4)+2空格=6, 在线(4)+4空格=8
+    echo -e "${CYAN}║${NC} 用户名      密码              邮箱                  UUID                                  状态    在线     ${CYAN}║${NC}"
     echo -e "${CYAN}╠══════════════════════════════════════════════════════════════════════════════════════════════════════════╣${NC}"
 
     while IFS= read -r user; do
@@ -176,9 +178,20 @@ list_global_users() {
             online_display="${GRAY}已禁用${NC}"
         fi
 
-        # 计算需要填充的空格（基于纯文本长度）
-        local status_spaces=$((6 - ${#status_text}))
-        local online_spaces=$((8 - ${#online_text}))
+        # 计算显示宽度（中文字符每个占2宽度）
+        # 使用bash内置的字符串长度计算
+        local status_char_count=${#status_text}
+        # 对于纯中文，显示宽度 = 字符数 × 2
+        local status_display_width=$((status_char_count * 2))
+        local status_spaces=$((6 - status_display_width))
+        # 防止负数
+        [[ $status_spaces -lt 0 ]] && status_spaces=0
+
+        local online_char_count=${#online_text}
+        local online_display_width=$((online_char_count * 2))
+        local online_spaces=$((8 - online_display_width))
+        # 防止负数
+        [[ $online_spaces -lt 0 ]] && online_spaces=0
 
         # 生成填充空格字符串
         local status_padding=$(printf '%*s' "$status_spaces" "")

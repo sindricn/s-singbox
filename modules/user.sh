@@ -130,7 +130,14 @@ list_global_users() {
             if [[ -n "$port" ]]; then
                 # 从配置文件中获取实际使用的email(可能与用户文件中的不同)
                 local config_email=$(get_user_email_from_config "$uuid")
-                if [[ -n "$config_email" && "$config_email" != "null" ]]; then
+
+                # 如果配置文件中找不到email，使用用户文件中的email
+                if [[ -z "$config_email" || "$config_email" == "null" ]]; then
+                    config_email="$email"
+                fi
+
+                # 查询在线状态
+                if [[ -n "$config_email" && "$config_email" != "null" && "$config_email" != "未设置" ]]; then
                     local user_status=$(get_user_online_status "$config_email" "$port")
                     case $user_status in
                         online) online_status="${GREEN}在线${NC}" ;;
@@ -139,7 +146,8 @@ list_global_users() {
                         *) online_status="${GRAY}未知${NC}" ;;
                     esac
                 else
-                    online_status="${GRAY}未配置${NC}"
+                    # 如果email都没有，显示离线
+                    online_status="${YELLOW}离线${NC}"
                 fi
             else
                 online_status="${GRAY}未绑定${NC}"

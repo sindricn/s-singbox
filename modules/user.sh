@@ -102,9 +102,9 @@ list_global_users() {
     while IFS= read -r user; do
         local username=$(echo "$user" | jq -r '.username // "未设置"')
         local password=$(echo "$user" | jq -r '.password // "无"')
-        local email=$(echo "$user" | jq -r '.email // "未设置"')
+        local email=$(echo "$user" | jq -r 'if .email == "" or .email == null then "未设置" else .email end')
         local uuid=$(echo "$user" | jq -r '.id')
-        local enabled=$(echo "$user" | jq -r '.enabled // true')
+        local enabled=$(echo "$user" | jq -r 'if .enabled == true then "true" else "false" end')
 
         local short_uuid="${uuid:0:16}..."
         local short_password="${password:0:12}"
@@ -139,7 +139,7 @@ list_global_users() {
                         *) online_status="${GRAY}未知${NC}" ;;
                     esac
                 else
-                    online_status="${GRAY}无Email${NC}"
+                    online_status="${GRAY}未配置${NC}"
                 fi
             else
                 online_status="${GRAY}未绑定${NC}"
@@ -269,9 +269,9 @@ show_user_detail() {
 
     local uuid=$(echo "$user" | jq -r '.id')
     local password=$(echo "$user" | jq -r '.password // "无"')
-    local email=$(echo "$user" | jq -r '.email // "未设置"')
+    local email=$(echo "$user" | jq -r 'if .email == "" or .email == null then "未设置" else .email end')
     local level=$(echo "$user" | jq -r '.level // 0')
-    local enabled=$(echo "$user" | jq -r '.enabled // true')
+    local enabled=$(echo "$user" | jq -r 'if .enabled == true then "true" else "false" end')
     local created=$(echo "$user" | jq -r '.created // "未知"')
     local traffic_limit=$(echo "$user" | jq -r '.traffic_limit_gb // "unlimited"')
     local expire_date=$(echo "$user" | jq -r '.expire_date // "unlimited"')
@@ -1467,10 +1467,10 @@ modify_user_basic_info() {
     # 进入修改菜单
     while true; do
         # 重新获取最新的用户信息
-        user=$(jq -r ".users[] | select(.id == \"$uuid\")" "$USERS_FILE" 2>/dev/null)
+        user=$(jq -c ".users[] | select(.id == \"$uuid\")" "$USERS_FILE" 2>/dev/null)
         local current_password=$(echo "$user" | jq -r '.password // ""')
-        local current_email=$(echo "$user" | jq -r '.email // ""')
-        local current_enabled=$(echo "$user" | jq -r '.enabled // true')
+        local current_email=$(echo "$user" | jq -r 'if .email == "" or .email == null then "" else .email end')
+        local current_enabled=$(echo "$user" | jq -r 'if .enabled == true then "true" else "false" end')
 
         local status_display=""
         if [[ "$current_enabled" == "true" ]]; then

@@ -95,9 +95,9 @@ list_global_users() {
         return 0
     fi
 
-    echo -e "${CYAN}╔════════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
-    printf "${CYAN}║${NC} %-12s %-14s %-16s %-18s %-8s %-10s ${CYAN}║${NC}\n" "用户名" "密码" "邮箱" "UUID" "状态" "在线"
-    echo -e "${CYAN}╠════════════════════════════════════════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
+    printf "${CYAN}║${NC} %-10s  %-16s  %-20s  %-36s  %-6s  %-8s ${CYAN}║${NC}\n" "用户名" "密码" "邮箱" "UUID" "状态" "在线"
+    echo -e "${CYAN}╠══════════════════════════════════════════════════════════════════════════════════════════════════════════╣${NC}"
 
     while IFS= read -r user; do
         local username=$(echo "$user" | jq -r '.username // "未设置"')
@@ -106,25 +106,38 @@ list_global_users() {
         local uuid=$(echo "$user" | jq -r '.id')
         local enabled=$(echo "$user" | jq -r 'if .enabled == true then "true" else "false" end')
 
-        local short_uuid="${uuid:0:16}..."
-        local short_password="${password:0:12}"
-        if [[ ${#password} -gt 12 ]]; then
-            short_password="${password:0:9}..."
-        fi
-        local short_email="${email:0:14}"
-        if [[ ${#email} -gt 14 ]]; then
-            short_email="${email:0:11}..."
+        # 截断处理
+        local display_username="$username"
+        if [[ ${#username} -gt 10 ]]; then
+            display_username="${username:0:8}.."
         fi
 
-        local status=""
+        local display_password="$password"
+        if [[ ${#password} -gt 16 ]]; then
+            display_password="${password:0:14}.."
+        fi
+
+        local display_email="$email"
+        if [[ ${#email} -gt 20 ]]; then
+            display_email="${email:0:18}.."
+        fi
+
+        local display_uuid="$uuid"
+
+        # 状态（纯文本，用于对齐计算）
+        local status_text=""
+        local status_display=""
         if [[ "$enabled" == "true" ]]; then
-            status="${GREEN}启用${NC}"
+            status_text="启用"
+            status_display="${GREEN}启用${NC}"
         else
-            status="${RED}禁用${NC}"
+            status_text="禁用"
+            status_display="${RED}禁用${NC}"
         fi
 
         # 获取在线状态
-        local online_status=""
+        local online_text=""
+        local online_display=""
         if [[ "$enabled" == "true" ]]; then
             local port=$(get_user_first_port "$uuid")
             if [[ -n "$port" ]]; then
@@ -133,25 +146,47 @@ list_global_users() {
                 if [[ -n "$config_email" && "$config_email" != "null" ]]; then
                     local user_status=$(get_user_online_status "$config_email" "$port")
                     case $user_status in
-                        online) online_status="${GREEN}在线${NC}" ;;
-                        offline) online_status="${YELLOW}离线${NC}" ;;
-                        never) online_status="${GRAY}未连接${NC}" ;;
-                        *) online_status="${GRAY}未知${NC}" ;;
+                        online)
+                            online_text="在线"
+                            online_display="${GREEN}在线${NC}"
+                            ;;
+                        offline)
+                            online_text="离线"
+                            online_display="${YELLOW}离线${NC}"
+                            ;;
+                        never)
+                            online_text="未连接"
+                            online_display="${GRAY}未连接${NC}"
+                            ;;
+                        *)
+                            online_text="未知"
+                            online_display="${GRAY}未知${NC}"
+                            ;;
                     esac
                 else
-                    online_status="${GRAY}离线${NC}"
+                    online_text="离线"
+                    online_display="${GRAY}离线${NC}"
                 fi
             else
-                online_status="${GRAY}未绑定${NC}"
+                online_text="未绑定"
+                online_display="${GRAY}未绑定${NC}"
             fi
         else
-            online_status="${GRAY}已禁用${NC}"
+            online_text="已禁用"
+            online_display="${GRAY}已禁用${NC}"
         fi
 
-        printf "${CYAN}║${NC} %-12s %-14s %-16s %-18s %-8b %-10b ${CYAN}║${NC}\n" "$username" "$short_password" "$short_email" "$short_uuid" "$status" "$online_status"
+        # 计算需要填充的空格（基于纯文本长度）
+        local status_spaces=$((6 - ${#status_text}))
+        local online_spaces=$((8 - ${#online_text}))
+
+        # 手动构建对齐的输出
+        printf "${CYAN}║${NC} %-10s  %-16s  %-20s  %-36s  %s%${status_spaces}s  %s%${online_spaces}s ${CYAN}║${NC}\n" \
+            "$display_username" "$display_password" "$display_email" "$display_uuid" \
+            "$status_display" "" "$online_display" ""
     done < <(jq -c '.users[]' "$USERS_FILE" 2>/dev/null)
 
-    echo -e "${CYAN}╚════════════════════════════════════════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════════════════════════════════════════════╝${NC}"
     echo -e "${CYAN}总计: ${user_count} 个用户${NC}"
 }
 

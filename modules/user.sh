@@ -96,9 +96,8 @@ list_global_users() {
     fi
 
     echo -e "${CYAN}╔════════════════════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
-    # 表头：手动对齐（中文字符每个占2显示宽度）
-    # 总宽度110: ║(1) + 空格(1) + 内容(106) + 空格(1) + ║(1)
-    echo -e "${CYAN}║${NC} 用户名      密码              邮箱                  UUID                                  状态    在线                ${CYAN}║${NC}"
+    # 表头：镂空设计，移除右边框
+    echo -e "${CYAN}║${NC} 用户名      密码              邮箱                  UUID                                  状态    在线"
     echo -e "${CYAN}╠════════════════════════════════════════════════════════════════════════════════════════════════════════════╣${NC}"
 
     while IFS= read -r user; do
@@ -197,8 +196,8 @@ list_global_users() {
         local status_padding=$(printf '%*s' "$status_spaces" "")
         local online_padding=$(printf '%*s' "$online_spaces" "")
 
-        # 手动构建对齐的输出（末尾增加空格使总宽度为110）
-        printf "${CYAN}║${NC} %-10s  %-16s  %-20s  %-36s  %b%s  %b%s     ${CYAN}║${NC}\n" \
+        # 手动构建对齐的输出（移除右边框，保持镂空）
+        printf "${CYAN}║${NC} %-10s  %-16s  %-20s  %-36s  %b%s  %b%s\n" \
             "$display_username" "$display_password" "$display_email" "$display_uuid" \
             "$status_display" "$status_padding" "$online_display" "$online_padding"
     done < <(jq -c '.users[]' "$USERS_FILE" 2>/dev/null)

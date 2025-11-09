@@ -1340,4 +1340,526 @@ show_online_users() {
     fi
 }
 
+# ============================================================================
+# 新的用户管理功能
+# ============================================================================
+
+# 查看用户菜单（列表+详情）
+view_users_menu() {
+    while true; do
+        clear
+        echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║      查看用户                        ║${NC}"
+        echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+        echo ""
+
+        # 显示用户列表
+        list_global_users
+
+        echo ""
+        echo -e "${GREEN}1.${NC} 查看单个用户详情"
+        echo -e "${GREEN}0.${NC} 返回上级菜单"
+        echo ""
+        read -p "请选择: " choice
+
+        case "$choice" in
+            1)
+                echo ""
+                read -p "请输入要查看的用户名: " username
+                if [[ -n "$username" ]]; then
+                    show_user_detail "$username"
+                    echo ""
+                    read -p "按回车键继续..."
+                else
+                    print_error "用户名不能为空"
+                    sleep 1
+                fi
+                ;;
+            0)
+                return
+                ;;
+            *)
+                print_error "无效选择"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# 修改用户菜单
+modify_user_menu() {
+    while true; do
+        clear
+        echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║      修改用户                        ║${NC}"
+        echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+        echo ""
+
+        # 显示用户列表
+        list_global_users
+
+        echo ""
+        echo -e "${GREEN}1.${NC} 修改用户基础信息"
+        echo -e "${GREEN}2.${NC} 修改用户绑定节点"
+        echo -e "${GREEN}0.${NC} 返回上级菜单"
+        echo ""
+        read -p "请选择: " choice
+
+        case "$choice" in
+            1)
+                modify_user_basic_info
+                read -p "按回车键继续..."
+                ;;
+            2)
+                modify_user_bindings
+                ;;
+            0)
+                return
+                ;;
+            *)
+                print_error "无效选择"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# 修改用户基础信息
+modify_user_basic_info() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║      修改用户基础信息                ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    list_global_users
+
+    echo ""
+    read -p "请输入要修改的用户名: " username
+    if [[ -z "$username" ]]; then
+        print_error "用户名不能为空"
+        return 1
+    fi
+
+    # 检查用户是否存在
+    local user=$(jq -r ".users[] | select(.username == \"$username\")" "$USERS_FILE" 2>/dev/null)
+    if [[ -z "$user" || "$user" == "null" ]]; then
+        print_error "用户不存在: $username"
+        return 1
+    fi
+
+    local uuid=$(echo "$user" | jq -r '.id')
+    local current_password=$(echo "$user" | jq -r '.password // ""')
+    local current_email=$(echo "$user" | jq -r '.email // ""')
+    local current_enabled=$(echo "$user" | jq -r '.enabled // true')
+
+    echo ""
+    echo -e "${CYAN}当前信息：${NC}"
+    echo -e "  用户名: ${YELLOW}$username${NC}"
+    echo -e "  密码: ${YELLOW}$current_password${NC}"
+    echo -e "  邮箱: ${YELLOW}$current_email${NC}"
+    echo -e "  状态: ${YELLOW}$current_enabled${NC}"
+    echo ""
+
+    # 修改密码
+    echo -e "${GREEN}修改密码${NC} ${GRAY}(直接回车跳过)${NC}"
+    read -p "请输入新密码: " new_password
+    if [[ -z "$new_password" ]]; then
+        new_password="$current_password"
+    fi
+
+    # 修改邮箱
+    echo -e "${GREEN}修改邮箱${NC} ${GRAY}(直接回车跳过)${NC}"
+    read -p "请输入新邮箱: " new_email
+    if [[ -z "$new_email" ]]; then
+        new_email="$current_email"
+    fi
+
+    # 修改状态
+    echo -e "${GREEN}修改状态${NC} ${GRAY}(直接回车跳过)${NC}"
+    read -p "启用用户? [Y/n]: " enable_choice
+    local new_enabled
+    if [[ -z "$enable_choice" ]]; then
+        new_enabled="$current_enabled"
+    elif [[ "$enable_choice" == "n" || "$enable_choice" == "N" ]]; then
+        new_enabled="false"
+    else
+        new_enabled="true"
+    fi
+
+    # 确认修改
+    echo ""
+    echo -e "${YELLOW}确认修改：${NC}"
+    echo -e "  密码: ${CYAN}$new_password${NC}"
+    echo -e "  邮箱: ${CYAN}$new_email${NC}"
+    echo -e "  状态: ${CYAN}$new_enabled${NC}"
+    echo ""
+    read -p "确认修改? [y/N]: " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        print_info "取消修改"
+        return 0
+    fi
+
+    # 更新用户信息
+    local tmp_file="${USERS_FILE}.tmp"
+    if ! jq --arg uuid "$uuid" \
+            --arg password "$new_password" \
+            --arg email "$new_email" \
+            --arg enabled "$new_enabled" \
+            '(.users[] | select(.id == $uuid)) |= (
+                .password = $password |
+                .email = $email |
+                .enabled = ($enabled == "true")
+            )' "$USERS_FILE" > "$tmp_file"; then
+        print_error "修改用户信息失败"
+        rm -f "$tmp_file"
+        return 1
+    fi
+    mv "$tmp_file" "$USERS_FILE"
+
+    print_success "用户信息修改成功"
+
+    # 重新生成配置
+    generate_singbox_config
+    if [[ $? -eq 0 ]]; then
+        restart_sing-box
+        print_success "配置已更新并重启服务"
+    else
+        print_error "配置生成失败"
+        return 1
+    fi
+}
+
+# 修改用户绑定节点
+modify_user_bindings() {
+    while true; do
+        clear
+        echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║      修改用户绑定节点                ║${NC}"
+        echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+        echo ""
+
+        list_global_users
+
+        echo ""
+        read -p "请输入要修改的用户名: " username
+        if [[ -z "$username" ]]; then
+            print_error "用户名不能为空"
+            read -p "按回车键继续..."
+            continue
+        fi
+
+        # 检查用户是否存在
+        local uuid=$(jq -r ".users[] | select(.username == \"$username\") | .id" "$USERS_FILE" 2>/dev/null)
+        if [[ -z "$uuid" || "$uuid" == "null" ]]; then
+            print_error "用户不存在: $username"
+            read -p "按回车键继续..."
+            continue
+        fi
+
+        # 显示当前绑定的节点
+        echo ""
+        echo -e "${CYAN}当前绑定的节点：${NC}"
+        local bound_ports=$(jq -r ".bindings[] | select(.users[] == \"$uuid\") | .port" "$NODE_USERS_FILE" 2>/dev/null)
+        if [[ -z "$bound_ports" ]]; then
+            echo -e "  ${YELLOW}未绑定任何节点${NC}"
+        else
+            while IFS= read -r port; do
+                local node=$(jq -r ".nodes[] | select(.port == \"$port\")" "$NODES_FILE" 2>/dev/null)
+                local name=$(echo "$node" | jq -r '.name // "未命名"')
+                local protocol=$(echo "$node" | jq -r '.protocol')
+                echo -e "  ${CYAN}•${NC} $name (端口: $port, 协议: $protocol)"
+            done <<< "$bound_ports"
+        fi
+
+        echo ""
+        echo -e "${GREEN}1.${NC} 添加绑定节点"
+        echo -e "${GREEN}2.${NC} 移除绑定节点"
+        echo -e "${GREEN}0.${NC} 返回上级菜单"
+        echo ""
+        read -p "请选择: " choice
+
+        case "$choice" in
+            1)
+                add_user_node_bindings "$uuid" "$username"
+                read -p "按回车键继续..."
+                ;;
+            2)
+                remove_user_node_bindings "$uuid" "$username"
+                read -p "按回车键继续..."
+                ;;
+            0)
+                return
+                ;;
+            *)
+                print_error "无效选择"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# 添加用户绑定节点（支持多个）
+add_user_node_bindings() {
+    local uuid=$1
+    local username=$2
+
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║      添加绑定节点                    ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${CYAN}用户：${YELLOW}$username${NC}"
+    echo ""
+
+    # 显示所有可用节点
+    echo -e "${CYAN}可用节点：${NC}"
+    local node_count=0
+    while IFS= read -r node; do
+        local port=$(echo "$node" | jq -r '.port')
+        local protocol=$(echo "$node" | jq -r '.protocol')
+        local name=$(echo "$node" | jq -r '.name // "未命名"')
+
+        # 检查是否已绑定
+        local is_bound=$(jq -r ".bindings[] | select(.port == \"$port\" and (.users[] == \"$uuid\")) | .port" "$NODE_USERS_FILE" 2>/dev/null)
+
+        if [[ -z "$is_bound" ]]; then
+            echo -e "  ${GREEN}$port${NC} - $name ($protocol)"
+            ((node_count++))
+        fi
+    done < <(jq -c '.nodes[]' "$NODES_FILE" 2>/dev/null)
+
+    if [[ $node_count -eq 0 ]]; then
+        print_warning "没有可用的节点"
+        return 0
+    fi
+
+    echo ""
+    echo -e "${YELLOW}提示：可以输入多个端口，用空格分隔${NC}"
+    read -p "请输入要绑定的节点端口: " ports
+    if [[ -z "$ports" ]]; then
+        print_info "取消操作"
+        return 0
+    fi
+
+    local success_count=0
+    local fail_count=0
+
+    for port in $ports; do
+        # 检查节点是否存在
+        local node_exists=$(jq -r ".nodes[] | select(.port == \"$port\") | .port" "$NODES_FILE" 2>/dev/null)
+        if [[ -z "$node_exists" ]]; then
+            print_warning "节点不存在: $port"
+            ((fail_count++))
+            continue
+        fi
+
+        # 检查绑定是否已存在
+        local binding_exists=$(jq -r ".bindings[] | select(.port == \"$port\") | .port" "$NODE_USERS_FILE" 2>/dev/null)
+
+        local tmp_file="${NODE_USERS_FILE}.tmp"
+        if [[ -z "$binding_exists" ]]; then
+            # 创建新绑定
+            if ! jq --arg port "$port" --arg uuid "$uuid" \
+                '.bindings += [{port: $port, users: [$uuid]}]' \
+                "$NODE_USERS_FILE" > "$tmp_file"; then
+                print_error "添加绑定失败: $port"
+                rm -f "$tmp_file"
+                ((fail_count++))
+                continue
+            fi
+        else
+            # 添加到现有绑定
+            if ! jq --arg port "$port" --arg uuid "$uuid" \
+                '(.bindings[] | select(.port == $port) | .users) |= (. + [$uuid] | unique)' \
+                "$NODE_USERS_FILE" > "$tmp_file"; then
+                print_error "添加绑定失败: $port"
+                rm -f "$tmp_file"
+                ((fail_count++))
+                continue
+            fi
+        fi
+
+        mv "$tmp_file" "$NODE_USERS_FILE"
+        print_success "已绑定节点: $port"
+        ((success_count++))
+    done
+
+    echo ""
+    echo -e "${CYAN}操作结果：${NC}"
+    echo -e "  成功: ${GREEN}$success_count${NC}"
+    echo -e "  失败: ${RED}$fail_count${NC}"
+
+    if [[ $success_count -gt 0 ]]; then
+        # 重新生成配置
+        generate_singbox_config
+        if [[ $? -eq 0 ]]; then
+            restart_sing-box
+            print_success "配置已更新并重启服务"
+        fi
+    fi
+}
+
+# 移除用户绑定节点（支持多个）
+remove_user_node_bindings() {
+    local uuid=$1
+    local username=$2
+
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║      移除绑定节点                    ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${CYAN}用户：${YELLOW}$username${NC}"
+    echo ""
+
+    # 显示已绑定的节点
+    echo -e "${CYAN}已绑定的节点：${NC}"
+    local bound_ports=$(jq -r ".bindings[] | select(.users[] == \"$uuid\") | .port" "$NODE_USERS_FILE" 2>/dev/null)
+    if [[ -z "$bound_ports" ]]; then
+        print_warning "未绑定任何节点"
+        return 0
+    fi
+
+    while IFS= read -r port; do
+        local node=$(jq -r ".nodes[] | select(.port == \"$port\")" "$NODES_FILE" 2>/dev/null)
+        local name=$(echo "$node" | jq -r '.name // "未命名"')
+        local protocol=$(echo "$node" | jq -r '.protocol')
+        echo -e "  ${GREEN}$port${NC} - $name ($protocol)"
+    done <<< "$bound_ports"
+
+    echo ""
+    echo -e "${YELLOW}提示：可以输入多个端口，用空格分隔${NC}"
+    read -p "请输入要移除的节点端口: " ports
+    if [[ -z "$ports" ]]; then
+        print_info "取消操作"
+        return 0
+    fi
+
+    local success_count=0
+    local fail_count=0
+
+    for port in $ports; do
+        local tmp_file="${NODE_USERS_FILE}.tmp"
+        if ! jq --arg port "$port" --arg uuid "$uuid" \
+            '(.bindings[] | select(.port == $port) | .users) |= map(select(. != $uuid))' \
+            "$NODE_USERS_FILE" > "$tmp_file"; then
+            print_error "移除绑定失败: $port"
+            rm -f "$tmp_file"
+            ((fail_count++))
+            continue
+        fi
+
+        mv "$tmp_file" "$NODE_USERS_FILE"
+        print_success "已移除节点绑定: $port"
+        ((success_count++))
+    done
+
+    echo ""
+    echo -e "${CYAN}操作结果：${NC}"
+    echo -e "  成功: ${GREEN}$success_count${NC}"
+    echo -e "  失败: ${RED}$fail_count${NC}"
+
+    if [[ $success_count -gt 0 ]]; then
+        # 重新生成配置
+        generate_singbox_config
+        if [[ $? -eq 0 ]]; then
+            restart_sing-box
+            print_success "配置已更新并重启服务"
+        fi
+    fi
+}
+
+# 批量删除用户
+delete_users_batch() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║      批量删除用户                    ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    list_global_users
+
+    echo ""
+    echo -e "${YELLOW}提示：可以输入多个用户名，用空格分隔${NC}"
+    read -p "请输入要删除的用户名: " usernames
+    if [[ -z "$usernames" ]]; then
+        print_error "用户名不能为空"
+        return 1
+    fi
+
+    # 确认删除
+    echo ""
+    print_warning "删除用户将同时清理所有节点绑定关系和订阅链接"
+    echo -e "${RED}准备删除的用户：${NC}"
+    for username in $usernames; do
+        echo -e "  ${YELLOW}• $username${NC}"
+    done
+    echo ""
+    read -p "确认删除这些用户? [y/N]: " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        print_info "取消删除"
+        return 0
+    fi
+
+    local success_count=0
+    local fail_count=0
+
+    for username in $usernames; do
+        # 检查用户是否存在
+        local uuid=$(jq -r ".users[] | select(.username == \"$username\") | .id" "$USERS_FILE" 2>/dev/null)
+        if [[ -z "$uuid" || "$uuid" == "null" ]]; then
+            print_warning "用户不存在，跳过: $username"
+            ((fail_count++))
+            continue
+        fi
+
+        # 1. 删除订阅
+        if [[ -f "$SUBSCRIPTION_META_FILE" ]]; then
+            local sub_names=$(jq -r ".subscriptions[] | select(.user_id == \"$uuid\") | .name" "$SUBSCRIPTION_META_FILE" 2>/dev/null)
+            if [[ -n "$sub_names" ]]; then
+                while IFS= read -r sub_name; do
+                    find "$SUBSCRIPTION_DIR" -name "${sub_name}.*" -type f -delete 2>/dev/null
+                done <<< "$sub_names"
+
+                local tmp_file="${SUBSCRIPTION_META_FILE}.tmp"
+                jq --arg uuid "$uuid" '.subscriptions = [.subscriptions[] | select(.user_id != $uuid)]' "$SUBSCRIPTION_META_FILE" > "$tmp_file"
+                mv "$tmp_file" "$SUBSCRIPTION_META_FILE"
+            fi
+        fi
+
+        # 2. 解绑节点
+        if [[ -f "$NODE_USERS_FILE" ]]; then
+            local tmp_file="${NODE_USERS_FILE}.tmp"
+            jq --arg uuid "$uuid" '(.bindings[].users) |= map(select(. != $uuid))' "$NODE_USERS_FILE" > "$tmp_file"
+            mv "$tmp_file" "$NODE_USERS_FILE"
+        fi
+
+        # 3. 删除用户
+        local tmp_file="${USERS_FILE}.tmp"
+        if ! jq --arg uuid "$uuid" '.users = [.users[] | select(.id != $uuid)]' "$USERS_FILE" > "$tmp_file"; then
+            print_error "删除用户失败: $username"
+            rm -f "$tmp_file"
+            ((fail_count++))
+            continue
+        fi
+        mv "$tmp_file" "$USERS_FILE"
+
+        print_success "用户删除成功: $username"
+        ((success_count++))
+    done
+
+    echo ""
+    echo -e "${CYAN}操作结果：${NC}"
+    echo -e "  成功: ${GREEN}$success_count${NC}"
+    echo -e "  失败: ${RED}$fail_count${NC}"
+
+    if [[ $success_count -gt 0 ]]; then
+        # 重新生成配置
+        generate_singbox_config
+        restart_sing-box
+        print_success "配置已更新并重启服务"
+    fi
+}
+
 

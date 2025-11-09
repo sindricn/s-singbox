@@ -483,11 +483,10 @@ show_user_menu() {
     echo ""
     echo -e "${CYAN}当前用户数:${NC} ${YELLOW}${users_count}${NC} 个 ${CYAN}(启用:${NC} ${GREEN}${enabled_count}${NC}${CYAN})${NC}"
     echo ""
-    echo -e "${GREEN}1.${NC} 添加用户"
-    echo -e "${GREEN}2.${NC} 删除用户"
-    echo -e "${GREEN}3.${NC} 列出用户"
-    echo -e "${GREEN}4.${NC} 修改用户"
-    echo -e "${GREEN}5.${NC} 查看用户详情"
+    echo -e "${GREEN}1.${NC} 查看用户"
+    echo -e "${GREEN}2.${NC} 添加用户"
+    echo -e "${GREEN}3.${NC} 修改用户"
+    echo -e "${GREEN}4.${NC} 删除用户"
     echo -e "${GREEN}0.${NC} 返回主菜单"
     echo ""
 }
@@ -670,28 +669,21 @@ handle_user_menu() {
 
         case "$choice" in
             1)
+                # 查看用户
+                view_users_menu
+                ;;
+            2)
                 # 添加用户
                 add_global_user
                 read -p "按回车键继续..."
                 ;;
-            2)
-                # 删除用户
-                delete_global_user
-                read -p "按回车键继续..."
-                ;;
             3)
-                # 列出用户
-                list_global_users
-                read -p "按回车键继续..."
+                # 修改用户
+                modify_user_menu
                 ;;
             4)
-                # 修改用户
-                show_user_detail
-                read -p "按回车键继续..."
-                ;;
-            5)
-                # 查看用户详情
-                show_user_detail
+                # 删除用户
+                delete_users_batch
                 read -p "按回车键继续..."
                 ;;
             0)

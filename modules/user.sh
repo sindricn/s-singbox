@@ -774,7 +774,7 @@ update_user_level() {
 check_user_has_traffic() {
     local email=$1
     local api_addr="127.0.0.1:10085"
-    local sing-box_bin="/usr/local/sing-box/sing-box"
+    local singbox_bin="/usr/local/sing-box/sing-box"
 
     # 检查 API 端口是否在监听
     if ! ss -lnt 2>/dev/null | grep -q ":10085 " && ! netstat -lnt 2>/dev/null | grep -q ":10085 "; then
@@ -783,13 +783,13 @@ check_user_has_traffic() {
     fi
 
     # 检查 sing-box 命令是否可用
-    if [[ ! -x "$sing-box_bin" ]]; then
+    if [[ ! -x "$singbox_bin" ]]; then
         echo "unknown"
         return
     fi
 
     # 查询流量（使用 -pattern 参数返回 JSON，然后用 jq 解析）
-    local stats_json=$($sing-box_bin api statsquery --server=$api_addr -pattern "user>>>${email}>>>traffic" 2>/dev/null)
+    local stats_json=$($singbox_bin api statsquery --server=$api_addr -pattern "user>>>${email}>>>traffic" 2>/dev/null)
 
     # 从 JSON 中提取上行流量
     local uplink=$(echo "$stats_json" | jq -r ".stat[]? | select(.name == \"user>>>${email}>>>traffic>>>uplink\") | .value // 0" 2>/dev/null)
@@ -964,7 +964,7 @@ get_user_email_from_config() {
 get_user_traffic_summary() {
     local email=$1
     local api_addr="127.0.0.1:10085"
-    local sing-box_bin="/usr/local/sing-box/sing-box"
+    local singbox_bin="/usr/local/sing-box/sing-box"
 
     # 检查 API 端口是否在监听
     if ! ss -lnt 2>/dev/null | grep -q ":10085 " && ! netstat -lnt 2>/dev/null | grep -q ":10085 "; then
@@ -973,13 +973,13 @@ get_user_traffic_summary() {
     fi
 
     # 检查 sing-box 命令是否可用
-    if [[ ! -x "$sing-box_bin" ]]; then
+    if [[ ! -x "$singbox_bin" ]]; then
         echo "N/A"
         return
     fi
 
     # 查询流量（使用 -pattern 参数返回 JSON，然后用 jq 解析）
-    local stats_json=$($sing-box_bin api statsquery --server=$api_addr -pattern "user>>>${email}>>>traffic" 2>/dev/null)
+    local stats_json=$($singbox_bin api statsquery --server=$api_addr -pattern "user>>>${email}>>>traffic" 2>/dev/null)
 
     # 从 JSON 中提取上行流量
     local uplink=$(echo "$stats_json" | jq -r ".stat[]? | select(.name == \"user>>>${email}>>>traffic>>>uplink\") | .value // 0" 2>/dev/null)
@@ -1012,19 +1012,19 @@ update_user_traffic_usage() {
 
     # 从 Stats API 获取流量
     local api_addr="127.0.0.1:10085"
-    local sing-box_bin="/usr/local/sing-box/sing-box"
+    local singbox_bin="/usr/local/sing-box/sing-box"
 
     # 检查 API 和 sing-box 可用性
     if ! ss -lnt 2>/dev/null | grep -q ":10085 " && ! netstat -lnt 2>/dev/null | grep -q ":10085 "; then
         return 1
     fi
 
-    if [[ ! -x "$sing-box_bin" ]]; then
+    if [[ ! -x "$singbox_bin" ]]; then
         return 1
     fi
 
     # 查询流量
-    local stats_json=$($sing-box_bin api statsquery --server=$api_addr -pattern "user>>>${config_email}>>>traffic" 2>/dev/null)
+    local stats_json=$($singbox_bin api statsquery --server=$api_addr -pattern "user>>>${config_email}>>>traffic" 2>/dev/null)
 
     local uplink=$(echo "$stats_json" | jq -r ".stat[]? | select(.name == \"user>>>${config_email}>>>traffic>>>uplink\") | .value // 0" 2>/dev/null)
     uplink=${uplink:-0}

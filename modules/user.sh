@@ -180,10 +180,14 @@ list_global_users() {
         local status_spaces=$((6 - ${#status_text}))
         local online_spaces=$((8 - ${#online_text}))
 
+        # 生成填充空格字符串
+        local status_padding=$(printf '%*s' "$status_spaces" "")
+        local online_padding=$(printf '%*s' "$online_spaces" "")
+
         # 手动构建对齐的输出
-        printf "${CYAN}║${NC} %-10s  %-16s  %-20s  %-36s  %s%${status_spaces}s  %s%${online_spaces}s ${CYAN}║${NC}\n" \
+        printf "${CYAN}║${NC} %-10s  %-16s  %-20s  %-36s  %b%s  %b%s ${CYAN}║${NC}\n" \
             "$display_username" "$display_password" "$display_email" "$display_uuid" \
-            "$status_display" "" "$online_display" ""
+            "$status_display" "$status_padding" "$online_display" "$online_padding"
     done < <(jq -c '.users[]' "$USERS_FILE" 2>/dev/null)
 
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════════════════════════════════════════════╝${NC}"

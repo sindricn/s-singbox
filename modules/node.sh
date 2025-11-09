@@ -2664,11 +2664,9 @@ quick_setup_hysteria2() {
     esac
     echo ""
 
-    # 步骤 3/6: 生成认证和混淆密码
-    echo -e "${BLUE}步骤 3/6: 生成密码${NC}"
-    local auth_password=$(openssl rand -base64 16)
+    # 步骤 3/6: 生成混淆密码（认证密码将使用admin用户密码）
+    echo -e "${BLUE}步骤 3/6: 生成混淆密码${NC}"
     local obfs_password=$(openssl rand -base64 16)
-    print_success "认证密码: $auth_password"
     print_success "混淆密码: $obfs_password"
     echo ""
 
@@ -2778,46 +2776,19 @@ quick_setup_hysteria2() {
         return 1
     fi
 
-    # 绑定 admin 用户（Hysteria2 需要密码）
-    # 先创建一个带密码的用户
-    local admin_uuid=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "$(openssl rand -hex 16 | sed 's/\(..\)/\1-/g;s/-$//')")
-
-    # 检查用户是否存在
-    local user_exists=$(jq -r ".users[] | select(.id == \"$admin_uuid\")" "$DATA_DIR/users.json" 2>/dev/null)
-
-    if [[ -z "$user_exists" || "$user_exists" == "null" ]]; then
-        # 创建用户并设置密码
-        local user_entry=$(jq -n \
-            --arg id "$admin_uuid" \
-            --arg email "admin@local" \
-            --arg password "$auth_password" \
-            --argjson level 0 \
-            --argjson enabled true \
-            '{
-                id: $id,
-                email: $email,
-                password: $password,
-                level: $level,
-                enabled: $enabled,
-                remark: "admin"
-            }')
-
-        # 添加到用户列表
-        jq ".users += [$user_entry]" "$DATA_DIR/users.json" > "$DATA_DIR/users.json.tmp"
-        mv "$DATA_DIR/users.json.tmp" "$DATA_DIR/users.json"
+    # 绑定 admin 用户到节点
+    local admin_info=$(bind_admin_to_node "$port" "hysteria2")
+    if [[ $? -ne 0 ]]; then
+        print_error "绑定默认用户失败，正在回滚..."
+        # 删除刚创建的节点
+        jq --arg port "$port" '.nodes = [.nodes[] | select(.port != $port)]' "$DATA_DIR/nodes.json" > "$DATA_DIR/nodes.json.tmp"
+        mv "$DATA_DIR/nodes.json.tmp" "$DATA_DIR/nodes.json"
+        # 清理证书文件
+        rm -f "$tls_cert" "$tls_key"
+        return 1
     fi
 
-    # 绑定用户到节点
-    local binding_entry=$(jq -n \
-        --arg port "$port" \
-        --argjson users "[\"$admin_uuid\"]" \
-        '{
-            port: $port,
-            users: $users
-        }')
-
-    jq ".bindings += [$binding_entry]" "$DATA_DIR/node_users.json" > "$DATA_DIR/node_users.json.tmp"
-    mv "$DATA_DIR/node_users.json.tmp" "$DATA_DIR/node_users.json"
+    IFS='|' read -r admin_uuid admin_password admin_username <<< "$admin_info"
 
     # 重新生成sing-box配置文件
     generate_singbox_config
@@ -2904,7 +2875,8 @@ quick_setup_hysteria2() {
     fi
     echo -e "  协议: ${YELLOW}Hysteria2${NC}"
     echo -e "  伪装域名: ${YELLOW}$tls_domain${NC}"
-    echo -e "  认证密码: ${YELLOW}$auth_password${NC}"
+    echo -e "  默认用户: ${YELLOW}admin${NC}"
+    echo -e "  认证密码: ${YELLOW}$admin_password${NC}"
     echo -e "  混淆类型: ${YELLOW}Salamander${NC}"
     echo -e "  混淆密码: ${YELLOW}$obfs_password${NC}"
 
@@ -2934,7 +2906,7 @@ quick_setup_hysteria2() {
         }
 
         # 对密码进行URL编码
-        local encoded_auth_password=$(urlencode_simple "$auth_password")
+        local encoded_auth_password=$(urlencode_simple "$admin_password")
         local encoded_obfs_password=$(urlencode_simple "$obfs_password")
 
         # 构建分享链接（标准Hysteria2格式）
@@ -2971,7 +2943,7 @@ quick_setup_hysteria2() {
 
         # 显示解码后的密码用于调试
         echo -e "${YELLOW}节点凭证：${NC}"
-        echo -e "  • 认证密码: ${CYAN}$auth_password${NC}"
+        echo -e "  • 认证密码: ${CYAN}$admin_password${NC}"
         echo -e "  • 混淆密码: ${CYAN}$obfs_password${NC}"
         echo ""
 

@@ -285,7 +285,7 @@ show_main_menu() {
     local online_count=$(get_online_users_count 2>/dev/null || echo "0")
 
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║   sing-box 一键管理脚本 V2.0.0      ║${NC}"
+    echo -e "${CYAN}║${NC}   sing-box 一键管理脚本 V2.0.0"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
     echo -e "${CYAN}┌─────────────────────────────────────┐${NC}"
@@ -325,7 +325,7 @@ menu_core() {
     while true; do
         clear
         echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║          sing-box 管理               ║${NC}"
+        echo -e "${CYAN}║${NC}          sing-box 管理"
         echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
         echo ""
         echo -e "${GREEN}1.${NC} 安装 sing-box"
@@ -374,7 +374,7 @@ menu_core() {
                 # 查看日志
                 clear
                 echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-                echo -e "${CYAN}║          sing-box 日志               ║${NC}"
+                echo -e "${CYAN}║${NC}          sing-box 日志"
                 echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
                 echo ""
                 echo -e "${GREEN}1.${NC} 实时日志（最新50行）"
@@ -458,7 +458,7 @@ show_node_menu() {
     local nodes_count=$(get_nodes_count 2>/dev/null || echo "0")
 
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║          节点管理                    ║${NC}"
+    echo -e "${CYAN}║${NC}          节点管理"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
     echo -e "${CYAN}当前节点数:${NC} ${YELLOW}${nodes_count}${NC} 个"
@@ -478,7 +478,7 @@ show_user_menu() {
     local enabled_count=$(get_enabled_users_count 2>/dev/null || echo "0")
 
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║          用户管理                    ║${NC}"
+    echo -e "${CYAN}║${NC}          用户管理"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
     echo -e "${CYAN}当前用户数:${NC} ${YELLOW}${users_count}${NC} 个 ${CYAN}(启用:${NC} ${GREEN}${enabled_count}${NC}${CYAN})${NC}"
@@ -510,7 +510,7 @@ show_binding_menu() {
     local bindings_count=$(get_bindings_count 2>/dev/null || echo "0")
 
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║          绑定管理                    ║${NC}"
+    echo -e "${CYAN}║${NC}          绑定管理"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
     echo -e "${CYAN}当前绑定数:${NC} ${YELLOW}${bindings_count}${NC} 个"
@@ -532,7 +532,7 @@ show_config_menu() {
     clear
 
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║          配置管理                    ║${NC}"
+    echo -e "${CYAN}║${NC}          配置管理"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
     echo -e "${GREEN}1.${NC} 生成配置"
@@ -561,7 +561,7 @@ show_service_menu() {
     local service_status=$(get_service_status_display 2>/dev/null || echo "未知")
 
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║          服务控制                    ║${NC}"
+    echo -e "${CYAN}║${NC}          服务控制"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
     echo -e "${CYAN}服务状态:${NC} $service_status"
@@ -614,7 +614,7 @@ menu_node_add() {
     while true; do
         clear
         echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║          添加节点                    ║${NC}"
+        echo -e "${CYAN}║${NC}          添加节点"
         echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
         echo ""
         echo -e "${YELLOW}━━━━━━━ 🚀 快速搭建（推荐） ━━━━━━━${NC}"
@@ -841,7 +841,7 @@ handle_service_menu() {
 show_about() {
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║          关于脚本                    ║${NC}"
+    echo -e "${CYAN}║${NC}          关于脚本"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
     echo -e "${YELLOW}脚本名称：${NC}sing-box 一键管理脚本"
@@ -869,7 +869,7 @@ menu_script() {
     while true; do
         clear
         echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║          脚本管理                    ║${NC}"
+        echo -e "${CYAN}║${NC}          脚本管理"
         echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
         echo ""
         echo -e "${GREEN}1.${NC} 更新脚本"
@@ -909,7 +909,7 @@ menu_script() {
                 # 卸载管理
                 clear
                 echo -e "${RED}╔═══════════════════════════════════════╗${NC}"
-                echo -e "${RED}║          卸载管理                    ║${NC}"
+                echo -e "${RED}║${NC}          卸载管理"
                 echo -e "${RED}╚═══════════════════════════════════════╝${NC}"
                 echo ""
                 echo -e "${YELLOW}卸载选项：${NC}"

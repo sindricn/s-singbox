@@ -1083,7 +1083,7 @@ show_node_detail() {
 
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║      节点详情                        ║${NC}"
+    echo -e "${CYAN}║${NC}      节点详情"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
@@ -1192,7 +1192,7 @@ show_node_detail() {
 modify_node_config() {
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║      修改节点配置                    ║${NC}"
+    echo -e "${CYAN}║${NC}      修改节点配置"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
@@ -1336,7 +1336,7 @@ modify_node_config() {
 delete_single_node() {
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║      删除节点                        ║${NC}"
+    echo -e "${CYAN}║${NC}      删除节点"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
@@ -1487,7 +1487,7 @@ remove_inbound_from_config() {
 batch_delete_nodes() {
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║          批量删除节点                ║${NC}"
+    echo -e "${CYAN}║${NC}          批量删除节点"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
@@ -1567,7 +1567,7 @@ batch_delete_nodes() {
 batch_toggle_nodes() {
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║      批量启用/禁用节点              ║${NC}"
+    echo -e "${CYAN}║${NC}      批量启用/禁用节点"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
@@ -1654,7 +1654,7 @@ batch_toggle_nodes() {
 batch_modify_ports() {
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║          批量修改端口                ║${NC}"
+    echo -e "${CYAN}║${NC}          批量修改端口"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
@@ -2960,7 +2960,7 @@ menu_quick_setup() {
     while true; do
         clear
         echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║        快速搭建节点                  ║${NC}"
+        echo -e "${CYAN}║${NC}        快速搭建节点"
         echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
         echo ""
         echo -e "${YELLOW}━━━━━━━ 一键快速搭建 ━━━━━━━${NC}"

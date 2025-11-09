@@ -210,7 +210,7 @@ list_global_users() {
 add_global_user() {
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║      添加全局用户                    ║${NC}"
+    echo -e "${CYAN}║${NC}      添加全局用户"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
@@ -307,7 +307,7 @@ show_user_detail() {
 
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║      用户详情                        ║${NC}"
+    echo -e "${CYAN}║${NC}      用户详情"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
@@ -402,7 +402,7 @@ show_user_detail() {
 delete_single_user() {
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║      删除用户                        ║${NC}"
+    echo -e "${CYAN}║${NC}      删除用户"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
@@ -490,7 +490,7 @@ delete_single_user() {
 delete_global_user() {
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║      删除全局用户                    ║${NC}"
+    echo -e "${CYAN}║${NC}      删除全局用户"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
@@ -1258,7 +1258,7 @@ check_traffic_limits() {
 check_all_user_limits() {
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║      用户限制综合检查                ║${NC}"
+    echo -e "${CYAN}║${NC}      用户限制综合检查"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
@@ -1280,7 +1280,7 @@ show_online_users() {
 
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║      在线用户列表                    ║${NC}"
+    echo -e "${CYAN}║${NC}      在线用户列表"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
@@ -1305,7 +1305,7 @@ show_online_users() {
     fi
 
     echo -e "${CYAN}╔═════════════════════════════════════════════════════════════════════════════╗${NC}"
-    printf "${CYAN}║${NC} %-15s %-20s %-10s %-20s %-12s ${CYAN}║${NC}\n" "用户名" "邮箱" "节点端口" "流量统计" "连接状态"
+    printf "${CYAN}║${NC} %-15s %-20s %-10s %-20s %-12s\n" "用户名" "邮箱" "节点端口" "流量统计" "连接状态"
     echo -e "${CYAN}╠═════════════════════════════════════════════════════════════════════════════╣${NC}"
 
     while IFS= read -r user; do
@@ -1372,7 +1372,7 @@ show_online_users() {
             local short_email="${email:0:20}"
             local short_traffic="${traffic:0:20}"
 
-            printf "${CYAN}║${NC} %-15s %-20s %-10s %-20s ${GREEN}%-12s${NC} ${CYAN}║${NC}\n" \
+            printf "${CYAN}║${NC} %-15s %-20s %-10s %-20s ${GREEN}%-12s${NC}\n" \
                 "$short_username" "$short_email" "$active_port" "$short_traffic" "在线"
 
             [[ "$debug_mode" == "true" ]] && echo "  ${GREEN}✅ 显示为在线 (端口: $active_port)${NC}"
@@ -1400,7 +1400,7 @@ view_users_menu() {
     while true; do
         clear
         echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║      查看用户                        ║${NC}"
+        echo -e "${CYAN}║${NC}      查看用户"
         echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
         echo ""
 
@@ -1448,7 +1448,7 @@ modify_user_menu() {
     while true; do
         clear
         echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║      修改用户                        ║${NC}"
+        echo -e "${CYAN}║${NC}      修改用户"
         echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
         echo ""
 
@@ -1485,7 +1485,7 @@ modify_user_menu() {
 modify_user_basic_info() {
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║      修改用户基础信息                ║${NC}"
+    echo -e "${CYAN}║${NC}      修改用户基础信息"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
@@ -1676,7 +1676,7 @@ modify_user_bindings() {
     while true; do
         clear
         echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║      修改用户绑定节点                ║${NC}"
+        echo -e "${CYAN}║${NC}      修改用户绑定节点"
         echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
         echo ""
 
@@ -1753,7 +1753,7 @@ add_user_node_bindings() {
 
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║      添加绑定节点                    ║${NC}"
+    echo -e "${CYAN}║${NC}      添加绑定节点"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
     echo -e "${CYAN}用户：${YELLOW}$username${NC}"
@@ -1860,7 +1860,7 @@ remove_user_node_bindings() {
 
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║      移除绑定节点                    ║${NC}"
+    echo -e "${CYAN}║${NC}      移除绑定节点"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
     echo -e "${CYAN}用户：${YELLOW}$username${NC}"
@@ -1933,7 +1933,7 @@ remove_user_node_bindings() {
 delete_users_batch() {
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║      批量删除用户                    ║${NC}"
+    echo -e "${CYAN}║${NC}      批量删除用户"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 

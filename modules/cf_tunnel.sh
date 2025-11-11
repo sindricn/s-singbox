@@ -905,27 +905,38 @@ install_wgcf() {
 
     # 检测系统架构
     local arch=$(uname -m)
-    local download_url="https://github.com/ViRb3/wgcf/releases/latest/download/"
+    local wgcf_version="2.2.29"
+    local download_url="https://github.com/ViRb3/wgcf/releases/download/v${wgcf_version}/"
 
     case $arch in
         x86_64)
-            download_url="${download_url}wgcf_2.2.22_linux_amd64"
+            download_url="${download_url}wgcf_${wgcf_version}_linux_amd64"
             ;;
         aarch64|arm64)
-            download_url="${download_url}wgcf_2.2.22_linux_arm64"
+            download_url="${download_url}wgcf_${wgcf_version}_linux_arm64"
             ;;
-        armv7l)
-            download_url="${download_url}wgcf_2.2.22_linux_armv7"
+        armv7l|armv7)
+            download_url="${download_url}wgcf_${wgcf_version}_linux_armv7"
+            ;;
+        armv6l)
+            download_url="${download_url}wgcf_${wgcf_version}_linux_armv6"
+            ;;
+        i386|i686)
+            download_url="${download_url}wgcf_${wgcf_version}_linux_386"
             ;;
         *)
             print_error "不支持的系统架构: $arch"
+            print_info "支持的架构: x86_64, aarch64, arm64, armv7l, armv6l, i386, i686"
             return 1
             ;;
     esac
 
+    print_info "下载地址: $download_url"
+
     # 下载 wgcf
     if ! curl -L -o "$WGCF_BIN" "$download_url"; then
         print_error "下载 wgcf 失败"
+        print_info "请检查网络连接或手动下载: $download_url"
         return 1
     fi
 

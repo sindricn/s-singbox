@@ -104,25 +104,35 @@ EOF
     # 应用配置
     sysctl -p
 
-    # 验证
+    # 验证配置是否生效
+    sleep 1
     local new_algo=$(sysctl net.ipv4.tcp_congestion_control | awk '{print $3}')
+    local new_qdisc=$(sysctl net.core.default_qdisc | awk '{print $3}')
+
     if [[ "$new_algo" == "bbr" ]]; then
-        print_success "✅ BBR 已成功启用！"
+        print_success "✅ BBR V1 已成功启用！"
         echo ""
         echo -e "${CYAN}═══════════════════════════════════════${NC}"
         echo -e "${YELLOW}BBR 状态信息：${NC}"
         echo -e "${CYAN}═══════════════════════════════════════${NC}"
         echo -e "  拥塞控制算法: ${GREEN}$new_algo${NC}"
-        echo -e "  队列算法: ${GREEN}$(sysctl net.core.default_qdisc | awk '{print $3}')${NC}"
+        echo -e "  队列算法: ${GREEN}$new_qdisc${NC}"
         echo -e "  内核版本: ${GREEN}$(uname -r)${NC}"
         echo ""
 
-        # 检查模块是否加载
-        if lsmod | grep -q tcp_bbr; then
-            echo -e "${GREEN}✅ BBR 模块已加载${NC}"
+        # 检查模块是否正确加载
+        if lsmod | grep -q "^tcp_bbr"; then
+            echo -e "${GREEN}✅ BBR 模块已正确加载${NC}"
+        else
+            echo -e "${YELLOW}⚠️ BBR 模块未在 lsmod 中显示（某些内核版本内置模块不显示）${NC}"
+            # 进一步验证BBR是否真正工作
+            if grep -q "bbr" /proc/sys/net/ipv4/tcp_available_congestion_control; then
+                echo -e "${GREEN}✅ BBR 在可用算法列表中，功能正常${NC}"
+            fi
         fi
     else
-        print_error "BBR 启用失败"
+        print_error "BBR 启用失败，当前算法: $new_algo"
+        print_info "请检查内核版本是否支持 BBR (需要 4.9+)"
         return 1
     fi
 }
@@ -185,69 +195,6 @@ EOF
     echo ""
 }
 
-# 启用 BBR Plus（需要安装特定内核）
-enable_bbr_plus() {
-    clear
-    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║      启用 BBR Plus 加速              ║${NC}"
-    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
-    echo ""
-
-    print_warning "BBR Plus 需要安装特定的内核"
-    print_info "这将下载并安装第三方内核，可能存在风险"
-    echo ""
-    read -p "是否继续？[y/N]: " confirm
-    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-        print_info "已取消"
-        return 0
-    fi
-
-    print_info "正在下载 BBR Plus 安装脚本..."
-
-    # 下载安装脚本
-    local install_script="/tmp/bbr-plus-install.sh"
-    if ! curl -fsSL -o "$install_script" "https://github.com/chiakge/Linux-NetSpeed/raw/master/tcp.sh"; then
-        print_error "下载安装脚本失败"
-        return 1
-    fi
-
-    chmod +x "$install_script"
-
-    print_info "运行安装脚本..."
-    bash "$install_script"
-}
-
-# 启用锐速（Lotserver）
-enable_lotserver() {
-    clear
-    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║        启用锐速加速                  ║${NC}"
-    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
-    echo ""
-
-    print_warning "锐速（Lotserver）是第三方闭源加速软件"
-    print_info "仅支持特定内核版本"
-    echo ""
-    read -p "是否继续？[y/N]: " confirm
-    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-        print_info "已取消"
-        return 0
-    fi
-
-    print_info "正在下载锐速安装脚本..."
-
-    # 下载安装脚本
-    local install_script="/tmp/lotserver-install.sh"
-    if ! curl -fsSL -o "$install_script" "https://raw.githubusercontent.com/0oVicero0/serverSpeeder_Install/master/appex.sh"; then
-        print_error "下载安装脚本失败"
-        return 1
-    fi
-
-    chmod +x "$install_script"
-
-    print_info "运行安装脚本..."
-    bash "$install_script" install
-}
 
 # ============================================================================
 # 加速状态管理
@@ -316,11 +263,17 @@ show_bbr_status() {
     fi
     echo ""
 
-    # BBR 模块状态
-    if lsmod | grep -q tcp_bbr; then
-        echo -e "${GREEN}✅ BBR 模块已加载${NC}"
+    # BBR 模块状态检测（改进版）
+    echo -e "${YELLOW}BBR 模块状态：${NC}"
+    if lsmod | grep -q "^tcp_bbr"; then
+        echo -e "  ${GREEN}✅ BBR 模块已加载（lsmod 可见）${NC}"
     else
-        echo -e "${YELLOW}⚠ BBR 模块未加载${NC}"
+        # 某些内核版本将BBR编译为内置模块，不会在lsmod中显示
+        if grep -q "bbr" /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null; then
+            echo -e "  ${GREEN}✅ BBR 功能可用（内核内置）${NC}"
+        else
+            echo -e "  ${RED}✗ BBR 模块未加载且不可用${NC}"
+        fi
     fi
     echo ""
 
@@ -367,59 +320,415 @@ disable_bbr() {
     print_info "当前拥塞控制算法: $(sysctl net.ipv4.tcp_congestion_control | awk '{print $3}')"
 }
 
-# 测试加速效果
+# 定义测试服务器（多地区）
+declare -A TEST_SERVERS=(
+    ["中国大陆"]="speedtest.tele2.net"
+    ["中国台湾"]="tpdb.speedtest.com.tw"
+    ["中国香港"]="speedtest.hkbn.net"
+    ["日本"]="speedtest.i-o.jp"
+    ["俄罗斯"]="speedtest.dataline.net"
+    ["美国"]="speedtest.verizon.net"
+    ["新加坡"]="speedtest.singnet.com.sg"
+)
+
+# 测试延迟
+test_latency() {
+    local target=$1
+    local name=$2
+
+    echo -e "${YELLOW}测试 $name 延迟...${NC}"
+    local ping_result=$(ping -c 10 -W 2 "$target" 2>/dev/null | tail -1)
+    if [[ -n "$ping_result" ]]; then
+        local avg_latency=$(echo "$ping_result" | awk -F'/' '{print $5}')
+        local packet_loss=$(ping -c 10 -W 2 "$target" 2>/dev/null | grep 'packet loss' | awk '{print $6}')
+        echo -e "  平均延迟: ${GREEN}${avg_latency} ms${NC}"
+        echo -e "  丢包率: ${GREEN}${packet_loss}${NC}"
+    else
+        echo -e "  ${RED}测试失败${NC}"
+    fi
+    echo ""
+}
+
+# 测试丢包率（高级）
+test_packet_loss() {
+    local target=$1
+    local name=$2
+
+    echo -e "${YELLOW}测试 $name 丢包情况...${NC}"
+
+    # 使用mtr进行更准确的丢包测试
+    if command -v mtr &>/dev/null; then
+        local mtr_result=$(mtr -c 50 -r -n "$target" 2>/dev/null | tail -1)
+        if [[ -n "$mtr_result" ]]; then
+            local loss=$(echo "$mtr_result" | awk '{print $3}')
+            local avg=$(echo "$mtr_result" | awk '{print $6}')
+            echo -e "  丢包率: ${GREEN}${loss}%${NC}"
+            echo -e "  平均延迟: ${GREEN}${avg} ms${NC}"
+        fi
+    else
+        # 使用ping作为备选
+        local result=$(ping -c 50 -W 2 "$target" 2>/dev/null)
+        if [[ -n "$result" ]]; then
+            local loss=$(echo "$result" | grep 'packet loss' | awk '{print $6}')
+            local avg=$(echo "$result" | tail -1 | awk -F'/' '{print $5}')
+            echo -e "  丢包率: ${GREEN}${loss}${NC}"
+            echo -e "  平均延迟: ${GREEN}${avg} ms${NC}"
+        fi
+    fi
+    echo ""
+}
+
+# 测试吞吐量（使用curl下载测试文件）
+test_throughput() {
+    local url=$1
+    local name=$2
+
+    echo -e "${YELLOW}测试 $name 吞吐量...${NC}"
+
+    # 使用curl下载测试（10MB文件）
+    local speed=$(curl -o /dev/null -s -w '%{speed_download}' --max-time 15 "$url" 2>/dev/null)
+    if [[ -n "$speed" && "$speed" != "0" ]]; then
+        # 转换为 Mbps
+        local mbps=$(echo "scale=2; $speed * 8 / 1000000" | bc 2>/dev/null || echo "N/A")
+        echo -e "  下载速度: ${GREEN}${mbps} Mbps${NC}"
+    else
+        echo -e "  ${RED}测试失败或超时${NC}"
+    fi
+    echo ""
+}
+
+# 综合性能测试
 test_bbr_performance() {
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║       测试 BBR 加速效果              ║${NC}"
+    echo -e "${CYAN}║       BBR 加速效果测试              ║${NC}"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
-    print_info "将进行网络性能测试..."
+    # 显示当前BBR状态
+    local current_algo=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')
+    echo -e "${YELLOW}当前拥塞控制算法: ${GREEN}$current_algo${NC}"
     echo ""
 
-    # 检查 iperf3 是否安装
-    if ! command -v iperf3 &>/dev/null; then
-        print_warning "iperf3 未安装"
-        read -p "是否安装 iperf3？[y/N]: " install_choice
-        if [[ "$install_choice" == "y" || "$install_choice" == "Y" ]]; then
-            if command -v apt-get &>/dev/null; then
-                apt-get update && apt-get install -y iperf3
-            elif command -v yum &>/dev/null; then
-                yum install -y iperf3
-            else
-                print_error "无法安装 iperf3"
-                return 1
+    # 选择测试类型
+    echo -e "${YELLOW}请选择测试类型：${NC}"
+    echo -e "${GREEN}1.${NC} 快速测试（延迟 + 丢包）"
+    echo -e "${GREEN}2.${NC} 完整测试（延迟 + 丢包 + 吞吐量）"
+    echo -e "${GREEN}3.${NC} 自定义地区测试"
+    echo -e "${GREEN}4.${NC} BBR加速效果对比测试（推荐）"
+    echo -e "${GREEN}0.${NC} 返回"
+    echo ""
+    read -p "请选择 [0-4]: " test_choice
+
+    case $test_choice in
+        1)
+            # 快速测试
+            echo ""
+            echo -e "${CYAN}━━━━━━━ 开始快速测试 ━━━━━━━${NC}"
+            echo ""
+
+            # 安装mtr（如果需要）
+            if ! command -v mtr &>/dev/null; then
+                print_info "正在安装 mtr 工具..."
+                if command -v apt-get &>/dev/null; then
+                    apt-get install -y mtr-tiny >/dev/null 2>&1
+                elif command -v yum &>/dev/null; then
+                    yum install -y mtr >/dev/null 2>&1
+                fi
             fi
-        else
-            return 1
-        fi
-    fi
 
-    # 简单的网络测试
-    print_info "测试方法：使用 speedtest-cli 进行速度测试"
+            # 测试主要地区
+            for region in "中国台湾" "日本" "美国"; do
+                local server="${TEST_SERVERS[$region]}"
+                echo -e "${CYAN}━━━━━━━ $region ━━━━━━━${NC}"
+                test_latency "$server" "$region"
+            done
+            ;;
 
-    # 安装 speedtest-cli
-    if ! command -v speedtest &>/dev/null; then
-        print_info "正在安装 speedtest-cli..."
-        if command -v apt-get &>/dev/null; then
-            apt-get update && apt-get install -y speedtest-cli
-        elif command -v yum &>/dev/null; then
-            yum install -y speedtest-cli
-        else
-            # 使用 curl 安装
-            curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | bash
-            apt-get install -y speedtest
-        fi
-    fi
+        2)
+            # 完整测试
+            echo ""
+            echo -e "${CYAN}━━━━━━━ 开始完整测试 ━━━━━━━${NC}"
+            echo ""
 
-    # 运行速度测试
-    if command -v speedtest &>/dev/null; then
-        print_info "正在测试网络速度..."
-        speedtest
-    else
-        print_warning "speedtest 安装失败，跳过性能测试"
-    fi
+            # 安装必要工具
+            if ! command -v mtr &>/dev/null; then
+                print_info "正在安装 mtr 工具..."
+                if command -v apt-get &>/dev/null; then
+                    apt-get install -y mtr-tiny >/dev/null 2>&1
+                elif command -v yum &>/dev/null; then
+                    yum install -y mtr >/dev/null 2>&1
+                fi
+            fi
+
+            if ! command -v bc &>/dev/null; then
+                if command -v apt-get &>/dev/null; then
+                    apt-get install -y bc >/dev/null 2>&1
+                elif command -v yum &>/dev/null; then
+                    yum install -y bc >/dev/null 2>&1
+                fi
+            fi
+
+            # 测试所有地区
+            for region in "${!TEST_SERVERS[@]}"; do
+                local server="${TEST_SERVERS[$region]}"
+                echo -e "${CYAN}━━━━━━━ $region ━━━━━━━${NC}"
+                test_latency "$server" "$region"
+                test_packet_loss "$server" "$region"
+
+                # 吞吐量测试（使用公开的测试文件）
+                case $region in
+                    "日本")
+                        test_throughput "http://speedtest.tokyo.linode.com/100MB-tokyo.bin" "$region"
+                        ;;
+                    "美国")
+                        test_throughput "http://speedtest.newark.linode.com/100MB-newark.bin" "$region"
+                        ;;
+                    "新加坡")
+                        test_throughput "http://speedtest.singapore.linode.com/100MB-singapore.bin" "$region"
+                        ;;
+                esac
+
+                echo ""
+            done
+            ;;
+
+        3)
+            # 自定义地区测试
+            echo ""
+            echo -e "${YELLOW}可用测试地区：${NC}"
+            local index=1
+            local regions=()
+            for region in "${!TEST_SERVERS[@]}"; do
+                echo -e "${GREEN}$index.${NC} $region"
+                regions+=("$region")
+                ((index++))
+            done
+            echo ""
+            read -p "请选择地区 [1-${#regions[@]}]: " region_choice
+
+            if [[ "$region_choice" =~ ^[0-9]+$ ]] && [[ "$region_choice" -ge 1 ]] && [[ "$region_choice" -le "${#regions[@]}" ]]; then
+                local selected_region="${regions[$((region_choice-1))]}"
+                local server="${TEST_SERVERS[$selected_region]}"
+
+                echo ""
+                echo -e "${CYAN}━━━━━━━ 测试 $selected_region ━━━━━━━${NC}"
+                echo ""
+                test_latency "$server" "$selected_region"
+                test_packet_loss "$server" "$selected_region"
+            else
+                print_error "无效选择"
+            fi
+            ;;
+
+        4)
+            # BBR加速效果对比测试
+            echo ""
+            echo -e "${CYAN}━━━━━━━ BBR 加速效果对比测试 ━━━━━━━${NC}"
+            echo ""
+
+            # 保存当前算法
+            local original_algo=$(sysctl -n net.ipv4.tcp_congestion_control)
+            local original_qdisc=$(sysctl -n net.core.default_qdisc)
+
+            print_info "将分别测试 Cubic（默认）和 BBR 的性能"
+            echo ""
+
+            # 选择测试地区
+            echo -e "${YELLOW}请选择测试地区：${NC}"
+            echo -e "${GREEN}1.${NC} 日本（推荐）"
+            echo -e "${GREEN}2.${NC} 美国"
+            echo -e "${GREEN}3.${NC} 中国台湾"
+            echo ""
+            read -p "请选择 [1-3]: " region_choice
+
+            local test_region=""
+            local test_server=""
+            local throughput_url=""
+
+            case $region_choice in
+                1)
+                    test_region="日本"
+                    test_server="${TEST_SERVERS[日本]}"
+                    throughput_url="http://speedtest.tokyo.linode.com/100MB-tokyo.bin"
+                    ;;
+                2)
+                    test_region="美国"
+                    test_server="${TEST_SERVERS[美国]}"
+                    throughput_url="http://speedtest.newark.linode.com/100MB-newark.bin"
+                    ;;
+                3)
+                    test_region="中国台湾"
+                    test_server="${TEST_SERVERS[中国台湾]}"
+                    throughput_url=""
+                    ;;
+                *)
+                    print_error "无效选择"
+                    return
+                    ;;
+            esac
+
+            echo ""
+            print_info "测试地区: $test_region"
+            print_warning "测试过程需要约2-3分钟，请耐心等待..."
+            echo ""
+
+            # 第一阶段：Cubic测试
+            echo -e "${CYAN}═══════════════════════════════════════${NC}"
+            echo -e "${YELLOW}[1/2] 测试 Cubic（默认算法）${NC}"
+            echo -e "${CYAN}═══════════════════════════════════════${NC}"
+            echo ""
+
+            # 切换到Cubic
+            sysctl -w net.ipv4.tcp_congestion_control=cubic > /dev/null 2>&1
+            sysctl -w net.core.default_qdisc=pfifo_fast > /dev/null 2>&1
+            sleep 2
+
+            # Cubic测试 - 延迟
+            local cubic_latency=$(ping -c 10 -W 2 "$test_server" 2>/dev/null | tail -1 | awk -F'/' '{print $5}')
+            echo -e "${GREEN}Cubic 延迟:${NC} ${cubic_latency} ms"
+
+            # Cubic测试 - 丢包
+            local cubic_loss=$(ping -c 20 -W 2 "$test_server" 2>/dev/null | grep 'packet loss' | awk '{print $6}')
+            echo -e "${GREEN}Cubic 丢包率:${NC} ${cubic_loss}"
+
+            # Cubic测试 - 吞吐量
+            local cubic_throughput="N/A"
+            if [[ -n "$throughput_url" ]]; then
+                local cubic_speed=$(curl -o /dev/null -s -w '%{speed_download}' --max-time 15 "$throughput_url" 2>/dev/null)
+                if [[ -n "$cubic_speed" && "$cubic_speed" != "0" ]]; then
+                    if command -v bc &>/dev/null; then
+                        cubic_throughput=$(echo "scale=2; $cubic_speed * 8 / 1000000" | bc)
+                    else
+                        cubic_throughput=$(awk "BEGIN {printf \"%.2f\", $cubic_speed * 8 / 1000000}")
+                    fi
+                fi
+                echo -e "${GREEN}Cubic 吞吐量:${NC} ${cubic_throughput} Mbps"
+            fi
+
+            echo ""
+            sleep 2
+
+            # 第二阶段：BBR测试
+            echo -e "${CYAN}═══════════════════════════════════════${NC}"
+            echo -e "${YELLOW}[2/2] 测试 BBR（加速算法）${NC}"
+            echo -e "${CYAN}═══════════════════════════════════════${NC}"
+            echo ""
+
+            # 切换到BBR
+            modprobe tcp_bbr 2>/dev/null
+            sysctl -w net.ipv4.tcp_congestion_control=bbr > /dev/null 2>&1
+            sysctl -w net.core.default_qdisc=fq > /dev/null 2>&1
+            sleep 2
+
+            # BBR测试 - 延迟
+            local bbr_latency=$(ping -c 10 -W 2 "$test_server" 2>/dev/null | tail -1 | awk -F'/' '{print $5}')
+            echo -e "${GREEN}BBR 延迟:${NC} ${bbr_latency} ms"
+
+            # BBR测试 - 丢包
+            local bbr_loss=$(ping -c 20 -W 2 "$test_server" 2>/dev/null | grep 'packet loss' | awk '{print $6}')
+            echo -e "${GREEN}BBR 丢包率:${NC} ${bbr_loss}"
+
+            # BBR测试 - 吞吐量
+            local bbr_throughput="N/A"
+            if [[ -n "$throughput_url" ]]; then
+                local bbr_speed=$(curl -o /dev/null -s -w '%{speed_download}' --max-time 15 "$throughput_url" 2>/dev/null)
+                if [[ -n "$bbr_speed" && "$bbr_speed" != "0" ]]; then
+                    if command -v bc &>/dev/null; then
+                        bbr_throughput=$(echo "scale=2; $bbr_speed * 8 / 1000000" | bc)
+                    else
+                        bbr_throughput=$(awk "BEGIN {printf \"%.2f\", $bbr_speed * 8 / 1000000}")
+                    fi
+                fi
+                echo -e "${GREEN}BBR 吞吐量:${NC} ${bbr_throughput} Mbps"
+            fi
+
+            echo ""
+            sleep 1
+
+            # 对比结果
+            echo -e "${CYAN}═══════════════════════════════════════${NC}"
+            echo -e "${YELLOW}📊 性能对比结果（$test_region）${NC}"
+            echo -e "${CYAN}═══════════════════════════════════════${NC}"
+            echo ""
+
+            # 延迟对比
+            if [[ -n "$cubic_latency" && -n "$bbr_latency" ]]; then
+                local latency_diff=""
+                if command -v bc &>/dev/null; then
+                    latency_diff=$(echo "scale=2; $cubic_latency - $bbr_latency" | bc)
+                else
+                    latency_diff=$(awk "BEGIN {printf \"%.2f\", $cubic_latency - $bbr_latency}")
+                fi
+                echo -e "${YELLOW}延迟对比：${NC}"
+                echo -e "  Cubic: $cubic_latency ms"
+                echo -e "  BBR:   $bbr_latency ms"
+                if (( $(echo "$latency_diff > 0" | bc -l 2>/dev/null || echo 0) )); then
+                    echo -e "  ${GREEN}✓ BBR 延迟降低 ${latency_diff} ms${NC}"
+                else
+                    echo -e "  ${YELLOW}✗ BBR 延迟增加 ${latency_diff#-} ms（正常，BBR优先吞吐量）${NC}"
+                fi
+                echo ""
+            fi
+
+            # 丢包对比
+            echo -e "${YELLOW}丢包率对比：${NC}"
+            echo -e "  Cubic: $cubic_loss"
+            echo -e "  BBR:   $bbr_loss"
+            echo ""
+
+            # 吞吐量对比
+            if [[ "$cubic_throughput" != "N/A" && "$bbr_throughput" != "N/A" ]]; then
+                local throughput_diff=""
+                local throughput_percent=""
+                if command -v bc &>/dev/null; then
+                    throughput_diff=$(echo "scale=2; $bbr_throughput - $cubic_throughput" | bc)
+                    throughput_percent=$(echo "scale=2; ($bbr_throughput - $cubic_throughput) / $cubic_throughput * 100" | bc)
+                else
+                    throughput_diff=$(awk "BEGIN {printf \"%.2f\", $bbr_throughput - $cubic_throughput}")
+                    throughput_percent=$(awk "BEGIN {printf \"%.2f\", ($bbr_throughput - $cubic_throughput) / $cubic_throughput * 100}")
+                fi
+                echo -e "${YELLOW}吞吐量对比：${NC}"
+                echo -e "  Cubic: $cubic_throughput Mbps"
+                echo -e "  BBR:   $bbr_throughput Mbps"
+                if (( $(echo "$throughput_diff > 0" | bc -l 2>/dev/null || echo 0) )); then
+                    echo -e "  ${GREEN}✓ BBR 提升 ${throughput_diff} Mbps (+${throughput_percent}%)${NC}"
+                else
+                    echo -e "  ${YELLOW}✗ BBR 降低 ${throughput_diff#-} Mbps (${throughput_percent}%)${NC}"
+                fi
+                echo ""
+            fi
+
+            echo -e "${CYAN}═══════════════════════════════════════${NC}"
+            echo ""
+
+            # 恢复原始设置
+            print_info "恢复原始设置..."
+            sysctl -w net.ipv4.tcp_congestion_control="$original_algo" > /dev/null 2>&1
+            sysctl -w net.core.default_qdisc="$original_qdisc" > /dev/null 2>&1
+
+            echo ""
+            print_success "对比测试完成！"
+            echo ""
+            print_info "💡 说明："
+            echo -e "  • BBR 优化高延迟、丢包场景的吞吐量"
+            echo -e "  • 在良好网络环境下，提升可能不明显"
+            echo -e "  • 建议在实际使用场景中测试效果"
+            ;;
+
+        0)
+            return
+            ;;
+
+        *)
+            print_error "无效选择"
+            ;;
+    esac
+
+    echo ""
+    echo -e "${CYAN}━━━━━━━ 测试完成 ━━━━━━━${NC}"
+    echo ""
+    print_info "提示：BBR 对高延迟、丢包场景效果更明显"
 }
 
 # ============================================================================
@@ -444,28 +753,24 @@ menu_bbr() {
         echo ""
 
         echo -e "${YELLOW}━━━━━━━ BBR 管理 ━━━━━━━${NC}"
-        echo -e "${GREEN}1.${NC}  启用 BBR（原版）"
-        echo -e "${GREEN}2.${NC}  启用 BBRv3（高级版）"
-        echo -e "${GREEN}3.${NC}  启用 BBR Plus（需安装内核）"
-        echo -e "${GREEN}4.${NC}  启用锐速（Lotserver）"
+        echo -e "${GREEN}1.${NC}  启用 BBR V1（Google 原版）"
+        echo -e "${GREEN}2.${NC}  启用 BBR V3（Google 高级版）"
         echo ""
         echo -e "${YELLOW}━━━━━━━ 状态管理 ━━━━━━━${NC}"
-        echo -e "${GREEN}5.${NC}  查看 BBR 状态"
-        echo -e "${GREEN}6.${NC}  禁用 BBR"
-        echo -e "${GREEN}7.${NC}  测试加速效果"
+        echo -e "${GREEN}3.${NC}  查看 BBR 状态"
+        echo -e "${GREEN}4.${NC}  禁用 BBR"
+        echo -e "${GREEN}5.${NC}  测试加速效果"
         echo ""
         echo -e "${GREEN}0.${NC}  返回主菜单"
         echo ""
-        read -p "请选择 [0-7]: " choice
+        read -p "请选择 [0-5]: " choice
 
         case $choice in
             1) enable_bbr; read -p "按 Enter 继续..." ;;
             2) enable_bbrv3; read -p "按 Enter 继续..." ;;
-            3) enable_bbr_plus; read -p "按 Enter 继续..." ;;
-            4) enable_lotserver; read -p "按 Enter 继续..." ;;
-            5) show_bbr_status; read -p "按 Enter 继续..." ;;
-            6) disable_bbr; read -p "按 Enter 继续..." ;;
-            7) test_bbr_performance; read -p "按 Enter 继续..." ;;
+            3) show_bbr_status; read -p "按 Enter 继续..." ;;
+            4) disable_bbr; read -p "按 Enter 继续..." ;;
+            5) test_bbr_performance; read -p "按 Enter 继续..." ;;
             0) return ;;
             *) print_error "无效选择"; sleep 1 ;;
         esac

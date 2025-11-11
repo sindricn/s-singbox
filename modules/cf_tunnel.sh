@@ -320,8 +320,42 @@ create_dedicated_argo_tunnel() {
         return 1
     fi
 
-    # 第四步：配置本地服务
-    read -p "请输入本地服务端口 [例如: 8080]: " local_port
+    # 第四步：选择要关联的节点端口
+    echo ""
+    echo -e "${YELLOW}请选择隧道要转发到的节点：${NC}"
+    echo ""
+
+    # 检查节点文件
+    local nodes_file="${DATA_DIR}/nodes.json"
+    local local_port=""
+
+    if [[ -f "$nodes_file" ]]; then
+        # 列出现有节点
+        local nodes=$(jq -r '.nodes[] | "\(.port)|\(.protocol)|\(.tag // "N/A")"' "$nodes_file" 2>/dev/null)
+
+        if [[ -n "$nodes" ]]; then
+            local index=1
+            echo "$nodes" | while IFS='|' read -r port protocol tag; do
+                echo -e "${GREEN}$index.${NC} 端口: $port | 协议: $protocol | 标签: $tag"
+                ((index++))
+            done
+
+            echo -e "${GREEN}0.${NC} 手动输入端口"
+            echo ""
+            read -p "请选择 [0-$(echo "$nodes" | wc -l)]: " node_choice
+
+            if [[ "$node_choice" == "0" ]]; then
+                read -p "请输入本地服务端口 [例如: 8080]: " local_port
+            else
+                local_port=$(echo "$nodes" | sed -n "${node_choice}p" | cut -d'|' -f1)
+            fi
+        else
+            read -p "没有现有节点，请输入本地服务端口 [例如: 8080]: " local_port
+        fi
+    else
+        read -p "请输入本地服务端口 [例如: 8080]: " local_port
+    fi
+
     if [[ -z "$local_port" ]]; then
         print_error "端口不能为空"
         return 1
@@ -393,6 +427,111 @@ EOF
     echo -e "  查看日志: journalctl -u cloudflared-${tunnel_name} -f"
     echo -e "  重启服务: systemctl restart cloudflared-${tunnel_name}"
     echo ""
+
+    # 自动将隧道域名记录到节点配置中
+    echo ""
+    if [[ -f "$nodes_file" ]]; then
+        # 检查该端口是否对应一个节点
+        local node_exists=$(jq -r ".nodes[] | select(.port == \"$local_port\") | .port" "$nodes_file" 2>/dev/null)
+
+        if [[ -n "$node_exists" ]]; then
+            print_info "检测到节点端口 $local_port，将隧道域名关联到该节点..."
+
+            # 在节点中添加tunnel_domain字段
+            jq --arg port "$local_port" \
+               --arg domain "$tunnel_domain" \
+               --arg tunnel_name "$tunnel_name" \
+               '(.nodes[] | select(.port == $port)) |= (
+                   . + {
+                       tunnel_domain: $domain,
+                       tunnel_name: $tunnel_name,
+                       tunnel_type: "argo_dedicated"
+                   }
+               )' \
+               "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
+
+            print_success "✅ 隧道域名已关联到节点"
+            echo ""
+            echo -e "${YELLOW}访问流程：${NC}"
+            echo -e "  用户 → ${GREEN}$tunnel_domain${NC} (Argo隧道) → 本地节点(端口:$local_port)"
+            echo ""
+            echo -e "${YELLOW}提示：${NC}"
+            echo -e "  • 用户通过 ${GREEN}$tunnel_domain${NC} 访问此节点"
+            echo -e "  • 生成节点分享链接时，将使用隧道域名"
+            echo -e "  • 需要重新生成配置和分享链接"
+        else
+            print_info "端口 $local_port 未匹配到现有节点"
+            echo -e "${YELLOW}访问流程：${NC}"
+            echo -e "  用户 → ${GREEN}$tunnel_domain${NC} (Argo隧道) → 本地服务(端口:$local_port)"
+        fi
+    fi
+}
+
+# 将隧道域名关联到现有节点
+bind_tunnel_to_node() {
+    local tunnel_name=$1
+    local tunnel_domain=$2
+
+    echo ""
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║       关联隧道到节点                ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    # 检查 nodes.json 是否存在
+    local nodes_file="${DATA_DIR}/nodes.json"
+    if [[ ! -f "$nodes_file" ]]; then
+        print_error "节点文件不存在，请先创建节点"
+        return 1
+    fi
+
+    # 列出现有节点
+    echo -e "${YELLOW}现有节点：${NC}"
+    local nodes=$(jq -r '.nodes[] | "\(.port)|\(.protocol)|\(.tag // "N/A")"' "$nodes_file" 2>/dev/null)
+
+    if [[ -z "$nodes" ]]; then
+        print_error "没有可用节点"
+        return 1
+    fi
+
+    local index=1
+    echo "$nodes" | while IFS='|' read -r port protocol tag; do
+        echo -e "${GREEN}$index.${NC} 端口: $port | 协议: $protocol | 标签: $tag"
+        ((index++))
+    done
+
+    echo ""
+    read -p "请选择要关联的节点编号: " node_choice
+
+    # 获取选中节点的端口
+    local selected_port=$(echo "$nodes" | sed -n "${node_choice}p" | cut -d'|' -f1)
+
+    if [[ -z "$selected_port" ]]; then
+        print_error "无效选择"
+        return 1
+    fi
+
+    # 更新节点配置，添加隧道域名
+    jq --arg port "$selected_port" \
+       --arg domain "$tunnel_domain" \
+       --arg tunnel_name "$tunnel_name" \
+       '(.nodes[] | select(.port == $port)) |= (
+           . + {
+               tunnel_domain: $domain,
+               tunnel_name: $tunnel_name,
+               tunnel_type: "argo_dedicated"
+           }
+       )' \
+       "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
+
+    print_success "✅ 隧道域名已关联到节点 (端口: $selected_port)"
+    echo ""
+    echo -e "${YELLOW}访问流程：${NC}"
+    echo -e "  用户 → ${GREEN}$tunnel_domain${NC} (Argo隧道) → 节点(端口:$selected_port)"
+    echo ""
+    echo -e "${YELLOW}提示：${NC}"
+    echo -e "  • 用户将通过隧道域名访问此节点"
+    echo -e "  • 需要重新生成节点配置和分享链接"
 }
 
 # 列出专用隧道
@@ -409,6 +548,125 @@ list_dedicated_argo_tunnels() {
     fi
 
     "$CLOUDFLARED_BIN" tunnel list
+}
+
+# 管理隧道节点绑定
+manage_tunnel_node_binding() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║    管理隧道-节点绑定关系            ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    # 检查节点文件
+    local nodes_file="${DATA_DIR}/nodes.json"
+    if [[ ! -f "$nodes_file" ]]; then
+        print_error "节点文件不存在"
+        return 1
+    fi
+
+    echo -e "${YELLOW}请选择操作：${NC}"
+    echo -e "${GREEN}1.${NC} 绑定隧道到节点"
+    echo -e "${GREEN}2.${NC} 查看节点绑定状态"
+    echo -e "${GREEN}3.${NC} 解除节点绑定"
+    echo ""
+    read -p "请选择 [1-3]: " action
+
+    case $action in
+        1)
+            # 列出可用隧道
+            echo ""
+            echo -e "${YELLOW}可用隧道：${NC}"
+            "$CLOUDFLARED_BIN" tunnel list 2>/dev/null
+            echo ""
+
+            read -p "请输入隧道名称: " tunnel_name
+            if [[ -z "$tunnel_name" ]]; then
+                print_error "隧道名称不能为空"
+                return 1
+            fi
+
+            # 获取隧道域名配置
+            local config_file="${CLOUDFLARED_CONFIG_DIR}/config.yml"
+            if [[ -f "$config_file" ]]; then
+                local tunnel_domain=$(grep "hostname:" "$config_file" | head -1 | awk '{print $2}')
+                local tunnel_port=$(grep "service: http://localhost:" "$config_file" | head -1 | grep -oP '\d+$')
+
+                if [[ -n "$tunnel_domain" && -n "$tunnel_port" ]]; then
+                    bind_tunnel_to_node "$tunnel_name" "$tunnel_domain" "$tunnel_port"
+                else
+                    print_error "无法从配置文件获取隧道信息"
+                fi
+            else
+                print_error "隧道配置文件不存在"
+            fi
+            ;;
+
+        2)
+            # 查看绑定状态
+            echo ""
+            echo -e "${CYAN}═══════════════════════════════════════${NC}"
+            echo -e "${YELLOW}节点绑定状态：${NC}"
+            echo -e "${CYAN}═══════════════════════════════════════${NC}"
+            echo ""
+
+            local has_binding=false
+            jq -r '.nodes[] | select(.tunnel_domain != null) | "\(.port)|\(.protocol)|\(.tunnel_type // "N/A")|\(.tunnel_name // "N/A")|\(.tunnel_domain)"' "$nodes_file" 2>/dev/null | while IFS='|' read -r port protocol tunnel_type tunnel_name tunnel_domain; do
+                has_binding=true
+                echo -e "${GREEN}端口:${NC} $port"
+                echo -e "${GREEN}协议:${NC} $protocol"
+                echo -e "${GREEN}隧道类型:${NC} $tunnel_type"
+                echo -e "${GREEN}隧道名称:${NC} $tunnel_name"
+                echo -e "${GREEN}隧道域名:${NC} $tunnel_domain"
+                echo -e "${YELLOW}访问流程:${NC} 用户 → $tunnel_domain → 节点($port)"
+                echo ""
+            done
+
+            if [[ "$has_binding" == "false" ]]; then
+                print_info "没有节点绑定隧道"
+            fi
+            ;;
+
+        3)
+            # 解除绑定
+            echo ""
+            echo -e "${YELLOW}已绑定隧道的节点：${NC}"
+
+            local bound_nodes=$(jq -r '.nodes[] | select(.tunnel_domain != null) | "\(.port)|\(.protocol)|\(.tunnel_name // "N/A")"' "$nodes_file" 2>/dev/null)
+
+            if [[ -z "$bound_nodes" ]]; then
+                print_info "没有节点绑定隧道"
+                return 0
+            fi
+
+            local index=1
+            echo "$bound_nodes" | while IFS='|' read -r port protocol tunnel_name; do
+                echo -e "${GREEN}$index.${NC} 端口: $port | 协议: $protocol | 隧道: $tunnel_name"
+                ((index++))
+            done
+
+            echo ""
+            read -p "请选择要解除绑定的节点编号: " unbind_choice
+
+            local selected_port=$(echo "$bound_nodes" | sed -n "${unbind_choice}p" | cut -d'|' -f1)
+
+            if [[ -z "$selected_port" ]]; then
+                print_error "无效选择"
+                return 1
+            fi
+
+            # 移除隧道配置字段
+            jq --arg port "$selected_port" \
+               '(.nodes[] | select(.port == $port)) |= del(.tunnel_domain, .tunnel_name, .tunnel_type)' \
+               "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
+
+            print_success "已解除节点 $selected_port 的隧道绑定"
+            ;;
+
+        *)
+            print_error "无效选择"
+            ;;
+    esac
 }
 
 # 删除专用隧道
@@ -452,60 +710,340 @@ delete_dedicated_argo_tunnel() {
 }
 
 # ============================================================================
-# WARP 隧道管理
+# WARP 隧道管理（使用 wgcf）
 # ============================================================================
 
-# 安装 WARP
-install_warp() {
+readonly WGCF_BIN="/usr/local/bin/wgcf"
+readonly WGCF_CONFIG_DIR="/etc/wireguard"
+readonly WGCF_PROFILE="${WGCF_CONFIG_DIR}/wgcf-profile.conf"
+readonly WGCF_ACCOUNT="${WGCF_CONFIG_DIR}/wgcf-account.toml"
+
+# 安装 wgcf
+install_wgcf() {
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║         安装 WARP                    ║${NC}"
+    echo -e "${CYAN}║         安装 wgcf (WARP)             ║${NC}"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
-    if [[ -f "$WARP_BIN" ]]; then
-        print_warning "WARP 已安装"
+    # 检查是否已安装
+    if [[ -f "$WGCF_BIN" ]]; then
+        print_warning "wgcf 已安装"
+        local version=$("$WGCF_BIN" version 2>/dev/null || echo "unknown")
+        print_info "当前版本: $version"
         return 0
     fi
 
-    print_info "正在安装 WARP..."
+    print_info "正在安装 wgcf..."
 
-    # 创建目录
-    mkdir -p "$WARP_DIR"
+    # 检测系统架构
+    local arch=$(uname -m)
+    local download_url="https://github.com/ViRb3/wgcf/releases/latest/download/"
 
-    # 下载安装脚本
-    local install_script="${WARP_DIR}/install.sh"
-    if ! curl -fsSL -o "$install_script" "https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh"; then
-        print_error "下载安装脚本失败"
+    case $arch in
+        x86_64)
+            download_url="${download_url}wgcf_2.2.22_linux_amd64"
+            ;;
+        aarch64|arm64)
+            download_url="${download_url}wgcf_2.2.22_linux_arm64"
+            ;;
+        armv7l)
+            download_url="${download_url}wgcf_2.2.22_linux_armv7"
+            ;;
+        *)
+            print_error "不支持的系统架构: $arch"
+            return 1
+            ;;
+    esac
+
+    # 下载 wgcf
+    if ! curl -L -o "$WGCF_BIN" "$download_url"; then
+        print_error "下载 wgcf 失败"
         return 1
     fi
 
-    chmod +x "$install_script"
+    chmod +x "$WGCF_BIN"
 
-    # 运行安装
-    bash "$install_script"
+    # 安装 WireGuard 工具
+    print_info "正在安装 WireGuard 工具..."
+    if command -v apt-get &>/dev/null; then
+        apt-get update && apt-get install -y wireguard-tools
+    elif command -v yum &>/dev/null; then
+        yum install -y wireguard-tools
+    else
+        print_warning "请手动安装 wireguard-tools"
+    fi
+
+    # 创建配置目录
+    mkdir -p "$WGCF_CONFIG_DIR"
+
+    # 验证安装
+    if [[ -f "$WGCF_BIN" ]] && "$WGCF_BIN" version &>/dev/null; then
+        print_success "wgcf 安装成功"
+        print_info "版本: $("$WGCF_BIN" version)"
+        return 0
+    else
+        print_error "wgcf 安装失败"
+        return 1
+    fi
 }
 
-# 卸载 WARP
-uninstall_warp() {
-    print_warning "确认要卸载 WARP 吗？"
-    read -p "输入 yes 确认: " confirm
-    if [[ "$confirm" != "yes" ]]; then
-        print_info "已取消"
+# 注册 WARP 账号
+register_warp() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║       注册 WARP 账号                ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    if [[ ! -f "$WGCF_BIN" ]]; then
+        print_error "wgcf 未安装"
+        return 1
+    fi
+
+    # 检查是否已注册
+    if [[ -f "$WGCF_ACCOUNT" ]]; then
+        print_warning "WARP 账号已存在"
+        read -p "是否重新注册？[y/N]: " confirm
+        if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+            return 0
+        fi
+        rm -f "$WGCF_ACCOUNT"
+    fi
+
+    print_info "正在注册 WARP 账号..."
+    cd "$WGCF_CONFIG_DIR" || return 1
+
+    if "$WGCF_BIN" register --accept-tos; then
+        print_success "✅ WARP 账号注册成功"
+
+        # 显示账号信息
+        if [[ -f "$WGCF_ACCOUNT" ]]; then
+            echo ""
+            echo -e "${CYAN}═══════════════════════════════════════${NC}"
+            echo -e "${YELLOW}账号信息：${NC}"
+            local device_id=$(grep "device_id" "$WGCF_ACCOUNT" | cut -d'"' -f2)
+            local access_token=$(grep "access_token" "$WGCF_ACCOUNT" | cut -d'"' -f2)
+            echo -e "  设备 ID: ${GREEN}$device_id${NC}"
+            echo -e "  访问令牌: ${GREEN}${access_token:0:20}...${NC}"
+            echo ""
+        fi
+    else
+        print_error "WARP 账号注册失败"
+        return 1
+    fi
+}
+
+# 生成 WireGuard 配置
+generate_warp_config() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║    生成 WARP WireGuard 配置          ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    if [[ ! -f "$WGCF_BIN" ]]; then
+        print_error "wgcf 未安装"
+        return 1
+    fi
+
+    if [[ ! -f "$WGCF_ACCOUNT" ]]; then
+        print_error "WARP 账号不存在，请先注册"
+        return 1
+    fi
+
+    print_info "正在生成 WireGuard 配置..."
+    cd "$WGCF_CONFIG_DIR" || return 1
+
+    if "$WGCF_BIN" generate; then
+        # 移动配置文件
+        if [[ -f "wgcf-profile.conf" ]]; then
+            mv wgcf-profile.conf "$WGCF_PROFILE"
+            print_success "✅ WireGuard 配置生成成功"
+            echo ""
+            echo -e "${YELLOW}配置文件位置: ${GREEN}$WGCF_PROFILE${NC}"
+        fi
+    else
+        print_error "配置生成失败"
+        return 1
+    fi
+}
+
+# 启动 WARP 连接
+start_warp() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║         启动 WARP 连接               ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    if [[ ! -f "$WGCF_PROFILE" ]]; then
+        print_error "WARP 配置不存在，请先生成配置"
+        return 1
+    fi
+
+    # 检查 wg-quick 是否安装
+    if ! command -v wg-quick &>/dev/null; then
+        print_error "wg-quick 未安装，请先安装 wireguard-tools"
+        return 1
+    fi
+
+    print_info "正在启动 WARP 连接..."
+
+    # 复制配置到标准位置
+    cp "$WGCF_PROFILE" "${WGCF_CONFIG_DIR}/wgcf.conf"
+
+    # 启动 WireGuard
+    if wg-quick up wgcf; then
+        print_success "✅ WARP 连接已启动"
+        echo ""
+        echo -e "${CYAN}═══════════════════════════════════════${NC}"
+        echo -e "${YELLOW}连接信息：${NC}"
+        wg show wgcf 2>/dev/null || echo "  无法获取连接信息"
+        echo ""
+    else
+        print_error "WARP 启动失败"
+        return 1
+    fi
+}
+
+# 停止 WARP 连接
+stop_warp() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║         停止 WARP 连接               ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    if ! wg show wgcf &>/dev/null; then
+        print_warning "WARP 未运行"
         return 0
     fi
 
-    # 停止 WARP
-    systemctl stop warp-svc 2>/dev/null
+    print_info "正在停止 WARP 连接..."
 
-    # 删除文件
-    rm -rf "$WARP_DIR"
-    rm -f /usr/local/bin/warp-cli
-
-    print_success "WARP 已卸载"
+    if wg-quick down wgcf; then
+        print_success "WARP 连接已停止"
+    else
+        print_error "停止失败"
+        return 1
+    fi
 }
 
-# WARP 状态
+# 将WARP关联到节点（作为出站）
+bind_warp_to_node() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║    将WARP关联到节点（出站）         ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    # 检查WARP是否配置
+    if [[ ! -f "$WGCF_PROFILE" ]]; then
+        print_error "WARP配置不存在，请先生成WireGuard配置"
+        return 1
+    fi
+
+    # 检查节点文件
+    local nodes_file="${DATA_DIR}/nodes.json"
+    if [[ ! -f "$nodes_file" ]]; then
+        print_error "节点文件不存在"
+        return 1
+    fi
+
+    # 列出节点
+    echo -e "${YELLOW}现有节点：${NC}"
+    local nodes=$(jq -r '.nodes[] | "\(.port)|\(.protocol)|\(.tag // "N/A")|\(.warp_outbound // "未使用")"' "$nodes_file" 2>/dev/null)
+
+    if [[ -z "$nodes" ]]; then
+        print_error "没有可用节点"
+        return 1
+    fi
+
+    local index=1
+    echo "$nodes" | while IFS='|' read -r port protocol tag warp_status; do
+        if [[ "$warp_status" == "true" ]]; then
+            echo -e "${GREEN}$index.${NC} 端口: $port | 协议: $protocol | 标签: $tag ${YELLOW}[已启用WARP]${NC}"
+        else
+            echo -e "${GREEN}$index.${NC} 端口: $port | 协议: $protocol | 标签: $tag"
+        fi
+        ((index++))
+    done
+
+    echo ""
+    read -p "请选择要关联WARP的节点编号: " node_choice
+
+    local selected_port=$(echo "$nodes" | sed -n "${node_choice}p" | cut -d'|' -f1)
+
+    if [[ -z "$selected_port" ]]; then
+        print_error "无效选择"
+        return 1
+    fi
+
+    # 更新节点配置，启用WARP出站
+    jq --arg port "$selected_port" \
+       '(.nodes[] | select(.port == $port)) |= (. + {warp_outbound: true})' \
+       "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
+
+    print_success "✅ WARP已关联到节点 (端口: $selected_port)"
+    echo ""
+    echo -e "${YELLOW}访问流程：${NC}"
+    echo -e "  用户 → 节点($selected_port) → ${GREEN}WARP${NC} → 目标服务器"
+    echo ""
+    echo -e "${YELLOW}提示：${NC}"
+    echo -e "  • 节点的出站流量将通过WARP代理"
+    echo -e "  • 需要重新生成sing-box配置才能生效"
+    echo -e "  • 确保WARP连接已启动"
+}
+
+# 解除WARP与节点的关联
+unbind_warp_from_node() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║       解除WARP节点关联              ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    local nodes_file="${DATA_DIR}/nodes.json"
+    if [[ ! -f "$nodes_file" ]]; then
+        print_error "节点文件不存在"
+        return 1
+    fi
+
+    # 列出已启用WARP的节点
+    echo -e "${YELLOW}已启用WARP的节点：${NC}"
+    local warp_nodes=$(jq -r '.nodes[] | select(.warp_outbound == true) | "\(.port)|\(.protocol)|\(.tag // "N/A")"' "$nodes_file" 2>/dev/null)
+
+    if [[ -z "$warp_nodes" ]]; then
+        print_info "没有节点启用WARP"
+        return 0
+    fi
+
+    local index=1
+    echo "$warp_nodes" | while IFS='|' read -r port protocol tag; do
+        echo -e "${GREEN}$index.${NC} 端口: $port | 协议: $protocol | 标签: $tag"
+        ((index++))
+    done
+
+    echo ""
+    read -p "请选择要解除WARP的节点编号: " node_choice
+
+    local selected_port=$(echo "$warp_nodes" | sed -n "${node_choice}p" | cut -d'|' -f1)
+
+    if [[ -z "$selected_port" ]]; then
+        print_error "无效选择"
+        return 1
+    fi
+
+    # 移除WARP配置
+    jq --arg port "$selected_port" \
+       '(.nodes[] | select(.port == $port)) |= del(.warp_outbound)' \
+       "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
+
+    print_success "已解除节点 $selected_port 的WARP关联"
+}
+
+# 查看 WARP 状态
 warp_status() {
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
@@ -513,46 +1051,72 @@ warp_status() {
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
-    if ! command -v warp-cli &>/dev/null; then
-        print_error "WARP 未安装"
-        return 1
+    # 检查 wgcf 安装状态
+    if [[ -f "$WGCF_BIN" ]]; then
+        echo -e "${GREEN}✅ wgcf 已安装${NC}"
+        echo -e "   版本: $("$WGCF_BIN" version 2>/dev/null || echo 'unknown')"
+    else
+        echo -e "${RED}✗ wgcf 未安装${NC}"
     fi
+    echo ""
 
-    warp-cli status
+    # 检查账号状态
+    if [[ -f "$WGCF_ACCOUNT" ]]; then
+        echo -e "${GREEN}✅ WARP 账号已注册${NC}"
+        local device_id=$(grep "device_id" "$WGCF_ACCOUNT" | cut -d'"' -f2)
+        echo -e "   设备 ID: $device_id"
+    else
+        echo -e "${YELLOW}⚠ WARP 账号未注册${NC}"
+    fi
+    echo ""
+
+    # 检查配置文件
+    if [[ -f "$WGCF_PROFILE" ]]; then
+        echo -e "${GREEN}✅ WireGuard 配置已生成${NC}"
+    else
+        echo -e "${YELLOW}⚠ WireGuard 配置未生成${NC}"
+    fi
+    echo ""
+
+    # 检查连接状态
+    if wg show wgcf &>/dev/null; then
+        echo -e "${GREEN}✅ WARP 连接运行中${NC}"
+        echo ""
+        echo -e "${CYAN}═══════════════════════════════════════${NC}"
+        echo -e "${YELLOW}连接详情：${NC}"
+        wg show wgcf
+    else
+        echo -e "${YELLOW}⚠ WARP 连接未运行${NC}"
+    fi
 }
 
-# 连接 WARP
-connect_warp() {
-    if ! command -v warp-cli &>/dev/null; then
-        print_error "WARP 未安装"
-        return 1
+# 卸载 wgcf
+uninstall_wgcf() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║         卸载 wgcf                    ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    print_warning "确认要卸载 wgcf 吗？"
+    read -p "输入 yes 确认: " confirm
+    if [[ "$confirm" != "yes" ]]; then
+        print_info "已取消"
+        return 0
     fi
 
-    print_info "正在连接 WARP..."
-    warp-cli connect
-
-    if [[ $? -eq 0 ]]; then
-        print_success "WARP 已连接"
-    else
-        print_error "连接失败"
-    fi
-}
-
-# 断开 WARP
-disconnect_warp() {
-    if ! command -v warp-cli &>/dev/null; then
-        print_error "WARP 未安装"
-        return 1
+    # 停止 WARP 连接
+    if wg show wgcf &>/dev/null; then
+        wg-quick down wgcf 2>/dev/null
     fi
 
-    print_info "正在断开 WARP..."
-    warp-cli disconnect
+    # 删除文件
+    rm -f "$WGCF_BIN"
+    rm -f "$WGCF_ACCOUNT"
+    rm -f "$WGCF_PROFILE"
+    rm -f "${WGCF_CONFIG_DIR}/wgcf.conf"
 
-    if [[ $? -eq 0 ]]; then
-        print_success "WARP 已断开"
-    else
-        print_error "断开失败"
-    fi
+    print_success "wgcf 已卸载"
 }
 
 # ============================================================================
@@ -576,14 +1140,15 @@ menu_argo_tunnel() {
         echo -e "${GREEN}4.${NC}  创建专用隧道"
         echo -e "${GREEN}5.${NC}  查看专用隧道"
         echo -e "${GREEN}6.${NC}  删除专用隧道"
+        echo -e "${GREEN}7.${NC}  管理隧道-节点绑定"
         echo ""
         echo -e "${YELLOW}━━━━━━━ 系统管理 ━━━━━━━${NC}"
-        echo -e "${GREEN}7.${NC}  安装 cloudflared"
-        echo -e "${GREEN}8.${NC}  卸载 cloudflared"
+        echo -e "${GREEN}8.${NC}  安装 cloudflared"
+        echo -e "${GREEN}9.${NC}  卸载 cloudflared"
         echo ""
         echo -e "${GREEN}0.${NC}  返回上级菜单"
         echo ""
-        read -p "请选择 [0-8]: " choice
+        read -p "请选择 [0-9]: " choice
 
         case $choice in
             1) start_temp_argo_tunnel; read -p "按 Enter 继续..." ;;
@@ -592,8 +1157,9 @@ menu_argo_tunnel() {
             4) create_dedicated_argo_tunnel; read -p "按 Enter 继续..." ;;
             5) list_dedicated_argo_tunnels; read -p "按 Enter 继续..." ;;
             6) delete_dedicated_argo_tunnel; read -p "按 Enter 继续..." ;;
-            7) install_cloudflared; read -p "按 Enter 继续..." ;;
-            8) uninstall_cloudflared; read -p "按 Enter 继续..." ;;
+            7) manage_tunnel_node_binding; read -p "按 Enter 继续..." ;;
+            8) install_cloudflared; read -p "按 Enter 继续..." ;;
+            9) uninstall_cloudflared; read -p "按 Enter 继续..." ;;
             0) return ;;
             *) print_error "无效选择"; sleep 1 ;;
         esac
@@ -605,25 +1171,40 @@ menu_warp_tunnel() {
     while true; do
         clear
         echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║       WARP 隧道管理                  ║${NC}"
+        echo -e "${CYAN}║    WARP 隧道管理 (wgcf)             ║${NC}"
         echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
         echo ""
-        echo -e "${GREEN}1.${NC}  安装 WARP"
-        echo -e "${GREEN}2.${NC}  卸载 WARP"
-        echo -e "${GREEN}3.${NC}  查看状态"
-        echo -e "${GREEN}4.${NC}  连接 WARP"
-        echo -e "${GREEN}5.${NC}  断开 WARP"
+        echo -e "${YELLOW}━━━━━━━ 安装配置 ━━━━━━━${NC}"
+        echo -e "${GREEN}1.${NC}  安装 wgcf"
+        echo -e "${GREEN}2.${NC}  注册 WARP 账号"
+        echo -e "${GREEN}3.${NC}  生成 WireGuard 配置"
+        echo ""
+        echo -e "${YELLOW}━━━━━━━ 连接管理 ━━━━━━━${NC}"
+        echo -e "${GREEN}4.${NC}  启动 WARP 连接"
+        echo -e "${GREEN}5.${NC}  停止 WARP 连接"
+        echo -e "${GREEN}6.${NC}  查看 WARP 状态"
+        echo ""
+        echo -e "${YELLOW}━━━━━━━ 节点关联 ━━━━━━━${NC}"
+        echo -e "${GREEN}7.${NC}  关联WARP到节点（作为出站）"
+        echo -e "${GREEN}8.${NC}  解除WARP节点关联"
+        echo ""
+        echo -e "${YELLOW}━━━━━━━ 系统管理 ━━━━━━━${NC}"
+        echo -e "${GREEN}9.${NC}  卸载 wgcf"
         echo ""
         echo -e "${GREEN}0.${NC}  返回上级菜单"
         echo ""
-        read -p "请选择 [0-5]: " choice
+        read -p "请选择 [0-9]: " choice
 
         case $choice in
-            1) install_warp; read -p "按 Enter 继续..." ;;
-            2) uninstall_warp; read -p "按 Enter 继续..." ;;
-            3) warp_status; read -p "按 Enter 继续..." ;;
-            4) connect_warp; read -p "按 Enter 继续..." ;;
-            5) disconnect_warp; read -p "按 Enter 继续..." ;;
+            1) install_wgcf; read -p "按 Enter 继续..." ;;
+            2) register_warp; read -p "按 Enter 继续..." ;;
+            3) generate_warp_config; read -p "按 Enter 继续..." ;;
+            4) start_warp; read -p "按 Enter 继续..." ;;
+            5) stop_warp; read -p "按 Enter 继续..." ;;
+            6) warp_status; read -p "按 Enter 继续..." ;;
+            7) bind_warp_to_node; read -p "按 Enter 继续..." ;;
+            8) unbind_warp_from_node; read -p "按 Enter 继续..." ;;
+            9) uninstall_wgcf; read -p "按 Enter 继续..." ;;
             0) return ;;
             *) print_error "无效选择"; sleep 1 ;;
         esac

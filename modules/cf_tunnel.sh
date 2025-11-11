@@ -877,8 +877,11 @@ install_wgcf() {
     # ========================================
     if [[ -f "$WGCF_BIN" ]]; then
         print_warning "wgcf 已安装"
-        local version=$("$WGCF_BIN" version 2>&1 | head -1)
-        print_info "版本信息: $version"
+
+        # wgcf不带参数显示帮助，从中提取版本
+        local help_output=$("$WGCF_BIN" 2>&1 | head -5)
+        print_info "wgcf 信息: $help_output"
+
         return 0
     fi
 
@@ -975,16 +978,25 @@ install_wgcf() {
     mkdir -p "$WGCF_CONFIG_DIR"
 
     # ========================================
-    # 步骤 5: 验证 wgcf 可执行性并获取版本
+    # 步骤 5: 验证 wgcf 可执行性
     # ========================================
     print_info "正在验证 wgcf..."
 
-    local version_output=$("$WGCF_BIN" version 2>&1)
+    # 测试执行 - wgcf不带参数显示帮助
+    local test_output=$("$WGCF_BIN" 2>&1)
     local exit_code=$?
 
-    if [[ $exit_code -ne 0 ]]; then
-        print_error "wgcf 无法执行 (退出码: $exit_code)"
-        print_info "输出: $version_output"
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}wgcf 实际输出（前10行）：${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo "$test_output" | head -10
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+
+    # 检查执行是否成功（帮助信息通常返回0或1，都算正常）
+    if [[ $exit_code -gt 1 ]]; then
+        print_error "wgcf 执行异常 (退出码: $exit_code)"
         print_info "架构: $(uname -m)"
         print_info "文件类型: $(file "$WGCF_BIN" 2>/dev/null || echo 'unknown')"
         return 1
@@ -993,7 +1005,6 @@ install_wgcf() {
     # ========================================
     # 步骤 6: 安装完成
     # ========================================
-    echo ""
     print_success "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     print_success "✅ wgcf 安装完成"
     print_success "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -1001,7 +1012,6 @@ install_wgcf() {
     echo -e "${YELLOW}安装信息：${NC}"
     echo -e "  wgcf 位置: ${GREEN}$WGCF_BIN${NC}"
     echo -e "  配置目录: ${GREEN}$WGCF_CONFIG_DIR${NC}"
-    echo -e "  版本信息: ${GREEN}$version_output${NC}"
     echo ""
     echo -e "${YELLOW}下一步操作：${NC}"
     echo -e "  1. 注册 WARP 账号: 选择菜单中的 '注册 WARP 账号'"

@@ -875,9 +875,29 @@ install_wgcf() {
     # 检查是否已安装
     if [[ -f "$WGCF_BIN" ]]; then
         print_warning "wgcf 已安装"
-        # wgcf使用 --version 参数获取版本
-        local version=$("$WGCF_BIN" --version 2>&1 | grep -oP 'wgcf \K[0-9.]+' || echo "unknown")
-        print_info "当前版本: $version"
+
+        # 尝试获取版本
+        local test_output=$("$WGCF_BIN" --version 2>&1)
+        local exit_code=$?
+
+        if [[ $exit_code -ne 0 ]]; then
+            # 尝试 version 命令
+            test_output=$("$WGCF_BIN" version 2>&1)
+            exit_code=$?
+        fi
+
+        if [[ $exit_code -eq 0 ]]; then
+            local version=$(echo "$test_output" | grep -oP 'wgcf \K[0-9.]+' || echo "$test_output" | grep -oP '\d+\.\d+\.\d+' | head -1)
+            if [[ -n "$version" ]]; then
+                print_info "当前版本: $version"
+            else
+                print_warning "无法识别版本号，输出: $test_output"
+            fi
+        else
+            print_warning "wgcf 文件存在但执行失败"
+            print_info "错误输出: $test_output"
+        fi
+
         return 0
     fi
 
@@ -925,21 +945,71 @@ install_wgcf() {
     mkdir -p "$WGCF_CONFIG_DIR"
 
     # 验证安装
-    if [[ -f "$WGCF_BIN" ]] && [[ -x "$WGCF_BIN" ]]; then
-        # 尝试运行 --version 验证是否正常工作
-        if "$WGCF_BIN" --version &>/dev/null; then
-            local version=$("$WGCF_BIN" --version 2>&1 | grep -oP 'wgcf \K[0-9.]+' || echo "2.2.22")
-            print_success "wgcf 安装成功"
-            print_info "版本: $version"
-            return 0
-        else
-            print_error "wgcf 文件已下载但无法执行，可能需要检查系统架构"
-            return 1
-        fi
-    else
-        print_error "wgcf 安装失败：文件不存在或不可执行"
+    if [[ ! -f "$WGCF_BIN" ]]; then
+        print_error "wgcf 安装失败：文件不存在"
         return 1
     fi
+
+    if [[ ! -x "$WGCF_BIN" ]]; then
+        print_error "wgcf 文件存在但没有执行权限"
+        ls -lh "$WGCF_BIN"
+        return 1
+    fi
+
+    # 验证文件完整性（检查文件大小）
+    local file_size=$(stat -f%z "$WGCF_BIN" 2>/dev/null || stat -c%s "$WGCF_BIN" 2>/dev/null)
+    if [[ -z "$file_size" ]] || [[ "$file_size" -lt 100000 ]]; then
+        print_error "wgcf 文件大小异常: ${file_size:-unknown} bytes（可能下载不完整）"
+        print_info "尝试重新下载..."
+        rm -f "$WGCF_BIN"
+        return 1
+    fi
+
+    # 测试执行并捕获详细错误
+    print_info "正在验证 wgcf 可执行性..."
+    local test_output=$("$WGCF_BIN" --version 2>&1)
+    local exit_code=$?
+
+    if [[ $exit_code -ne 0 ]]; then
+        print_error "wgcf 执行失败 (退出码: $exit_code)"
+        print_info "详细输出: $test_output"
+        print_info "系统架构: $(uname -m)"
+        print_info "文件信息: $(file "$WGCF_BIN" 2>/dev/null || echo '无法获取')"
+
+        # 尝试使用 version 而不是 --version
+        print_info "尝试使用 'version' 命令..."
+        test_output=$("$WGCF_BIN" version 2>&1)
+        exit_code=$?
+
+        if [[ $exit_code -eq 0 ]]; then
+            print_warning "注意: wgcf 使用 'version' 而不是 '--version' 命令"
+            local version=$(echo "$test_output" | grep -oP '\d+\.\d+\.\d+' | head -1)
+            if [[ -n "$version" ]]; then
+                print_success "wgcf 安装成功"
+                print_info "版本: $version"
+                return 0
+            fi
+        fi
+
+        print_error "wgcf 无法正常执行，可能原因："
+        print_error "1. 系统架构不匹配"
+        print_error "2. 缺少必要的系统库"
+        print_error "3. 下载文件损坏"
+        return 1
+    fi
+
+    # 从输出中提取版本号
+    local version=$(echo "$test_output" | grep -oP 'wgcf \K[0-9.]+' || echo "$test_output" | grep -oP '\d+\.\d+\.\d+' | head -1)
+
+    if [[ -z "$version" ]]; then
+        print_warning "wgcf 可以执行，但无法识别版本号"
+        print_info "版本输出: $test_output"
+        version="unknown"
+    fi
+
+    print_success "wgcf 安装成功"
+    print_info "版本: $version"
+    return 0
 }
 
 # 注册 WARP 账号

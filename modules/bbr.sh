@@ -429,20 +429,241 @@ test_bbr_comparison() {
     fi
     echo ""
 
-    # ========== 对比结果 ==========
-    echo -e "${CYAN}━━━━━━━ 性能对比 ━━━━━━━${NC}"
+    # ========== 对比结果（百分比形式）==========
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}📊 性能对比总结${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+
+    # 延迟对比（百分比）
     if [[ -n "$cubic_lat" && -n "$bbr_lat" ]]; then
-        echo -e "延迟: Cubic ${cubic_lat}ms vs BBR ${bbr_lat}ms"
+        local lat_percent=$(awk -v c="$cubic_lat" -v b="$bbr_lat" 'BEGIN {if (c > 0) printf "%.2f", (c - b) / c * 100; else print "0"}' || echo "0")
+        if (( $(awk -v p="$lat_percent" 'BEGIN {print (p > 0)}') )); then
+            echo -e "${GREEN}✓ 延迟优化: ${lat_percent}% (${cubic_lat}ms → ${bbr_lat}ms)${NC}"
+        else
+            local abs_percent=${lat_percent#-}
+            echo -e "${YELLOW}✗ 延迟增加: ${abs_percent}% (${cubic_lat}ms → ${bbr_lat}ms)${NC}"
+        fi
+    else
+        echo -e "${YELLOW}延迟: 数据不足${NC}"
     fi
+
+    # 丢包率对比
     if [[ -n "$cubic_loss" && -n "$bbr_loss" ]]; then
-        echo -e "丢包: Cubic ${cubic_loss} vs BBR ${bbr_loss}"
+        # 去除百分号提取数值
+        local cubic_loss_num=$(echo "$cubic_loss" | sed 's/%//')
+        local bbr_loss_num=$(echo "$bbr_loss" | sed 's/%//')
+        if [[ -n "$cubic_loss_num" && -n "$bbr_loss_num" ]]; then
+            local loss_change=$(awk -v c="$cubic_loss_num" -v b="$bbr_loss_num" 'BEGIN {printf "%.2f", b - c}' || echo "0")
+            if (( $(awk -v l="$loss_change" 'BEGIN {print (l < 0)}') )); then
+                local abs_change=${loss_change#-}
+                echo -e "${GREEN}✓ 丢包降低: ${abs_change}% (${cubic_loss} → ${bbr_loss})${NC}"
+            elif (( $(awk -v l="$loss_change" 'BEGIN {print (l > 0)}') )); then
+                echo -e "${YELLOW}✗ 丢包增加: ${loss_change}% (${cubic_loss} → ${bbr_loss})${NC}"
+            else
+                echo -e "${YELLOW}○ 丢包无变化: ${cubic_loss}${NC}"
+            fi
+        else
+            echo -e "${YELLOW}丢包: ${cubic_loss} → ${bbr_loss}${NC}"
+        fi
+    else
+        echo -e "${YELLOW}丢包: 数据不足${NC}"
     fi
+
+    # 吞吐量对比（百分比）
     if [[ -n "$cubic_speed" && -n "$bbr_speed" && "$cubic_speed" != "0" && "$bbr_speed" != "0" ]]; then
         local c_mbps=$(awk -v s="$cubic_speed" 'BEGIN {printf "%.2f", s * 8 / 1000000}')
         local b_mbps=$(awk -v s="$bbr_speed" 'BEGIN {printf "%.2f", s * 8 / 1000000}')
-        echo -e "吞吐量: Cubic ${c_mbps}Mbps vs BBR ${b_mbps}Mbps"
+        local speed_percent=$(awk -v c="$cubic_speed" -v b="$bbr_speed" 'BEGIN {if (c > 0) printf "%.2f", (b - c) / c * 100; else print "0"}' || echo "0")
+        if (( $(awk -v p="$speed_percent" 'BEGIN {print (p > 0)}') )); then
+            echo -e "${GREEN}✓ 吞吐量提升: ${speed_percent}% (${c_mbps}Mbps → ${b_mbps}Mbps)${NC}"
+        else
+            local abs_percent=${speed_percent#-}
+            echo -e "${YELLOW}✗ 吞吐量下降: ${abs_percent}% (${c_mbps}Mbps → ${b_mbps}Mbps)${NC}"
+        fi
+    else
+        echo -e "${YELLOW}吞吐量: 数据不足${NC}"
     fi
+
     echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+
+    # 恢复原始设置
+    sysctl -w net.ipv4.tcp_congestion_control="$original_algo" > /dev/null 2>&1
+    sysctl -w net.core.default_qdisc="$original_qdisc" > /dev/null 2>&1
+}
+
+# 所有地区延迟测试对比
+test_all_regions_latency() {
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════${NC}"
+    echo -e "${YELLOW}所有地区延迟测试对比（Cubic vs BBR）${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════${NC}"
+    echo ""
+
+    # 保存原始设置
+    local original_algo=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "cubic")
+    local original_qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "pfifo_fast")
+
+    # 测试所有地区
+    declare -A REGION_SERVERS=(
+        ["中国大陆"]="www.baidu.com"
+        ["日本"]="www.yahoo.co.jp"
+        ["美国"]="www.google.com"
+        ["俄罗斯"]="www.yandex.ru"
+        ["中国台湾"]="www.pchome.com.tw"
+    )
+
+    for region in "中国大陆" "日本" "美国" "俄罗斯" "中国台湾"; do
+        local server="${REGION_SERVERS[$region]}"
+        echo -e "${CYAN}━━━ $region ━━━${NC}"
+
+        # Cubic测试
+        sysctl -w net.ipv4.tcp_congestion_control=cubic > /dev/null 2>&1
+        sleep 0.5
+        local cubic_lat=$(ping -c 10 -W 2 "$server" 2>/dev/null | tail -1 | awk -F'/' '{print $5}' || echo "")
+
+        # BBR测试
+        modprobe tcp_bbr 2>/dev/null
+        sysctl -w net.ipv4.tcp_congestion_control=bbr > /dev/null 2>&1
+        sleep 0.5
+        local bbr_lat=$(ping -c 10 -W 2 "$server" 2>/dev/null | tail -1 | awk -F'/' '{print $5}' || echo "")
+
+        # 显示结果
+        if [[ -n "$cubic_lat" && -n "$bbr_lat" ]]; then
+            local percent=$(awk -v c="$cubic_lat" -v b="$bbr_lat" 'BEGIN {if (c > 0) printf "%.2f", (c - b) / c * 100; else print "0"}' || echo "0")
+            if (( $(awk -v p="$percent" 'BEGIN {print (p > 0)}') )); then
+                echo -e "  ${GREEN}✓ 优化 ${percent}%: ${cubic_lat}ms → ${bbr_lat}ms${NC}"
+            else
+                local abs_p=${percent#-}
+                echo -e "  ${YELLOW}✗ 增加 ${abs_p}%: ${cubic_lat}ms → ${bbr_lat}ms${NC}"
+            fi
+        else
+            echo -e "  ${RED}测试失败${NC}"
+        fi
+        echo ""
+    done
+
+    # 恢复原始设置
+    sysctl -w net.ipv4.tcp_congestion_control="$original_algo" > /dev/null 2>&1
+    sysctl -w net.core.default_qdisc="$original_qdisc" > /dev/null 2>&1
+}
+
+# 所有地区丢包测试对比
+test_all_regions_packetloss() {
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════${NC}"
+    echo -e "${YELLOW}所有地区丢包测试对比（Cubic vs BBR）${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════${NC}"
+    echo ""
+
+    # 保存原始设置
+    local original_algo=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "cubic")
+    local original_qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "pfifo_fast")
+
+    # 测试所有地区
+    declare -A REGION_SERVERS=(
+        ["中国大陆"]="www.baidu.com"
+        ["日本"]="www.yahoo.co.jp"
+        ["美国"]="www.google.com"
+        ["俄罗斯"]="www.yandex.ru"
+        ["中国台湾"]="www.pchome.com.tw"
+    )
+
+    for region in "中国大陆" "日本" "美国" "俄罗斯" "中国台湾"; do
+        local server="${REGION_SERVERS[$region]}"
+        echo -e "${CYAN}━━━ $region ━━━${NC}"
+
+        # Cubic测试
+        sysctl -w net.ipv4.tcp_congestion_control=cubic > /dev/null 2>&1
+        sleep 0.5
+        local cubic_loss=$(ping -c 20 -W 2 "$server" 2>/dev/null | grep 'packet loss' | awk '{print $6}' || echo "")
+
+        # BBR测试
+        modprobe tcp_bbr 2>/dev/null
+        sysctl -w net.ipv4.tcp_congestion_control=bbr > /dev/null 2>&1
+        sleep 0.5
+        local bbr_loss=$(ping -c 20 -W 2 "$server" 2>/dev/null | grep 'packet loss' | awk '{print $6}' || echo "")
+
+        # 显示结果
+        if [[ -n "$cubic_loss" && -n "$bbr_loss" ]]; then
+            local c_num=$(echo "$cubic_loss" | sed 's/%//')
+            local b_num=$(echo "$bbr_loss" | sed 's/%//')
+            local change=$(awk -v c="$c_num" -v b="$b_num" 'BEGIN {printf "%.2f", b - c}' || echo "0")
+            if (( $(awk -v l="$change" 'BEGIN {print (l < 0)}') )); then
+                local abs_c=${change#-}
+                echo -e "  ${GREEN}✓ 降低 ${abs_c}%: ${cubic_loss} → ${bbr_loss}${NC}"
+            elif (( $(awk -v l="$change" 'BEGIN {print (l > 0)}') )); then
+                echo -e "  ${YELLOW}✗ 增加 ${change}%: ${cubic_loss} → ${bbr_loss}${NC}"
+            else
+                echo -e "  ${YELLOW}○ 无变化: ${cubic_loss}${NC}"
+            fi
+        else
+            echo -e "  ${RED}测试失败${NC}"
+        fi
+        echo ""
+    done
+
+    # 恢复原始设置
+    sysctl -w net.ipv4.tcp_congestion_control="$original_algo" > /dev/null 2>&1
+    sysctl -w net.core.default_qdisc="$original_qdisc" > /dev/null 2>&1
+}
+
+# 所有地区吞吐量测试对比
+test_all_regions_throughput() {
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════${NC}"
+    echo -e "${YELLOW}所有地区吞吐量测试对比（Cubic vs BBR）${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════${NC}"
+    echo ""
+    print_warning "注意：吞吐量测试需要下载文件，部分地区可能较慢"
+    echo ""
+
+    # 保存原始设置
+    local original_algo=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "cubic")
+    local original_qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "pfifo_fast")
+
+    # 测试所有地区（统一使用10MB文件确保公平对比）
+    declare -A REGION_URLS=(
+        ["中国大陆"]="http://cachefly.cachefly.net/10mb.test"
+        ["日本"]="http://cachefly.cachefly.net/10mb.test"
+        ["美国"]="http://cachefly.cachefly.net/10mb.test"
+        ["俄罗斯"]="http://cachefly.cachefly.net/10mb.test"
+        ["中国台湾"]="http://cachefly.cachefly.net/10mb.test"
+    )
+
+    for region in "中国大陆" "日本" "美国" "俄罗斯" "中国台湾"; do
+        local url="${REGION_URLS[$region]}"
+        echo -e "${CYAN}━━━ $region ━━━${NC}"
+
+        # Cubic测试
+        sysctl -w net.ipv4.tcp_congestion_control=cubic > /dev/null 2>&1
+        sleep 0.5
+        local cubic_speed=$(curl -o /dev/null -s -w '%{speed_download}' --max-time 15 "$url" 2>/dev/null || echo "")
+
+        # BBR测试
+        modprobe tcp_bbr 2>/dev/null
+        sysctl -w net.ipv4.tcp_congestion_control=bbr > /dev/null 2>&1
+        sleep 0.5
+        local bbr_speed=$(curl -o /dev/null -s -w '%{speed_download}' --max-time 15 "$url" 2>/dev/null || echo "")
+
+        # 显示结果
+        if [[ -n "$cubic_speed" && -n "$bbr_speed" && "$cubic_speed" != "0" && "$bbr_speed" != "0" ]]; then
+            local c_mbps=$(awk -v s="$cubic_speed" 'BEGIN {printf "%.2f", s * 8 / 1000000}')
+            local b_mbps=$(awk -v s="$bbr_speed" 'BEGIN {printf "%.2f", s * 8 / 1000000}')
+            local percent=$(awk -v c="$cubic_speed" -v b="$bbr_speed" 'BEGIN {if (c > 0) printf "%.2f", (b - c) / c * 100; else print "0"}' || echo "0")
+            if (( $(awk -v p="$percent" 'BEGIN {print (p > 0)}') )); then
+                echo -e "  ${GREEN}✓ 提升 ${percent}%: ${c_mbps}Mbps → ${b_mbps}Mbps${NC}"
+            else
+                local abs_p=${percent#-}
+                echo -e "  ${YELLOW}✗ 下降 ${abs_p}%: ${c_mbps}Mbps → ${b_mbps}Mbps${NC}"
+            fi
+        else
+            echo -e "  ${RED}测试失败或超时${NC}"
+        fi
+        echo ""
+    done
 
     # 恢复原始设置
     sysctl -w net.ipv4.tcp_congestion_control="$original_algo" > /dev/null 2>&1
@@ -465,10 +686,13 @@ test_bbr_performance() {
     # 选择测试类型
     echo -e "${YELLOW}请选择测试类型：${NC}"
     echo -e "${GREEN}1.${NC} 快速测试（中国大陆）"
-    echo -e "${GREEN}2.${NC} 其他地区测试"
+    echo -e "${GREEN}2.${NC} 完整测试对比（选择地区）"
+    echo -e "${GREEN}3.${NC} 延迟测试（所有地区）"
+    echo -e "${GREEN}4.${NC} 丢包测试（所有地区）"
+    echo -e "${GREEN}5.${NC} 吞吐量测试（所有地区）"
     echo -e "${GREEN}0.${NC} 返回"
     echo ""
-    read -p "请选择 [0-2]: " test_choice
+    read -p "请选择 [0-5]: " test_choice
 
     case $test_choice in
         1)
@@ -477,29 +701,33 @@ test_bbr_performance() {
             ;;
 
         2)
-            # 其他地区测试
+            # 完整测试对比（选择地区）
             echo ""
             echo -e "${YELLOW}请选择测试地区：${NC}"
-            echo -e "${GREEN}1.${NC} 日本"
-            echo -e "${GREEN}2.${NC} 美国"
-            echo -e "${GREEN}3.${NC} 俄罗斯"
-            echo -e "${GREEN}4.${NC} 中国台湾"
+            echo -e "${GREEN}1.${NC} 中国大陆"
+            echo -e "${GREEN}2.${NC} 日本"
+            echo -e "${GREEN}3.${NC} 美国"
+            echo -e "${GREEN}4.${NC} 俄罗斯"
+            echo -e "${GREEN}5.${NC} 中国台湾"
             echo -e "${GREEN}0.${NC} 返回"
             echo ""
-            read -p "请选择 [0-4]: " region_choice
+            read -p "请选择 [0-5]: " region_choice
 
             case $region_choice in
                 1)
-                    test_bbr_comparison "www.yahoo.co.jp" "日本" "http://speedtest.tokyo.linode.com/100MB-tokyo.bin"
+                    test_bbr_comparison "www.baidu.com" "中国大陆" "http://cachefly.cachefly.net/10mb.test"
                     ;;
                 2)
-                    test_bbr_comparison "www.google.com" "美国" "http://speedtest.newark.linode.com/100MB-newark.bin"
+                    test_bbr_comparison "www.yahoo.co.jp" "日本" "http://cachefly.cachefly.net/10mb.test"
                     ;;
                 3)
-                    test_bbr_comparison "www.yandex.ru" "俄罗斯" ""
+                    test_bbr_comparison "www.google.com" "美国" "http://cachefly.cachefly.net/10mb.test"
                     ;;
                 4)
-                    test_bbr_comparison "www.pchome.com.tw" "中国台湾" ""
+                    test_bbr_comparison "www.yandex.ru" "俄罗斯" "http://cachefly.cachefly.net/10mb.test"
+                    ;;
+                5)
+                    test_bbr_comparison "www.pchome.com.tw" "中国台湾" "http://cachefly.cachefly.net/10mb.test"
                     ;;
                 0)
                     return
@@ -508,6 +736,21 @@ test_bbr_performance() {
                     print_error "无效选择"
                     ;;
             esac
+            ;;
+
+        3)
+            # 延迟测试（所有地区）
+            test_all_regions_latency
+            ;;
+
+        4)
+            # 丢包测试（所有地区）
+            test_all_regions_packetloss
+            ;;
+
+        5)
+            # 吞吐量测试（所有地区）
+            test_all_regions_throughput
             ;;
 
         0)

@@ -329,178 +329,124 @@ declare -A TEST_SERVERS=(
     ["中国台湾"]="www.pchome.com.tw"
 )
 
-# 定义测试文件下载地址（用于吞吐量测试）
-declare -A THROUGHPUT_URLS=(
-    ["中国大陆"]="http://cachefly.cachefly.net/10mb.test"
-    ["日本"]="http://speedtest.tokyo.linode.com/100MB-tokyo.bin"
-    ["美国"]="http://speedtest.newark.linode.com/100MB-newark.bin"
-    ["俄罗斯"]="http://cachefly.cachefly.net/10mb.test"
-    ["中国台湾"]="http://cachefly.cachefly.net/10mb.test"
-)
+# 简单延迟测试
+test_region_latency() {
+    local target=$1
+    local name=$2
 
-# 执行单次对比测试（Cubic vs BBR）
-run_comparison_test() {
-    local region=$1
-    local test_server=$2
-    local throughput_url=$3
+    echo -e "${YELLOW}测试 $name 延迟...${NC}"
+    local ping_result=$(ping -c 10 -W 2 "$target" 2>/dev/null | tail -1)
+    if [[ -n "$ping_result" ]]; then
+        local avg_latency=$(echo "$ping_result" | awk -F'/' '{print $5}')
+        local packet_loss=$(ping -c 10 -W 2 "$target" 2>/dev/null | grep 'packet loss' | awk '{print $6}')
+        echo -e "  平均延迟: ${GREEN}${avg_latency} ms${NC}"
+        echo -e "  丢包率: ${GREEN}${packet_loss}${NC}"
+    else
+        echo -e "  ${RED}测试失败 - 无法连接到服务器${NC}"
+    fi
+    echo ""
+}
+
+# BBR vs Cubic 对比测试
+test_bbr_comparison() {
+    local target=$1
+    local name=$2
+    local test_url=$3
 
     echo ""
     echo -e "${CYAN}═══════════════════════════════════════${NC}"
-    echo -e "${YELLOW}测试地区: $region${NC}"
-    echo -e "${YELLOW}测试服务器: $test_server${NC}"
+    echo -e "${YELLOW}测试地区: $name${NC}"
+    echo -e "${YELLOW}测试服务器: $target${NC}"
     echo -e "${CYAN}═══════════════════════════════════════${NC}"
     echo ""
 
-    # 保存原始算法
+    # 检查连接
+    if ! ping -c 2 -W 3 "$target" &>/dev/null; then
+        print_error "无法连接到测试服务器 $target"
+        return
+    fi
+
+    # 保存原始设置
     local original_algo=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "cubic")
     local original_qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "pfifo_fast")
 
-    # 检查网络连通性
-    print_info "检查网络连通性..."
-    if ! ping -c 2 -W 3 "$test_server" &>/dev/null; then
-        print_error "无法连接到测试服务器 $test_server"
-        return 1
-    fi
-    print_success "连接正常"
-    echo ""
-
-    # ========== 第一阶段：Cubic 测试 ==========
-    echo -e "${CYAN}━━━━━━━ [1/2] Cubic（默认算法）测试 ━━━━━━━${NC}"
-    echo ""
-
+    # ========== Cubic 测试 ==========
+    echo -e "${CYAN}[1/2] Cubic（默认算法）测试${NC}"
     sysctl -w net.ipv4.tcp_congestion_control=cubic > /dev/null 2>&1
     sysctl -w net.core.default_qdisc=pfifo_fast > /dev/null 2>&1
     sleep 1
 
-    # Cubic - 延迟测试
     print_info "测试延迟..."
-    local cubic_latency=$(ping -c 10 -W 2 "$test_server" 2>/dev/null | tail -1 | awk -F'/' '{print $5}')
-    if [[ -z "$cubic_latency" ]]; then cubic_latency="N/A"; fi
-    echo -e "  ${GREEN}Cubic 延迟: ${cubic_latency} ms${NC}"
+    local cubic_lat=$(ping -c 10 -W 2 "$target" 2>/dev/null | tail -1 | awk -F'/' '{print $5}' || echo "")
+    echo -e "  Cubic 延迟: ${GREEN}${cubic_lat:-N/A} ms${NC}"
 
-    # Cubic - 丢包率测试
     print_info "测试丢包率..."
-    local cubic_loss=$(ping -c 20 -W 2 "$test_server" 2>/dev/null | grep 'packet loss' | awk '{print $6}')
-    if [[ -z "$cubic_loss" ]]; then cubic_loss="N/A"; fi
-    echo -e "  ${GREEN}Cubic 丢包率: ${cubic_loss}${NC}"
+    local cubic_loss=$(ping -c 20 -W 2 "$target" 2>/dev/null | grep 'packet loss' | awk '{print $6}' || echo "")
+    echo -e "  Cubic 丢包率: ${GREEN}${cubic_loss:-N/A}${NC}"
 
-    # Cubic - 吞吐量测试
-    local cubic_throughput="N/A"
-    if [[ -n "$throughput_url" ]]; then
+    local cubic_speed=""
+    if [[ -n "$test_url" ]]; then
         print_info "测试吞吐量..."
-        local cubic_speed=$(curl -o /dev/null -s -w '%{speed_download}' --max-time 15 "$throughput_url" 2>/dev/null)
+        cubic_speed=$(curl -o /dev/null -s -w '%{speed_download}' --max-time 15 "$test_url" 2>/dev/null || echo "")
         if [[ -n "$cubic_speed" && "$cubic_speed" != "0" ]]; then
-            cubic_throughput=$(awk "BEGIN {printf \"%.2f\", $cubic_speed * 8 / 1000000}")
+            local cubic_mbps=$(awk -v s="$cubic_speed" 'BEGIN {printf "%.2f", s * 8 / 1000000}')
+            echo -e "  Cubic 吞吐量: ${GREEN}${cubic_mbps} Mbps${NC}"
         fi
-        echo -e "  ${GREEN}Cubic 吞吐量: ${cubic_throughput} Mbps${NC}"
     fi
-
-    echo ""
-    sleep 1
-
-    # ========== 第二阶段：BBR 测试 ==========
-    echo -e "${CYAN}━━━━━━━ [2/2] BBR（加速算法）测试 ━━━━━━━${NC}"
     echo ""
 
+    # ========== BBR 测试 ==========
+    echo -e "${CYAN}[2/2] BBR（加速算法）测试${NC}"
     modprobe tcp_bbr 2>/dev/null
     sysctl -w net.ipv4.tcp_congestion_control=bbr > /dev/null 2>&1
     sysctl -w net.core.default_qdisc=fq > /dev/null 2>&1
     sleep 1
 
-    local current=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
+    local current=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "unknown")
     if [[ "$current" != "bbr" ]]; then
-        print_warning "BBR切换失败，内核可能不支持（需要4.9+）"
+        print_warning "BBR切换失败，内核可能不支持"
         sysctl -w net.ipv4.tcp_congestion_control="$original_algo" > /dev/null 2>&1
         sysctl -w net.core.default_qdisc="$original_qdisc" > /dev/null 2>&1
-        return 1
+        return
     fi
 
-    # BBR - 延迟测试
     print_info "测试延迟..."
-    local bbr_latency=$(ping -c 10 -W 2 "$test_server" 2>/dev/null | tail -1 | awk -F'/' '{print $5}')
-    if [[ -z "$bbr_latency" ]]; then bbr_latency="N/A"; fi
-    echo -e "  ${GREEN}BBR 延迟: ${bbr_latency} ms${NC}"
+    local bbr_lat=$(ping -c 10 -W 2 "$target" 2>/dev/null | tail -1 | awk -F'/' '{print $5}' || echo "")
+    echo -e "  BBR 延迟: ${GREEN}${bbr_lat:-N/A} ms${NC}"
 
-    # BBR - 丢包率测试
     print_info "测试丢包率..."
-    local bbr_loss=$(ping -c 20 -W 2 "$test_server" 2>/dev/null | grep 'packet loss' | awk '{print $6}')
-    if [[ -z "$bbr_loss" ]]; then bbr_loss="N/A"; fi
-    echo -e "  ${GREEN}BBR 丢包率: ${bbr_loss}${NC}"
+    local bbr_loss=$(ping -c 20 -W 2 "$target" 2>/dev/null | grep 'packet loss' | awk '{print $6}' || echo "")
+    echo -e "  BBR 丢包率: ${GREEN}${bbr_loss:-N/A}${NC}"
 
-    # BBR - 吞吐量测试
-    local bbr_throughput="N/A"
-    if [[ -n "$throughput_url" ]]; then
+    local bbr_speed=""
+    if [[ -n "$test_url" ]]; then
         print_info "测试吞吐量..."
-        local bbr_speed=$(curl -o /dev/null -s -w '%{speed_download}' --max-time 15 "$throughput_url" 2>/dev/null)
+        bbr_speed=$(curl -o /dev/null -s -w '%{speed_download}' --max-time 15 "$test_url" 2>/dev/null || echo "")
         if [[ -n "$bbr_speed" && "$bbr_speed" != "0" ]]; then
-            bbr_throughput=$(awk "BEGIN {printf \"%.2f\", $bbr_speed * 8 / 1000000}")
+            local bbr_mbps=$(awk -v s="$bbr_speed" 'BEGIN {printf "%.2f", s * 8 / 1000000}')
+            echo -e "  BBR 吞吐量: ${GREEN}${bbr_mbps} Mbps${NC}"
         fi
-        echo -e "  ${GREEN}BBR 吞吐量: ${bbr_throughput} Mbps${NC}"
-    fi
-
-    echo ""
-
-    # ========== 对比分析 ==========
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}📊 性能对比结果（$region）${NC}"
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-
-    # 延迟对比
-    if [[ "$cubic_latency" != "N/A" && "$bbr_latency" != "N/A" ]]; then
-        echo -e "${YELLOW}🔹 延迟对比：${NC}"
-        echo -e "  Cubic: $cubic_latency ms"
-        echo -e "  BBR:   $bbr_latency ms"
-
-        local latency_diff=$(awk "BEGIN {printf \"%.2f\", $cubic_latency - $bbr_latency}")
-        local is_improved=$(awk "BEGIN {if ($cubic_latency > $bbr_latency) print 1; else print 0}")
-
-        if [[ "$is_improved" == "1" ]]; then
-            echo -e "  ${GREEN}✓ BBR 延迟降低 ${latency_diff} ms${NC}"
-        else
-            local abs_diff=${latency_diff#-}
-            echo -e "  ${YELLOW}✗ BBR 延迟增加 ${abs_diff} ms${NC}"
-        fi
-    else
-        echo -e "${YELLOW}🔹 延迟对比：${NC} 数据不足"
     fi
     echo ""
 
-    # 丢包率对比
-    echo -e "${YELLOW}🔹 丢包率对比：${NC}"
-    echo -e "  Cubic: $cubic_loss"
-    echo -e "  BBR:   $bbr_loss"
-    echo ""
-
-    # 吞吐量对比
-    if [[ "$cubic_throughput" != "N/A" && "$bbr_throughput" != "N/A" ]]; then
-        echo -e "${YELLOW}🔹 吞吐量对比：${NC}"
-        echo -e "  Cubic: $cubic_throughput Mbps"
-        echo -e "  BBR:   $bbr_throughput Mbps"
-
-        local throughput_diff=$(awk "BEGIN {printf \"%.2f\", $bbr_throughput - $cubic_throughput}")
-        local throughput_percent=$(awk "BEGIN {if ($cubic_throughput > 0) printf \"%.2f\", ($bbr_throughput - $cubic_throughput) / $cubic_throughput * 100; else print 0}")
-        local is_improved=$(awk "BEGIN {if ($bbr_throughput > $cubic_throughput) print 1; else print 0}")
-
-        if [[ "$is_improved" == "1" ]]; then
-            echo -e "  ${GREEN}✓ BBR 提升 ${throughput_diff} Mbps (+${throughput_percent}%)${NC}"
-        else
-            local abs_diff=${throughput_diff#-}
-            local abs_percent=${throughput_percent#-}
-            echo -e "  ${YELLOW}✗ BBR 降低 ${abs_diff} Mbps (-${abs_percent}%)${NC}"
-        fi
-    else
-        echo -e "${YELLOW}🔹 吞吐量对比：${NC} 数据不足"
+    # ========== 对比结果 ==========
+    echo -e "${CYAN}━━━━━━━ 性能对比 ━━━━━━━${NC}"
+    if [[ -n "$cubic_lat" && -n "$bbr_lat" ]]; then
+        echo -e "延迟: Cubic ${cubic_lat}ms vs BBR ${bbr_lat}ms"
     fi
-    echo ""
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    if [[ -n "$cubic_loss" && -n "$bbr_loss" ]]; then
+        echo -e "丢包: Cubic ${cubic_loss} vs BBR ${bbr_loss}"
+    fi
+    if [[ -n "$cubic_speed" && -n "$bbr_speed" && "$cubic_speed" != "0" && "$bbr_speed" != "0" ]]; then
+        local c_mbps=$(awk -v s="$cubic_speed" 'BEGIN {printf "%.2f", s * 8 / 1000000}')
+        local b_mbps=$(awk -v s="$bbr_speed" 'BEGIN {printf "%.2f", s * 8 / 1000000}')
+        echo -e "吞吐量: Cubic ${c_mbps}Mbps vs BBR ${b_mbps}Mbps"
+    fi
     echo ""
 
     # 恢复原始设置
     sysctl -w net.ipv4.tcp_congestion_control="$original_algo" > /dev/null 2>&1
     sysctl -w net.core.default_qdisc="$original_qdisc" > /dev/null 2>&1
-
-    return 0
 }
 
 # BBR 性能测试主函数
@@ -526,12 +472,8 @@ test_bbr_performance() {
 
     case $test_choice in
         1)
-            # 快速测试（中国大陆）- 对比 Cubic vs BBR
-            echo ""
-            echo -e "${CYAN}━━━━━━━ 快速测试（中国大陆）━━━━━━━${NC}"
-            echo ""
-
-            run_comparison_test "中国大陆" "${TEST_SERVERS[中国大陆]}" "${THROUGHPUT_URLS[中国大陆]}"
+            # 快速测试（中国大陆）
+            test_bbr_comparison "www.baidu.com" "中国大陆" "http://cachefly.cachefly.net/10mb.test"
             ;;
 
         2)
@@ -548,16 +490,16 @@ test_bbr_performance() {
 
             case $region_choice in
                 1)
-                    run_comparison_test "日本" "${TEST_SERVERS[日本]}" "${THROUGHPUT_URLS[日本]}"
+                    test_bbr_comparison "www.yahoo.co.jp" "日本" "http://speedtest.tokyo.linode.com/100MB-tokyo.bin"
                     ;;
                 2)
-                    run_comparison_test "美国" "${TEST_SERVERS[美国]}" "${THROUGHPUT_URLS[美国]}"
+                    test_bbr_comparison "www.google.com" "美国" "http://speedtest.newark.linode.com/100MB-newark.bin"
                     ;;
                 3)
-                    run_comparison_test "俄罗斯" "${TEST_SERVERS[俄罗斯]}" "${THROUGHPUT_URLS[俄罗斯]}"
+                    test_bbr_comparison "www.yandex.ru" "俄罗斯" ""
                     ;;
                 4)
-                    run_comparison_test "中国台湾" "${TEST_SERVERS[中国台湾]}" "${THROUGHPUT_URLS[中国台湾]}"
+                    test_bbr_comparison "www.pchome.com.tw" "中国台湾" ""
                     ;;
                 0)
                     return

@@ -35,7 +35,8 @@
       "Bash(curl:*)",
       "Bash(cat:*)",
       "Bash(node.sh:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "WebFetch(domain:github.com)"
     ],
     "deny": [],
     "ask": []

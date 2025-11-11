@@ -872,58 +872,32 @@ install_wgcf() {
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
-    # 检查是否已安装
+    # ========================================
+    # 步骤 1: 检查是否已安装
+    # ========================================
     if [[ -f "$WGCF_BIN" ]]; then
         print_warning "wgcf 已安装"
-
-        # 尝试获取版本
-        local test_output=$("$WGCF_BIN" --version 2>&1)
-        local exit_code=$?
-
-        if [[ $exit_code -ne 0 ]]; then
-            # 尝试 version 命令
-            test_output=$("$WGCF_BIN" version 2>&1)
-            exit_code=$?
-        fi
-
-        if [[ $exit_code -eq 0 ]]; then
-            local version=$(echo "$test_output" | grep -oP 'wgcf \K[0-9.]+' || echo "$test_output" | grep -oP '\d+\.\d+\.\d+' | head -1)
-            if [[ -n "$version" ]]; then
-                print_info "当前版本: $version"
-            else
-                print_warning "无法识别版本号，输出: $test_output"
-            fi
-        else
-            print_warning "wgcf 文件存在但执行失败"
-            print_info "错误输出: $test_output"
-        fi
-
+        local version=$("$WGCF_BIN" version 2>&1 | head -1)
+        print_info "版本信息: $version"
         return 0
     fi
 
-    print_info "正在安装 wgcf..."
+    # ========================================
+    # 步骤 2: 安装 wgcf 二进制文件
+    # ========================================
+    print_info "正在下载 wgcf..."
 
-    # 检测系统架构
+    # 检测系统架构并构建下载URL
     local arch=$(uname -m)
     local wgcf_version="2.2.29"
-    local download_url="https://github.com/ViRb3/wgcf/releases/download/v${wgcf_version}/"
+    local binary_name=""
 
     case $arch in
-        x86_64)
-            download_url="${download_url}wgcf_${wgcf_version}_linux_amd64"
-            ;;
-        aarch64|arm64)
-            download_url="${download_url}wgcf_${wgcf_version}_linux_arm64"
-            ;;
-        armv7l|armv7)
-            download_url="${download_url}wgcf_${wgcf_version}_linux_armv7"
-            ;;
-        armv6l)
-            download_url="${download_url}wgcf_${wgcf_version}_linux_armv6"
-            ;;
-        i386|i686)
-            download_url="${download_url}wgcf_${wgcf_version}_linux_386"
-            ;;
+        x86_64)       binary_name="wgcf_${wgcf_version}_linux_amd64" ;;
+        aarch64|arm64) binary_name="wgcf_${wgcf_version}_linux_arm64" ;;
+        armv7l|armv7)  binary_name="wgcf_${wgcf_version}_linux_armv7" ;;
+        armv6l)       binary_name="wgcf_${wgcf_version}_linux_armv6" ;;
+        i386|i686)    binary_name="wgcf_${wgcf_version}_linux_386" ;;
         *)
             print_error "不支持的系统架构: $arch"
             print_info "支持的架构: x86_64, aarch64, arm64, armv7l, armv6l, i386, i686"
@@ -931,95 +905,110 @@ install_wgcf() {
             ;;
     esac
 
-    print_info "下载地址: $download_url"
+    local download_url="https://github.com/ViRb3/wgcf/releases/download/v${wgcf_version}/${binary_name}"
+    print_info "下载链接: $download_url"
 
-    # 下载 wgcf
-    if ! curl -L -o "$WGCF_BIN" "$download_url"; then
-        print_error "下载 wgcf 失败"
+    # 下载wgcf
+    if ! curl -sSL -o "$WGCF_BIN" "$download_url"; then
+        print_error "下载失败"
         print_info "请检查网络连接或手动下载: $download_url"
+        [[ -f "$WGCF_BIN" ]] && rm -f "$WGCF_BIN"
         return 1
     fi
 
+    # 设置执行权限
     chmod +x "$WGCF_BIN"
 
-    # 安装 WireGuard 工具
-    print_info "正在安装 WireGuard 工具..."
-    if command -v apt-get &>/dev/null; then
-        apt-get update && apt-get install -y wireguard-tools
-    elif command -v yum &>/dev/null; then
-        yum install -y wireguard-tools
-    else
-        print_warning "请手动安装 wireguard-tools"
-    fi
-
-    # 创建配置目录
-    mkdir -p "$WGCF_CONFIG_DIR"
-
-    # 验证安装
-    if [[ ! -f "$WGCF_BIN" ]]; then
-        print_error "wgcf 安装失败：文件不存在"
-        return 1
-    fi
-
-    if [[ ! -x "$WGCF_BIN" ]]; then
-        print_error "wgcf 文件存在但没有执行权限"
-        ls -lh "$WGCF_BIN"
-        return 1
-    fi
-
-    # 验证文件完整性（检查文件大小）
-    local file_size=$(stat -f%z "$WGCF_BIN" 2>/dev/null || stat -c%s "$WGCF_BIN" 2>/dev/null)
-    if [[ -z "$file_size" ]] || [[ "$file_size" -lt 100000 ]]; then
-        print_error "wgcf 文件大小异常: ${file_size:-unknown} bytes（可能下载不完整）"
-        print_info "尝试重新下载..."
+    # 验证文件完整性
+    local file_size=$(stat -c%s "$WGCF_BIN" 2>/dev/null || stat -f%z "$WGCF_BIN" 2>/dev/null)
+    if [[ -z "$file_size" ]] || [[ "$file_size" -lt 1000000 ]]; then
+        print_error "下载的文件大小异常: ${file_size:-0} bytes（预期 >1MB）"
+        print_info "可能原因：网络中断、GitHub访问受限"
         rm -f "$WGCF_BIN"
         return 1
     fi
 
-    # 测试执行并捕获详细错误
-    print_info "正在验证 wgcf 可执行性..."
-    local test_output=$("$WGCF_BIN" --version 2>&1)
+    print_success "✅ wgcf 二进制文件下载完成"
+
+    # ========================================
+    # 步骤 3: 安装 WireGuard 工具（必需）
+    # ========================================
+    print_info "正在检查 WireGuard 工具..."
+
+    if ! command -v wg-quick &>/dev/null; then
+        print_info "wg-quick 未安装，正在安装 wireguard-tools..."
+
+        if command -v apt-get &>/dev/null; then
+            if apt-get update >/dev/null 2>&1 && apt-get install -y wireguard-tools >/dev/null 2>&1; then
+                print_success "✅ wireguard-tools 安装成功 (apt)"
+            else
+                print_error "wireguard-tools 安装失败"
+                print_info "请手动执行: apt-get install wireguard-tools"
+                return 1
+            fi
+        elif command -v yum &>/dev/null; then
+            if yum install -y wireguard-tools >/dev/null 2>&1; then
+                print_success "✅ wireguard-tools 安装成功 (yum)"
+            else
+                print_error "wireguard-tools 安装失败"
+                print_info "请手动执行: yum install wireguard-tools"
+                return 1
+            fi
+        else
+            print_error "无法自动安装 wireguard-tools"
+            print_info "请根据您的系统手动安装 wireguard-tools 包"
+            return 1
+        fi
+
+        # 再次验证wg-quick是否可用
+        if ! command -v wg-quick &>/dev/null; then
+            print_error "wireguard-tools 安装后 wg-quick 仍不可用"
+            return 1
+        fi
+    else
+        print_success "✅ WireGuard 工具已安装"
+    fi
+
+    # ========================================
+    # 步骤 4: 创建配置目录
+    # ========================================
+    mkdir -p "$WGCF_CONFIG_DIR"
+
+    # ========================================
+    # 步骤 5: 验证 wgcf 可执行性并获取版本
+    # ========================================
+    print_info "正在验证 wgcf..."
+
+    local version_output=$("$WGCF_BIN" version 2>&1)
     local exit_code=$?
 
     if [[ $exit_code -ne 0 ]]; then
-        print_error "wgcf 执行失败 (退出码: $exit_code)"
-        print_info "详细输出: $test_output"
-        print_info "系统架构: $(uname -m)"
-        print_info "文件信息: $(file "$WGCF_BIN" 2>/dev/null || echo '无法获取')"
-
-        # 尝试使用 version 而不是 --version
-        print_info "尝试使用 'version' 命令..."
-        test_output=$("$WGCF_BIN" version 2>&1)
-        exit_code=$?
-
-        if [[ $exit_code -eq 0 ]]; then
-            print_warning "注意: wgcf 使用 'version' 而不是 '--version' 命令"
-            local version=$(echo "$test_output" | grep -oP '\d+\.\d+\.\d+' | head -1)
-            if [[ -n "$version" ]]; then
-                print_success "wgcf 安装成功"
-                print_info "版本: $version"
-                return 0
-            fi
-        fi
-
-        print_error "wgcf 无法正常执行，可能原因："
-        print_error "1. 系统架构不匹配"
-        print_error "2. 缺少必要的系统库"
-        print_error "3. 下载文件损坏"
+        print_error "wgcf 无法执行 (退出码: $exit_code)"
+        print_info "输出: $version_output"
+        print_info "架构: $(uname -m)"
+        print_info "文件类型: $(file "$WGCF_BIN" 2>/dev/null || echo 'unknown')"
         return 1
     fi
 
-    # 从输出中提取版本号
-    local version=$(echo "$test_output" | grep -oP 'wgcf \K[0-9.]+' || echo "$test_output" | grep -oP '\d+\.\d+\.\d+' | head -1)
+    # ========================================
+    # 步骤 6: 安装完成
+    # ========================================
+    echo ""
+    print_success "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    print_success "✅ wgcf 安装完成"
+    print_success "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo -e "${YELLOW}安装信息：${NC}"
+    echo -e "  wgcf 位置: ${GREEN}$WGCF_BIN${NC}"
+    echo -e "  配置目录: ${GREEN}$WGCF_CONFIG_DIR${NC}"
+    echo -e "  版本信息: ${GREEN}$version_output${NC}"
+    echo ""
+    echo -e "${YELLOW}下一步操作：${NC}"
+    echo -e "  1. 注册 WARP 账号: 选择菜单中的 '注册 WARP 账号'"
+    echo -e "  2. 生成配置文件: 选择 '生成 WireGuard 配置'"
+    echo -e "  3. 启动 WARP 连接: 选择 '启动 WARP 连接'"
+    echo ""
 
-    if [[ -z "$version" ]]; then
-        print_warning "wgcf 可以执行，但无法识别版本号"
-        print_info "版本输出: $test_output"
-        version="unknown"
-    fi
-
-    print_success "wgcf 安装成功"
-    print_info "版本: $version"
     return 0
 }
 

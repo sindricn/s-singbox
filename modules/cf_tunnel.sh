@@ -165,35 +165,50 @@ start_temp_argo_tunnel() {
         # 询问是否绑定到节点
         local nodes_file="${DATA_DIR}/nodes.json"
         if [[ -f "$nodes_file" ]]; then
-            # 检查该端口是否对应一个节点
-            local node_exists=$(jq -r ".nodes[] | select(.port == \"$local_port\") | .port" "$nodes_file" 2>/dev/null)
+            local nodes=$(jq -r '.nodes[] | "\(.port)|\(.protocol)|\(.tag // "N/A")"' "$nodes_file" 2>/dev/null)
 
-            if [[ -n "$node_exists" ]]; then
+            if [[ -n "$nodes" ]]; then
                 echo ""
-                read -p "检测到端口 $local_port 对应一个节点，是否关联此隧道到该节点？[y/N]: " bind_choice
+                read -p "是否将此隧道绑定到某个节点？[y/N]: " bind_choice
 
                 if [[ "$bind_choice" == "y" || "$bind_choice" == "Y" ]]; then
-                    # 在节点中添加tunnel_domain字段
-                    jq --arg port "$local_port" \
-                       --arg domain "$tunnel_url" \
-                       --arg pid "$pid" \
-                       '(.nodes[] | select(.port == $port)) |= (
-                           . + {
-                               tunnel_domain: $domain,
-                               tunnel_name: "temp-tunnel-" + $pid,
-                               tunnel_type: "argo_temp"
-                           }
-                       )' \
-                       "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
+                    echo ""
+                    echo -e "${YELLOW}可用节点：${NC}"
+                    local index=1
+                    echo "$nodes" | while IFS='|' read -r port protocol tag; do
+                        echo -e "${GREEN}$index.${NC} 端口: $port | 协议: $protocol | 标签: $tag"
+                        ((index++))
+                    done
+                    echo ""
+                    read -p "请选择节点 [1-$(echo "$nodes" | wc -l)]: " node_choice
 
-                    print_success "✅ 临时隧道已关联到节点"
-                    echo ""
-                    echo -e "${YELLOW}访问流程：${NC}"
-                    echo -e "  用户 → ${GREEN}$tunnel_url${NC} (临时Argo隧道) → 本地节点(端口:$local_port)"
-                    echo ""
-                    echo -e "${YELLOW}注意：${NC}"
-                    echo -e "  • 临时隧道重启后域名会变化，需重新绑定"
-                    echo -e "  • 建议使用专用隧道以获得固定域名"
+                    if [[ "$node_choice" =~ ^[0-9]+$ ]]; then
+                        local selected_port=$(echo "$nodes" | sed -n "${node_choice}p" | cut -d'|' -f1)
+
+                        if [[ -n "$selected_port" ]]; then
+                            # 在节点中添加tunnel_domain字段
+                            jq --arg port "$selected_port" \
+                               --arg domain "$tunnel_url" \
+                               --arg pid "$pid" \
+                               '(.nodes[] | select(.port == $port)) |= (
+                                   . + {
+                                       tunnel_domain: $domain,
+                                       tunnel_name: "temp-tunnel-" + $pid,
+                                       tunnel_type: "argo_temp"
+                                   }
+                               )' \
+                               "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
+
+                            print_success "✅ 临时隧道已绑定到节点(端口:$selected_port)"
+                            echo ""
+                            echo -e "${YELLOW}访问流程：${NC}"
+                            echo -e "  用户 → ${GREEN}$tunnel_url${NC} (临时Argo) → 隧道端口($local_port) → 节点端口($selected_port)"
+                            echo ""
+                            echo -e "${YELLOW}注意：${NC}"
+                            echo -e "  • 临时隧道重启后域名会变化，需重新绑定"
+                            echo -e "  • 建议使用专用隧道以获得固定域名"
+                        fi
+                    fi
                 fi
             fi
         fi
@@ -610,32 +625,127 @@ manage_tunnel_node_binding() {
 
     case $action in
         1)
-            # 列出可用隧道
+            # 列出所有可用隧道（临时+专用）
             echo ""
-            echo -e "${YELLOW}可用隧道：${NC}"
-            "$CLOUDFLARED_BIN" tunnel list 2>/dev/null
+            echo -e "${YELLOW}━━━━━━━ 可用隧道列表 ━━━━━━━${NC}"
             echo ""
 
-            read -p "请输入隧道名称: " tunnel_name
-            if [[ -z "$tunnel_name" ]]; then
-                print_error "隧道名称不能为空"
+            # 收集所有隧道
+            declare -a tunnel_list
+            declare -a tunnel_types
+            declare -a tunnel_urls
+            local index=1
+
+            # 1. 临时隧道（从进程获取）
+            local temp_pids=$(pgrep -f "cloudflared tunnel --url" 2>/dev/null)
+            if [[ -n "$temp_pids" ]]; then
+                echo -e "${CYAN}临时隧道：${NC}"
+                for pid in $temp_pids; do
+                    local cmdline=$(ps -p $pid -o args= 2>/dev/null)
+                    local port=$(echo "$cmdline" | grep -oP 'localhost:\K\d+')
+                    local log_file="/tmp/argo-tunnel-${port}.log"
+
+                    if [[ -f "$log_file" ]]; then
+                        local url=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' "$log_file" | head -1)
+                        if [[ -n "$url" ]]; then
+                            echo -e "${GREEN}$index.${NC} [临时] 端口:$port → $url (PID:$pid)"
+                            tunnel_list[$index]="temp-$pid"
+                            tunnel_types[$index]="temp"
+                            tunnel_urls[$index]="$url"
+                            ((index++))
+                        fi
+                    fi
+                done
+                echo ""
+            fi
+
+            # 2. 专用隧道（从cloudflared获取）
+            if [[ -f "$CLOUDFLARED_BIN" ]]; then
+                local dedicated_tunnels=$("$CLOUDFLARED_BIN" tunnel list 2>/dev/null | tail -n +2 | awk '{print $2}')
+                if [[ -n "$dedicated_tunnels" ]]; then
+                    echo -e "${CYAN}专用隧道：${NC}"
+                    for tname in $dedicated_tunnels; do
+                        # 从配置文件获取域名
+                        local config_file="${CLOUDFLARED_CONFIG_DIR}/config.yml"
+                        if [[ -f "$config_file" ]]; then
+                            local domain=$(grep "hostname:" "$config_file" | head -1 | awk '{print $2}')
+                            echo -e "${GREEN}$index.${NC} [专用] $tname → ${domain:-未配置域名}"
+                            tunnel_list[$index]="$tname"
+                            tunnel_types[$index]="dedicated"
+                            tunnel_urls[$index]="${domain:-}"
+                            ((index++))
+                        fi
+                    done
+                    echo ""
+                fi
+            fi
+
+            if [[ ${#tunnel_list[@]} -eq 0 ]]; then
+                print_info "没有可用的隧道"
+                return 0
+            fi
+
+            echo ""
+            read -p "请选择隧道 [1-$((index-1))]: " tunnel_choice
+
+            if [[ ! "$tunnel_choice" =~ ^[0-9]+$ ]] || [[ "$tunnel_choice" -lt 1 ]] || [[ "$tunnel_choice" -ge $index ]]; then
+                print_error "无效选择"
                 return 1
             fi
 
-            # 获取隧道域名配置
-            local config_file="${CLOUDFLARED_CONFIG_DIR}/config.yml"
-            if [[ -f "$config_file" ]]; then
-                local tunnel_domain=$(grep "hostname:" "$config_file" | head -1 | awk '{print $2}')
-                local tunnel_port=$(grep "service: http://localhost:" "$config_file" | head -1 | grep -oP '\d+$')
+            local selected_tunnel="${tunnel_list[$tunnel_choice]}"
+            local selected_type="${tunnel_types[$tunnel_choice]}"
+            local selected_url="${tunnel_urls[$tunnel_choice]}"
 
-                if [[ -n "$tunnel_domain" && -n "$tunnel_port" ]]; then
-                    bind_tunnel_to_node "$tunnel_name" "$tunnel_domain" "$tunnel_port"
-                else
-                    print_error "无法从配置文件获取隧道信息"
-                fi
-            else
-                print_error "隧道配置文件不存在"
+            # 列出节点供选择
+            echo ""
+            echo -e "${YELLOW}可用节点：${NC}"
+            local nodes=$(jq -r '.nodes[] | "\(.port)|\(.protocol)|\(.tag // "N/A")"' "$nodes_file" 2>/dev/null)
+
+            if [[ -z "$nodes" ]]; then
+                print_error "没有可用节点"
+                return 1
             fi
+
+            index=1
+            echo "$nodes" | while IFS='|' read -r port protocol tag; do
+                echo -e "${GREEN}$index.${NC} 端口: $port | 协议: $protocol | 标签: $tag"
+                ((index++))
+            done
+
+            echo ""
+            read -p "请选择节点 [1-$(echo "$nodes" | wc -l)]: " node_choice
+
+            if [[ ! "$node_choice" =~ ^[0-9]+$ ]]; then
+                print_error "无效选择"
+                return 1
+            fi
+
+            local selected_port=$(echo "$nodes" | sed -n "${node_choice}p" | cut -d'|' -f1)
+
+            if [[ -z "$selected_port" ]]; then
+                print_error "无效选择"
+                return 1
+            fi
+
+            # 绑定隧道到节点
+            jq --arg port "$selected_port" \
+               --arg domain "$selected_url" \
+               --arg tunnel_name "$selected_tunnel" \
+               --arg tunnel_type "argo_$selected_type" \
+               '(.nodes[] | select(.port == $port)) |= (
+                   . + {
+                       tunnel_domain: $domain,
+                       tunnel_name: $tunnel_name,
+                       tunnel_type: $tunnel_type
+                   }
+               )' \
+               "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
+
+            print_success "✅ 隧道已绑定到节点(端口:$selected_port)"
+            echo ""
+            echo -e "${YELLOW}访问流程：${NC}"
+            echo -e "  用户 → ${GREEN}$selected_url${NC} ($selected_type隧道) → 节点端口($selected_port)"
             ;;
 
         2)
@@ -765,7 +875,8 @@ install_wgcf() {
     # 检查是否已安装
     if [[ -f "$WGCF_BIN" ]]; then
         print_warning "wgcf 已安装"
-        local version=$("$WGCF_BIN" version 2>/dev/null || echo "unknown")
+        # wgcf使用 --version 参数获取版本
+        local version=$("$WGCF_BIN" --version 2>&1 | grep -oP 'wgcf \K[0-9.]+' || echo "unknown")
         print_info "当前版本: $version"
         return 0
     fi
@@ -813,13 +924,18 @@ install_wgcf() {
     # 创建配置目录
     mkdir -p "$WGCF_CONFIG_DIR"
 
-    # 验证安装（检查文件是否存在且可执行）
+    # 验证安装
     if [[ -f "$WGCF_BIN" ]] && [[ -x "$WGCF_BIN" ]]; then
-        print_success "wgcf 安装成功"
-        # 尝试获取版本号，如果失败则显示"已安装"
-        local version=$("$WGCF_BIN" version 2>/dev/null || echo "已安装")
-        print_info "版本: $version"
-        return 0
+        # 尝试运行 --version 验证是否正常工作
+        if "$WGCF_BIN" --version &>/dev/null; then
+            local version=$("$WGCF_BIN" --version 2>&1 | grep -oP 'wgcf \K[0-9.]+' || echo "2.2.22")
+            print_success "wgcf 安装成功"
+            print_info "版本: $version"
+            return 0
+        else
+            print_error "wgcf 文件已下载但无法执行，可能需要检查系统架构"
+            return 1
+        fi
     else
         print_error "wgcf 安装失败：文件不存在或不可执行"
         return 1

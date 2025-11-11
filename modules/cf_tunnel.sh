@@ -161,6 +161,42 @@ start_temp_argo_tunnel() {
         echo -e "  • 使用 kill $pid 可停止隧道"
         echo -e "  • 查看日志: tail -f $log_file"
         echo ""
+
+        # 询问是否绑定到节点
+        local nodes_file="${DATA_DIR}/nodes.json"
+        if [[ -f "$nodes_file" ]]; then
+            # 检查该端口是否对应一个节点
+            local node_exists=$(jq -r ".nodes[] | select(.port == \"$local_port\") | .port" "$nodes_file" 2>/dev/null)
+
+            if [[ -n "$node_exists" ]]; then
+                echo ""
+                read -p "检测到端口 $local_port 对应一个节点，是否关联此隧道到该节点？[y/N]: " bind_choice
+
+                if [[ "$bind_choice" == "y" || "$bind_choice" == "Y" ]]; then
+                    # 在节点中添加tunnel_domain字段
+                    jq --arg port "$local_port" \
+                       --arg domain "$tunnel_url" \
+                       --arg pid "$pid" \
+                       '(.nodes[] | select(.port == $port)) |= (
+                           . + {
+                               tunnel_domain: $domain,
+                               tunnel_name: "temp-tunnel-" + $pid,
+                               tunnel_type: "argo_temp"
+                           }
+                       )' \
+                       "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
+
+                    print_success "✅ 临时隧道已关联到节点"
+                    echo ""
+                    echo -e "${YELLOW}访问流程：${NC}"
+                    echo -e "  用户 → ${GREEN}$tunnel_url${NC} (临时Argo隧道) → 本地节点(端口:$local_port)"
+                    echo ""
+                    echo -e "${YELLOW}注意：${NC}"
+                    echo -e "  • 临时隧道重启后域名会变化，需重新绑定"
+                    echo -e "  • 建议使用专用隧道以获得固定域名"
+                fi
+            fi
+        fi
     else
         print_warning "隧道可能已启动，但无法获取 URL"
         print_info "请查看日志: tail -f $log_file"
@@ -777,13 +813,15 @@ install_wgcf() {
     # 创建配置目录
     mkdir -p "$WGCF_CONFIG_DIR"
 
-    # 验证安装
-    if [[ -f "$WGCF_BIN" ]] && "$WGCF_BIN" version &>/dev/null; then
+    # 验证安装（检查文件是否存在且可执行）
+    if [[ -f "$WGCF_BIN" ]] && [[ -x "$WGCF_BIN" ]]; then
         print_success "wgcf 安装成功"
-        print_info "版本: $("$WGCF_BIN" version)"
+        # 尝试获取版本号，如果失败则显示"已安装"
+        local version=$("$WGCF_BIN" version 2>/dev/null || echo "已安装")
+        print_info "版本: $version"
         return 0
     else
-        print_error "wgcf 安装失败"
+        print_error "wgcf 安装失败：文件不存在或不可执行"
         return 1
     fi
 }

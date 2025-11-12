@@ -1262,6 +1262,16 @@ start_warp() {
         print_success "✅ 已切换到纯 IPv4 模式"
     fi
 
+    # 4. 检查 resolvconf 依赖
+    if ! command -v resolvconf &>/dev/null; then
+        print_warning "⚠️  系统未安装 resolvconf，将移除配置中的 DNS 设置"
+        # 从配置文件中删除 DNS 行，避免 wg-quick 调用 resolvconf
+        sed -i '/^DNS[[:space:]]*=/d' "${WGCF_CONFIG_DIR}/wgcf.conf"
+        print_info "提示：可安装 openresolv 以支持 DNS 配置"
+        print_info "  Ubuntu/Debian: apt install openresolv"
+        print_info "  CentOS/RHEL: yum install openresolv"
+    fi
+
     # ========================================
     # 启动 WARP
     # ========================================

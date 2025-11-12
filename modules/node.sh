@@ -1932,14 +1932,7 @@ ${CYAN}端口跳跃配置（可选）：${NC}"
         --argjson down_mbps "$down_mbps" \
         --arg obfs_password "$obfs_password" \
 --arg port_hopping "$port_hopping" 
-        '{
-            tls_domain: $tls_domain,
-            tls_cert: $tls_cert,
-            tls_key: $tls_key,
-            up_mbps: $up_mbps,
-            down_mbps: $down_mbps,
-        } + (if $port_hopping != "" then {port_hopping: $port_hopping} else {} end)
-        }')
+'{            tls_domain: $tls_domain,            tls_cert: $tls_cert,            tls_key: $tls_key,            up_mbps: $up_mbps,            down_mbps: $down_mbps,            obfs_password: $obfs_password        } + (if $port_hopping != "" then {port_hopping: $port_hopping} else {} end)')
 
     # 保存节点信息
     save_node_info "hysteria2" "$port" "udp" "tls" "$extra_config" "hy2-$port"

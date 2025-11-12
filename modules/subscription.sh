@@ -296,6 +296,14 @@ resolve_subscription_host() {
 
     local host=""
 
+    # 优先1: 检查是否绑定了 Argo 隧道
+    local tunnel_domain
+    tunnel_domain=$(echo "$node_json" | jq -r '.tunnel_domain // ""')
+    if [[ -n "$tunnel_domain" && "$tunnel_domain" != "null" ]]; then
+        host="$tunnel_domain"
+    fi
+
+    # 优先2: 从 extra 中提取 tls_domain
     if [[ -z "$host" ]]; then
         case "$protocol" in
             vless|vmess|trojan)
@@ -305,14 +313,17 @@ resolve_subscription_host() {
         esac
     fi
 
+    # 优先3: 使用配置的订阅域名
     if [[ -z "$host" ]]; then
         host=$(get_subscription_domain_hint)
     fi
 
+    # 优先4: 使用公网 IP
     if [[ -z "$host" ]]; then
         host=$(get_public_ip)
     fi
 
+    # 兜底: localhost
     if [[ -z "$host" ]]; then
         host="127.0.0.1"
     fi
@@ -728,6 +739,7 @@ EOF
         local extra=$(echo "$node" | jq -r '.extra')
         local node_name_raw=$(echo "$node" | jq -r '.name // "未命名"')
         local node_host=$(resolve_subscription_host "$node")
+        local warp_outbound=$(echo "$node" | jq -r '.warp_outbound // false')
         local node_name="${node_name_raw}-${username}"
         local safe_node_name=$(escape_yaml_string "$node_name")
 
@@ -1175,6 +1187,7 @@ generate_singbox_subscription_config() {
         local extra=$(echo "$node" | jq -r '.extra')
         local node_name_raw=$(echo "$node" | jq -r '.name // "未命名"')
         local node_host=$(resolve_subscription_host "$node")
+        local warp_outbound=$(echo "$node" | jq -r '.warp_outbound // false')
 
         # 获取用户信息用于节点名称
         local user=$(jq -r ".users[] | select(.id == \"$user_id\")" "$USERS_FILE" 2>/dev/null)
@@ -1420,7 +1433,46 @@ generate_singbox_subscription_config() {
                         }
                     }')
                 ;;
+            hysteria2)
+                if [[ -z "$user_password" ]]; then
+                    echo "# WARNING: Skipping Hysteria2-${port} - password required" >&2
+                    ((skipped_count++))
+                    continue
+                fi
+
+                local tls_domain=$(echo "$extra" | jq -r '.tls_domain // ""')
+                local obfs_password=$(echo "$extra" | jq -r '.obfs_password // ""')
+                local up_mbps=$(echo "$extra" | jq -r '.up_mbps // 100')
+                local down_mbps=$(echo "$extra" | jq -r '.down_mbps // 100')
+
+                # 构建基础配置
+                outbound_config=$(jq -n                     --arg tag "$node_tag"                     --arg server "$node_host"                     --argjson port "$port"                     --arg password "$user_password"                     --arg sni "$tls_domain"                     --arg obfs_pwd "$obfs_password"                     --argjson up "$up_mbps"                     --argjson down "$down_mbps"                     '{
+                        type: "hysteria2",
+                        tag: $tag,
+                        server: $server,
+                        server_port: $port,
+                        password: $password,
+                        tls: {
+                            enabled: true,
+                            server_name: $sni,
+                            insecure: true
+                        }
+                    } + (if $obfs_pwd != "" then {
+                        obfs: {
+                            type: "salamander",
+                            password: $obfs_pwd
+                        }
+                    } else {} end) + (if $up > 0 or $down > 0 then {
+                        up_mbps: $up,
+                        down_mbps: $down
+                    } else {} end)')
+                ;;
         esac
+
+        # 如果节点绑定了 WARP，添加 bind_interface
+        if [[ -n "$outbound_config" && "$warp_outbound" == "true" ]]; then
+            outbound_config=$(echo "$outbound_config" | jq '. + {bind_interface: "wgcf"}')
+        fi
 
         if [[ -n "$outbound_config" ]]; then
             outbounds=$(echo "$outbounds" | jq --argjson ob "$outbound_config" '. += [$ob]')

@@ -878,9 +878,15 @@ install_wgcf() {
     if [[ -f "$WGCF_BIN" ]]; then
         print_warning "wgcf 已安装"
 
-        # wgcf不带参数显示帮助，从中提取版本
-        local help_output=$("$WGCF_BIN" 2>&1 | head -5)
-        print_info "wgcf 信息: $help_output"
+        # 从帮助输出中提取版本号
+        local help_output=$("$WGCF_BIN" 2>&1)
+        local current_version=$(echo "$help_output" | grep -oP '(?i)wgcf\s+v?\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+
+        if [[ -n "$current_version" ]]; then
+            print_info "当前版本: v$current_version"
+        else
+            print_info "无法获取版本信息"
+        fi
 
         return 0
     fi
@@ -888,11 +894,22 @@ install_wgcf() {
     # ========================================
     # 步骤 2: 安装 wgcf 二进制文件
     # ========================================
-    print_info "正在下载 wgcf..."
+    print_info "正在获取 wgcf 最新版本..."
 
-    # 检测系统架构并构建下载URL
+    # 从GitHub API获取最新版本
+    local latest_release=$(curl -sSL "https://api.github.com/repos/ViRb3/wgcf/releases/latest" 2>/dev/null)
+    local wgcf_version=$(echo "$latest_release" | grep -oP '"tag_name":\s*"v\K[^"]+' 2>/dev/null)
+
+    # 如果获取失败，使用默认版本
+    if [[ -z "$wgcf_version" ]]; then
+        wgcf_version="2.2.29"
+        print_warning "无法获取最新版本，使用默认版本: $wgcf_version"
+    else
+        print_info "最新版本: v$wgcf_version"
+    fi
+
+    # 检测系统架构
     local arch=$(uname -m)
-    local wgcf_version="2.2.29"
     local binary_name=""
 
     case $arch in
@@ -1002,6 +1019,13 @@ install_wgcf() {
         return 1
     fi
 
+    # 从帮助输出中提取实际版本号
+    local installed_version=$(echo "$test_output" | grep -oP '(?i)wgcf\s+v?\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    if [[ -z "$installed_version" ]]; then
+        # 如果无法从输出提取，使用下载的版本号
+        installed_version="$wgcf_version"
+    fi
+
     # ========================================
     # 步骤 6: 安装完成
     # ========================================
@@ -1011,6 +1035,7 @@ install_wgcf() {
     echo ""
     echo -e "${YELLOW}安装信息：${NC}"
     echo -e "  wgcf 位置: ${GREEN}$WGCF_BIN${NC}"
+    echo -e "  安装版本: ${GREEN}v$installed_version${NC}"
     echo -e "  配置目录: ${GREEN}$WGCF_CONFIG_DIR${NC}"
     echo ""
     echo -e "${YELLOW}下一步操作：${NC}"
@@ -1288,7 +1313,16 @@ warp_status() {
     # 检查 wgcf 安装状态
     if [[ -f "$WGCF_BIN" ]]; then
         echo -e "${GREEN}✅ wgcf 已安装${NC}"
-        echo -e "   版本: $("$WGCF_BIN" version 2>/dev/null || echo 'unknown')"
+
+        # 从帮助输出中提取版本号
+        local help_output=$("$WGCF_BIN" 2>&1)
+        local wgcf_ver=$(echo "$help_output" | grep -oP '(?i)wgcf\s+v?\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+
+        if [[ -n "$wgcf_ver" ]]; then
+            echo -e "   版本: ${GREEN}v$wgcf_ver${NC}"
+        else
+            echo -e "   版本: ${YELLOW}无法获取${NC}"
+        fi
     else
         echo -e "${RED}✗ wgcf 未安装${NC}"
     fi

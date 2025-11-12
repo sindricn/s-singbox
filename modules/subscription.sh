@@ -1241,7 +1241,6 @@ generate_singbox_subscription_config() {
                             server_port: $port,
                             uuid: $uuid,
                             flow: $flow,
-                            network: "tcp",
                             tls: {
                                 enabled: true,
                                 server_name: $sni,
@@ -1442,11 +1441,12 @@ generate_singbox_subscription_config() {
 
                 local tls_domain=$(echo "$extra" | jq -r '.tls_domain // ""')
                 local obfs_password=$(echo "$extra" | jq -r '.obfs_password // ""')
-                local up_mbps=$(echo "$extra" | jq -r '.up_mbps // 100')
-                local down_mbps=$(echo "$extra" | jq -r '.down_mbps // 100')
+                local port_hopping=$(echo "$extra" | jq -r '.port_hopping // ""')
+                local up_mbps=$(echo "$extra" | jq -r '.up_mbps // 0')
+                local down_mbps=$(echo "$extra" | jq -r '.down_mbps // 0')
 
                 # 构建基础配置
-                outbound_config=$(jq -n                     --arg tag "$node_tag"                     --arg server "$node_host"                     --argjson port "$port"                     --arg password "$user_password"                     --arg sni "$tls_domain"                     --arg obfs_pwd "$obfs_password"                     --argjson up "$up_mbps"                     --argjson down "$down_mbps"                     '{
+                outbound_config=$(jq -n                     --arg tag "$node_tag"                     --arg server "$node_host"                     --argjson port "$port"                     --arg password "$user_password"                     --arg sni "$tls_domain"                     --arg obfs_pwd "$obfs_password"                     --arg port_hop "$port_hopping"                     --argjson up "$up_mbps"                     --argjson down "$down_mbps"                     '{
                         type: "hysteria2",
                         tag: $tag,
                         server: $server,
@@ -1462,7 +1462,10 @@ generate_singbox_subscription_config() {
                             type: "salamander",
                             password: $obfs_pwd
                         }
-                    } else {} end) + (if $up > 0 or $down > 0 then {
+                    } else {} end) + (if $port_hop != "" then {
+                        server_ports: [$port_hop],
+                        hop_interval: "30s"
+                    } else {} end) + (if $up > 0 and $down > 0 then {
                         up_mbps: $up,
                         down_mbps: $down
                     } else {} end)')

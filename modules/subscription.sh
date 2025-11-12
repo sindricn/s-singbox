@@ -596,11 +596,13 @@ generate_hysteria2_link_from_config() {
 
     # 从extra提取参数
     local obfs_password=$(echo "$extra" | jq -r '.obfs_password // ""')
+    local port_hopping=$(echo "$extra" | jq -r '.port_hopping // ""')
+    local tls_domain=$(echo "$extra" | jq -r '.tls_domain // ""')
     local cert_file=$(echo "$extra" | jq -r '.cert_file // ""')
 
-    # 提取域名作为SNI（从证书文件名）
-    local sni=""
-    if [[ -n "$cert_file" ]]; then
+    # 提取域名作为SNI（优先使用 tls_domain）
+    local sni="$tls_domain"
+    if [[ -z "$sni" && -n "$cert_file" ]]; then
         sni=$(basename "$cert_file" .crt)
     fi
 
@@ -608,26 +610,30 @@ generate_hysteria2_link_from_config() {
     server_host=$(resolve_subscription_host "$node_json")
 
     # 构建Hysteria2链接
-    # 格式: hysteria2://password@host:port?obfs=salamander&obfs-password=xxx&sni=xxx#remark
+    # 格式: hysteria2://password@host:port?obfs=salamander&obfs-password=xxx&sni=xxx&mport=start-end#remark
     local share_link="hysteria2://${password}@${server_host}:${port}?"
+
+    local params=""
 
     # 添加混淆参数
     if [[ -n "$obfs_password" ]]; then
-        share_link+="obfs=salamander&obfs-password=${obfs_password}"
+        params+="obfs=salamander&obfs-password=${obfs_password}&"
     fi
 
     # 添加SNI
     if [[ -n "$sni" ]]; then
-        [[ "$share_link" != *"?" ]] && share_link+="&"
-        share_link+="sni=${sni}"
+        params+="sni=${sni}&"
+    fi
+
+    # 添加端口跳跃
+    if [[ -n "$port_hopping" ]]; then
+        params+="mport=${port_hopping}&"
     fi
 
     # 添加insecure参数（自签名证书）
-    [[ "$share_link" != *"?" ]] && share_link+="&"
-    share_link+="insecure=1"
+    params+="insecure=1"
 
-    # 添加备注
-    share_link+="#$(urlencode "$remark")"
+    share_link+="${params}#$(urlencode "$remark")"
 
     echo "$share_link"
 }

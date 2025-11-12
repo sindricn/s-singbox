@@ -995,16 +995,16 @@ install_wgcf() {
         print_info "wg-quick 未安装，正在安装 wireguard-tools..."
 
         if command -v apt-get &>/dev/null; then
-            if apt-get update >/dev/null 2>&1 && apt-get install -y wireguard-tools >/dev/null 2>&1; then
-                print_success "✅ wireguard-tools 安装成功 (apt)"
+            if apt-get update >/dev/null 2>&1 && apt-get install -y wireguard-tools openresolv >/dev/null 2>&1; then
+                print_success "✅ wireguard-tools 和 openresolv 安装成功 (apt)"
             else
                 print_error "wireguard-tools 安装失败"
                 print_info "请手动执行: apt-get install wireguard-tools"
                 return 1
             fi
         elif command -v yum &>/dev/null; then
-            if yum install -y wireguard-tools >/dev/null 2>&1; then
-                print_success "✅ wireguard-tools 安装成功 (yum)"
+            if yum install -y wireguard-tools openresolv >/dev/null 2>&1; then
+                print_success "✅ wireguard-tools 和 openresolv 安装成功 (yum)"
             else
                 print_error "wireguard-tools 安装失败"
                 print_info "请手动执行: yum install wireguard-tools"
@@ -1023,6 +1023,16 @@ install_wgcf() {
         fi
     else
         print_success "✅ WireGuard 工具已安装"
+    fi
+
+    # 检查并安装 openresolv（如果缺失）
+    if ! command -v resolvconf &>/dev/null; then
+        print_info "正在安装 openresolv..."
+        if command -v apt-get &>/dev/null; then
+            apt-get install -y openresolv >/dev/null 2>&1 && print_success "✅ openresolv 安装成功"
+        elif command -v yum &>/dev/null; then
+            yum install -y openresolv >/dev/null 2>&1 && print_success "✅ openresolv 安装成功"
+        fi
     fi
 
     # ========================================
@@ -1270,6 +1280,27 @@ start_warp() {
         print_info "提示：可安装 openresolv 以支持 DNS 配置"
         print_info "  Ubuntu/Debian: apt install openresolv"
         print_info "  CentOS/RHEL: yum install openresolv"
+    fi
+
+    # 5. 修改路由配置，防止接管系统默认路由
+    print_info "正在配置路由策略（仅隧道模式，不影响系统路由）..."
+
+    # 检查是否有 [Interface] 段
+    if grep -q "^\[Interface\]" "${WGCF_CONFIG_DIR}/wgcf.conf" 2>/dev/null; then
+        print_warning "⚠️  配置为隧道专用模式，不会修改系统路由表"
+
+        # 方案：在 [Interface] 段添加 Table = off
+        # 这样 wg-quick 创建接口但不会添加任何路由规则
+        # WARP 接口可用，但不会劫持 SSH 等系统流量
+        # sing-box 可以通过 bind_interface 绑定使用
+
+        # 在 [Interface] 段后添加 Table = off（如果不存在）
+        if ! grep -q "^Table[[:space:]]*=" "${WGCF_CONFIG_DIR}/wgcf.conf"; then
+            sed -i '/^\[Interface\]/a Table = off' "${WGCF_CONFIG_DIR}/wgcf.conf"
+        fi
+
+        print_success "✅ 已配置为隧道专用模式（不影响 SSH 等系统流量）"
+        print_info "说明：WARP 接口已创建但不修改路由表，可供 sing-box 使用"
     fi
 
     # ========================================

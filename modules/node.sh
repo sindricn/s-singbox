@@ -637,8 +637,8 @@ add_vless_node() {
         else
             print_info "将使用自签名证书"
             generate_self_signed_cert "$tls_domain"
-            tls_cert="${SINGBOX_DIR}/certs/${tls_domain}.crt"
-            tls_key="${SINGBOX_DIR}/certs/${tls_domain}.key"
+            tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.cer"
+            tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
         fi
     fi
 
@@ -815,8 +815,8 @@ add_trojan_node() {
         read -p "请输入密钥路径: " tls_key
     else
         generate_self_signed_cert "$tls_domain"
-        tls_cert="${SINGBOX_DIR}/certs/${tls_domain}.crt"
-        tls_key="${SINGBOX_DIR}/certs/${tls_domain}.key"
+        tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.cer"
+        tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
     fi
 
     # 回落配置
@@ -1823,8 +1823,8 @@ add_hysteria2_node() {
         if declare -f generate_self_signed_cert &>/dev/null; then
             generate_self_signed_cert "$tls_domain"
         fi
-        tls_cert="${SINGBOX_DIR}/certs/${tls_domain}.crt"
-        tls_key="${SINGBOX_DIR}/certs/${tls_domain}.key"
+        tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.cer"
+        tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
     fi
 
     # 速率限制
@@ -1929,8 +1929,8 @@ add_tuic_node() {
         if declare -f generate_self_signed_cert &>/dev/null; then
             generate_self_signed_cert "$tls_domain"
         fi
-        tls_cert="${SINGBOX_DIR}/certs/${tls_domain}.crt"
-        tls_key="${SINGBOX_DIR}/certs/${tls_domain}.key"
+        tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.cer"
+        tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
     fi
 
     # 拥塞控制
@@ -2039,8 +2039,8 @@ add_naive_node() {
         if declare -f generate_self_signed_cert &>/dev/null; then
             generate_self_signed_cert "$tls_domain"
         fi
-        tls_cert="${SINGBOX_DIR}/certs/${tls_domain}.crt"
-        tls_key="${SINGBOX_DIR}/certs/${tls_domain}.key"
+        tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.cer"
+        tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
     fi
 
     # 构建 extra_config
@@ -2184,8 +2184,8 @@ add_anytls_node() {
             if declare -f generate_self_signed_cert &>/dev/null; then
                 generate_self_signed_cert "$tls_domain"
             fi
-            tls_cert="${SINGBOX_DIR}/certs/${tls_domain}.crt"
-            tls_key="${SINGBOX_DIR}/certs/${tls_domain}.key"
+            tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.cer"
+            tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
         fi
     fi
 
@@ -2674,20 +2674,20 @@ quick_setup_hysteria2() {
     echo -e "${BLUE}步骤 4/6: 生成自签名证书${NC}"
 
     # 确保证书目录存在
-    mkdir -p "${SINGBOX_DIR}/certs"
+    mkdir -p "${SINGBOX_DIR}/certs/${tls_domain}"
 
     # 生成自签名证书
     if ! openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) \
-        -keyout "${SINGBOX_DIR}/certs/${tls_domain}.key" \
-        -out "${SINGBOX_DIR}/certs/${tls_domain}.crt" \
+        -keyout "${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key" \
+        -out "${SINGBOX_DIR}/certs/${tls_domain}/fullchain.cer" \
         -subj "/CN=$tls_domain" \
         -days 3650 &>/dev/null; then
         print_error "证书生成失败"
         return 1
     fi
 
-    local tls_cert="${SINGBOX_DIR}/certs/${tls_domain}.crt"
-    local tls_key="${SINGBOX_DIR}/certs/${tls_domain}.key"
+    local tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.cer"
+    local tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
 
     # 验证证书文件
     if [[ ! -f "$tls_cert" || ! -f "$tls_key" ]]; then

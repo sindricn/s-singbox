@@ -36,7 +36,9 @@
       "Bash(cat:*)",
       "Bash(node.sh:*)",
       "Bash(find:*)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(sqlite3:*)",
+      "Bash(jq:*)"
     ],
     "deny": [],
     "ask": []

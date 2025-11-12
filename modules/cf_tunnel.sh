@@ -863,6 +863,43 @@ readonly WGCF_BIN="/usr/local/bin/wgcf"
 readonly WGCF_CONFIG_DIR="/etc/wireguard"
 readonly WGCF_PROFILE="${WGCF_CONFIG_DIR}/wgcf-profile.conf"
 readonly WGCF_ACCOUNT="${WGCF_CONFIG_DIR}/wgcf-account.toml"
+readonly WGCF_VERSION_FILE="${WGCF_CONFIG_DIR}/wgcf-version.txt"
+
+# 获取 wgcf 版本号
+get_wgcf_version() {
+    # 优先从版本文件读取
+    if [[ -f "$WGCF_VERSION_FILE" ]]; then
+        cat "$WGCF_VERSION_FILE" 2>/dev/null
+        return 0
+    fi
+
+    # 如果版本文件不存在，尝试从帮助输出提取（兼容旧版本）
+    if [[ -f "$WGCF_BIN" ]]; then
+        local help_output=$("$WGCF_BIN" 2>&1)
+        local version=$(echo "$help_output" | grep -oE '([0-9]+\.[0-9]+\.[0-9]+)' | head -1)
+
+        if [[ -z "$version" ]]; then
+            version=$(echo "$help_output" | head -1 | grep -oE '([0-9]+\.[0-9]+\.[0-9]+)')
+        fi
+
+        if [[ -n "$version" ]]; then
+            echo "$version"
+            return 0
+        fi
+    fi
+
+    echo "unknown"
+    return 1
+}
+
+# 保存 wgcf 版本号
+save_wgcf_version() {
+    local version=$1
+    if [[ -n "$version" ]]; then
+        mkdir -p "$WGCF_CONFIG_DIR"
+        echo "$version" > "$WGCF_VERSION_FILE"
+    fi
+}
 
 # 安装 wgcf
 install_wgcf() {
@@ -878,17 +915,10 @@ install_wgcf() {
     if [[ -f "$WGCF_BIN" ]]; then
         print_warning "wgcf 已安装"
 
-        # 从帮助输出中提取版本号
-        local help_output=$("$WGCF_BIN" 2>&1)
-        # 尝试多种模式匹配版本号
-        local current_version=$(echo "$help_output" | grep -oE '([0-9]+\.[0-9]+\.[0-9]+)' | head -1)
+        # 使用统一的版本获取函数
+        local current_version=$(get_wgcf_version)
 
-        if [[ -z "$current_version" ]]; then
-            # 如果第一种方法失败，尝试从第一行提取
-            current_version=$(echo "$help_output" | head -1 | grep -oE '([0-9]+\.[0-9]+\.[0-9]+)')
-        fi
-
-        if [[ -n "$current_version" ]]; then
+        if [[ "$current_version" != "unknown" ]]; then
             print_info "当前版本: v$current_version"
         else
             print_info "无法获取版本信息"
@@ -1039,6 +1069,9 @@ install_wgcf() {
         installed_version="$wgcf_version"
     fi
 
+    # 保存版本号到文件，供后续使用
+    save_wgcf_version "$installed_version"
+
     # ========================================
     # 步骤 6: 安装完成
     # ========================================
@@ -1167,21 +1200,90 @@ start_warp() {
         return 1
     fi
 
+    # ========================================
+    # 环境检查
+    # ========================================
+    print_info "正在检查系统环境..."
+
+    # 1. 检查 WireGuard 内核模块
+    if ! lsmod | grep -q wireguard; then
+        print_warning "WireGuard 内核模块未加载，尝试加载..."
+        if ! modprobe wireguard 2>/dev/null; then
+            print_error "无法加载 WireGuard 内核模块"
+            print_info "请确保内核支持 WireGuard 或安装 wireguard-dkms"
+            print_info "  Ubuntu/Debian: apt install wireguard-dkms"
+            print_info "  CentOS/RHEL: yum install wireguard-dkms"
+            return 1
+        fi
+        print_success "✅ WireGuard 内核模块已加载"
+    fi
+
+    # 2. 检查 IPv6 支持
+    if [[ ! -d /proc/sys/net/ipv6 ]]; then
+        print_warning "系统未启用 IPv6，WARP 需要 IPv6 支持"
+        print_info "尝试启用 IPv6..."
+        sysctl -w net.ipv6.conf.all.disable_ipv6=0 2>/dev/null
+        sysctl -w net.ipv6.conf.default.disable_ipv6=0 2>/dev/null
+    fi
+
+    # 3. 检查是否已有同名接口
+    if ip link show wgcf &>/dev/null; then
+        print_warning "接口 wgcf 已存在，尝试先删除..."
+        ip link delete wgcf 2>/dev/null
+    fi
+
+    # ========================================
+    # 启动 WARP
+    # ========================================
     print_info "正在启动 WARP 连接..."
 
     # 复制配置到标准位置
     cp "$WGCF_PROFILE" "${WGCF_CONFIG_DIR}/wgcf.conf"
 
-    # 启动 WireGuard
-    if wg-quick up wgcf; then
+    # 启动 WireGuard，并捕获详细错误
+    local error_log=$(mktemp)
+    if wg-quick up wgcf 2>"$error_log"; then
         print_success "✅ WARP 连接已启动"
         echo ""
         echo -e "${CYAN}═══════════════════════════════════════${NC}"
         echo -e "${YELLOW}连接信息：${NC}"
         wg show wgcf 2>/dev/null || echo "  无法获取连接信息"
         echo ""
+        rm -f "$error_log"
     else
         print_error "WARP 启动失败"
+        echo ""
+        echo -e "${YELLOW}错误详情：${NC}"
+        cat "$error_log"
+        echo ""
+
+        # 提供可能的解决方案
+        echo -e "${YELLOW}可能的原因和解决方案：${NC}"
+
+        if grep -q "Permission denied" "$error_log"; then
+            echo -e "  1. ${RED}权限问题${NC}"
+            echo -e "     • 确认以 root 用户运行"
+            echo -e "     • 检查 SELinux 状态: getenforce"
+            echo -e "     • 临时关闭 SELinux: setenforce 0"
+        fi
+
+        if grep -q "Cannot find device" "$error_log" || grep -q "No such device" "$error_log"; then
+            echo -e "  2. ${RED}WireGuard 模块问题${NC}"
+            echo -e "     • 安装内核模块: apt install wireguard-dkms (Debian/Ubuntu)"
+            echo -e "     • 或: yum install wireguard-dkms (CentOS/RHEL)"
+        fi
+
+        if grep -q "ipv6" "$error_log"; then
+            echo -e "  3. ${RED}IPv6 未启用${NC}"
+            echo -e "     • 启用 IPv6: sysctl -w net.ipv6.conf.all.disable_ipv6=0"
+            echo -e "     • 检查 IPv6 状态: cat /proc/sys/net/ipv6/conf/all/disable_ipv6"
+        fi
+
+        echo -e "  4. ${YELLOW}查看完整日志${NC}"
+        echo -e "     • 运行诊断: wg-quick up wgcf"
+        echo -e "     • 查看系统日志: journalctl -xe"
+
+        rm -f "$error_log"
         return 1
     fi
 }
@@ -1329,6 +1431,144 @@ unbind_warp_from_node() {
     print_success "已解除节点 $selected_port 的WARP关联"
 }
 
+# WARP 系统诊断
+warp_diagnose() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║      WARP 系统诊断                   ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    # 1. 检查 root 权限
+    echo -e "${YELLOW}1. 权限检查${NC}"
+    if [[ $EUID -eq 0 ]]; then
+        echo -e "   ✅ 当前用户: root"
+    else
+        echo -e "   ❌ 当前用户: $(whoami) (非 root)"
+        echo -e "   ${RED}提示: 需要 root 权限运行${NC}"
+    fi
+    echo ""
+
+    # 2. 检查 WireGuard 工具
+    echo -e "${YELLOW}2. WireGuard 工具${NC}"
+    if command -v wg &>/dev/null; then
+        echo -e "   ✅ wg: $(wg --version 2>&1 | head -1)"
+    else
+        echo -e "   ❌ wg 未安装"
+    fi
+
+    if command -v wg-quick &>/dev/null; then
+        echo -e "   ✅ wg-quick: 已安装"
+    else
+        echo -e "   ❌ wg-quick 未安装"
+    fi
+    echo ""
+
+    # 3. 检查内核模块
+    echo -e "${YELLOW}3. 内核模块${NC}"
+    if lsmod | grep -q wireguard; then
+        echo -e "   ✅ WireGuard 内核模块已加载"
+        lsmod | grep wireguard | while read line; do
+            echo -e "      $line"
+        done
+    else
+        echo -e "   ❌ WireGuard 内核模块未加载"
+        echo -e "   ${YELLOW}尝试加载: modprobe wireguard${NC}"
+    fi
+    echo ""
+
+    # 4. 检查 IPv6 支持
+    echo -e "${YELLOW}4. IPv6 支持${NC}"
+    if [[ -d /proc/sys/net/ipv6 ]]; then
+        local ipv6_disabled=$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null)
+        if [[ "$ipv6_disabled" == "0" ]]; then
+            echo -e "   ✅ IPv6 已启用"
+        else
+            echo -e "   ⚠️  IPv6 已禁用"
+            echo -e "   ${YELLOW}启用命令: sysctl -w net.ipv6.conf.all.disable_ipv6=0${NC}"
+        fi
+    else
+        echo -e "   ❌ 系统不支持 IPv6"
+    fi
+    echo ""
+
+    # 5. 检查 SELinux
+    echo -e "${YELLOW}5. SELinux 状态${NC}"
+    if command -v getenforce &>/dev/null; then
+        local selinux_status=$(getenforce 2>/dev/null)
+        echo -e "   状态: $selinux_status"
+        if [[ "$selinux_status" == "Enforcing" ]]; then
+            echo -e "   ⚠️  SELinux 可能阻止 WireGuard"
+            echo -e "   ${YELLOW}临时关闭: setenforce 0${NC}"
+        fi
+    else
+        echo -e "   SELinux 未安装"
+    fi
+    echo ""
+
+    # 6. 检查配置文件
+    echo -e "${YELLOW}6. WARP 配置文件${NC}"
+    if [[ -f "$WGCF_PROFILE" ]]; then
+        echo -e "   ✅ 配置文件存在: $WGCF_PROFILE"
+        local file_size=$(stat -c%s "$WGCF_PROFILE" 2>/dev/null || stat -f%z "$WGCF_PROFILE" 2>/dev/null)
+        echo -e "   文件大小: ${file_size} bytes"
+    else
+        echo -e "   ❌ 配置文件不存在"
+    fi
+    echo ""
+
+    # 7. 检查网络接口
+    echo -e "${YELLOW}7. WireGuard 接口${NC}"
+    if ip link show wgcf &>/dev/null; then
+        echo -e "   ✅ wgcf 接口已存在"
+        ip link show wgcf | head -2
+    else
+        echo -e "   wgcf 接口不存在"
+    fi
+    echo ""
+
+    # 8. 检查连接状态
+    echo -e "${YELLOW}8. WARP 连接状态${NC}"
+    if wg show wgcf &>/dev/null; then
+        echo -e "   ✅ WARP 运行中"
+        wg show wgcf | head -5
+    else
+        echo -e "   WARP 未运行"
+    fi
+    echo ""
+
+    # 总结建议
+    echo -e "${CYAN}═══════════════════════════════════════${NC}"
+    echo -e "${YELLOW}诊断建议：${NC}"
+
+    local has_issue=false
+
+    if [[ $EUID -ne 0 ]]; then
+        echo -e "  • ${RED}请使用 root 权限运行脚本${NC}"
+        has_issue=true
+    fi
+
+    if ! lsmod | grep -q wireguard; then
+        echo -e "  • ${RED}加载 WireGuard 内核模块: modprobe wireguard${NC}"
+        has_issue=true
+    fi
+
+    if [[ ! -d /proc/sys/net/ipv6 ]] || [[ $(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null) != "0" ]]; then
+        echo -e "  • ${YELLOW}启用 IPv6 支持${NC}"
+        has_issue=true
+    fi
+
+    if ! command -v wg-quick &>/dev/null; then
+        echo -e "  • ${RED}安装 wireguard-tools: apt install wireguard-tools${NC}"
+        has_issue=true
+    fi
+
+    if ! $has_issue; then
+        echo -e "  ✅ ${GREEN}系统环境正常，可以尝试启动 WARP${NC}"
+    fi
+    echo ""
+}
+
 # 查看 WARP 状态
 warp_status() {
     clear
@@ -1341,17 +1581,10 @@ warp_status() {
     if [[ -f "$WGCF_BIN" ]]; then
         echo -e "${GREEN}✅ wgcf 已安装${NC}"
 
-        # 从帮助输出中提取版本号
-        local help_output=$("$WGCF_BIN" 2>&1)
-        # 尝试多种模式匹配版本号
-        local wgcf_ver=$(echo "$help_output" | grep -oE '([0-9]+\.[0-9]+\.[0-9]+)' | head -1)
+        # 使用统一的版本获取函数
+        local wgcf_ver=$(get_wgcf_version)
 
-        if [[ -z "$wgcf_ver" ]]; then
-            # 如果第一种方法失败，尝试从第一行提取
-            wgcf_ver=$(echo "$help_output" | head -1 | grep -oE '([0-9]+\.[0-9]+\.[0-9]+)')
-        fi
-
-        if [[ -n "$wgcf_ver" ]]; then
+        if [[ "$wgcf_ver" != "unknown" ]]; then
             echo -e "   版本: ${GREEN}v$wgcf_ver${NC}"
         else
             echo -e "   版本: ${YELLOW}无法获取${NC}"
@@ -1415,6 +1648,7 @@ uninstall_wgcf() {
     rm -f "$WGCF_BIN"
     rm -f "$WGCF_ACCOUNT"
     rm -f "$WGCF_PROFILE"
+    rm -f "$WGCF_VERSION_FILE"
     rm -f "${WGCF_CONFIG_DIR}/wgcf.conf"
 
     print_success "wgcf 已卸载"
@@ -1484,17 +1718,18 @@ menu_warp_tunnel() {
         echo -e "${GREEN}4.${NC}  启动 WARP 连接"
         echo -e "${GREEN}5.${NC}  停止 WARP 连接"
         echo -e "${GREEN}6.${NC}  查看 WARP 状态"
+        echo -e "${GREEN}7.${NC}  系统诊断（排查问题）"
         echo ""
         echo -e "${YELLOW}━━━━━━━ 节点关联 ━━━━━━━${NC}"
-        echo -e "${GREEN}7.${NC}  关联WARP到节点（作为出站）"
-        echo -e "${GREEN}8.${NC}  解除WARP节点关联"
+        echo -e "${GREEN}8.${NC}  关联WARP到节点（作为出站）"
+        echo -e "${GREEN}9.${NC}  解除WARP节点关联"
         echo ""
         echo -e "${YELLOW}━━━━━━━ 系统管理 ━━━━━━━${NC}"
-        echo -e "${GREEN}9.${NC}  卸载 wgcf"
+        echo -e "${GREEN}10.${NC} 卸载 wgcf"
         echo ""
         echo -e "${GREEN}0.${NC}  返回上级菜单"
         echo ""
-        read -p "请选择 [0-9]: " choice
+        read -p "请选择 [0-10]: " choice
 
         case $choice in
             1) install_wgcf; read -p "按 Enter 继续..." ;;
@@ -1503,9 +1738,10 @@ menu_warp_tunnel() {
             4) start_warp; read -p "按 Enter 继续..." ;;
             5) stop_warp; read -p "按 Enter 继续..." ;;
             6) warp_status; read -p "按 Enter 继续..." ;;
-            7) bind_warp_to_node; read -p "按 Enter 继续..." ;;
-            8) unbind_warp_from_node; read -p "按 Enter 继续..." ;;
-            9) uninstall_wgcf; read -p "按 Enter 继续..." ;;
+            7) warp_diagnose; read -p "按 Enter 继续..." ;;
+            8) bind_warp_to_node; read -p "按 Enter 继续..." ;;
+            9) unbind_warp_from_node; read -p "按 Enter 继续..." ;;
+            10) uninstall_wgcf; read -p "按 Enter 继续..." ;;
             0) return ;;
             *) print_error "无效选择"; sleep 1 ;;
         esac

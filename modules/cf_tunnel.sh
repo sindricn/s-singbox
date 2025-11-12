@@ -880,7 +880,13 @@ install_wgcf() {
 
         # 从帮助输出中提取版本号
         local help_output=$("$WGCF_BIN" 2>&1)
-        local current_version=$(echo "$help_output" | grep -oP '(?i)wgcf\s+v?\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+        # 尝试多种模式匹配版本号
+        local current_version=$(echo "$help_output" | grep -oE '([0-9]+\.[0-9]+\.[0-9]+)' | head -1)
+
+        if [[ -z "$current_version" ]]; then
+            # 如果第一种方法失败，尝试从第一行提取
+            current_version=$(echo "$help_output" | head -1 | grep -oE '([0-9]+\.[0-9]+\.[0-9]+)')
+        fi
 
         if [[ -n "$current_version" ]]; then
             print_info "当前版本: v$current_version"
@@ -1020,9 +1026,16 @@ install_wgcf() {
     fi
 
     # 从帮助输出中提取实际版本号
-    local installed_version=$(echo "$test_output" | grep -oP '(?i)wgcf\s+v?\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    # 尝试多种模式匹配版本号
+    local installed_version=$(echo "$test_output" | grep -oE '([0-9]+\.[0-9]+\.[0-9]+)' | head -1)
+
     if [[ -z "$installed_version" ]]; then
-        # 如果无法从输出提取，使用下载的版本号
+        # 如果第一种方法失败，尝试从第一行提取
+        installed_version=$(echo "$test_output" | head -1 | grep -oE '([0-9]+\.[0-9]+\.[0-9]+)')
+    fi
+
+    if [[ -z "$installed_version" ]]; then
+        # 如果还是无法提取，使用下载的版本号
         installed_version="$wgcf_version"
     fi
 
@@ -1136,6 +1149,13 @@ start_warp() {
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
+    # 检查 root 权限
+    if [[ $EUID -ne 0 ]]; then
+        print_error "需要 root 权限才能启动 WARP 连接"
+        print_info "请使用 sudo 运行此脚本"
+        return 1
+    fi
+
     if [[ ! -f "$WGCF_PROFILE" ]]; then
         print_error "WARP 配置不存在，请先生成配置"
         return 1
@@ -1173,6 +1193,13 @@ stop_warp() {
     echo -e "${CYAN}║         停止 WARP 连接               ║${NC}"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
+
+    # 检查 root 权限
+    if [[ $EUID -ne 0 ]]; then
+        print_error "需要 root 权限才能停止 WARP 连接"
+        print_info "请使用 sudo 运行此脚本"
+        return 1
+    fi
 
     if ! wg show wgcf &>/dev/null; then
         print_warning "WARP 未运行"
@@ -1316,7 +1343,13 @@ warp_status() {
 
         # 从帮助输出中提取版本号
         local help_output=$("$WGCF_BIN" 2>&1)
-        local wgcf_ver=$(echo "$help_output" | grep -oP '(?i)wgcf\s+v?\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+        # 尝试多种模式匹配版本号
+        local wgcf_ver=$(echo "$help_output" | grep -oE '([0-9]+\.[0-9]+\.[0-9]+)' | head -1)
+
+        if [[ -z "$wgcf_ver" ]]; then
+            # 如果第一种方法失败，尝试从第一行提取
+            wgcf_ver=$(echo "$help_output" | head -1 | grep -oE '([0-9]+\.[0-9]+\.[0-9]+)')
+        fi
 
         if [[ -n "$wgcf_ver" ]]; then
             echo -e "   版本: ${GREEN}v$wgcf_ver${NC}"

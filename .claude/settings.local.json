@@ -38,7 +38,8 @@
       "Bash(find:*)",
       "WebFetch(domain:github.com)",
       "Bash(sqlite3:*)",
-      "Bash(jq:*)"
+      "Bash(jq:*)",
+      "Bash(git checkout:*)"
     ],
     "deny": [],
     "ask": []

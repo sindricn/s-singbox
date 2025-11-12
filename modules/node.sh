@@ -682,7 +682,7 @@ add_vless_node() {
     echo ""
 
     # 生成并显示VLESS分享链接
-    generate_vless_share_link "$admin_uuid" "$admin_remark" "$port" "$transport" "$ws_path" "$tls_domain"
+    show_node_share_link "$port" "$admin_uuid" "$admin_remark"
 
     echo ""
     print_success "✅ 节点创建完成并已绑定admin用户！"
@@ -781,7 +781,7 @@ add_vmess_node() {
     echo ""
 
     # 生成并显示VMess分享链接
-    generate_vmess_share_link "$admin_uuid" "$admin_remark" "$port" "$transport" "$ws_path" "$alter_id" "$cipher"
+    show_node_share_link "$port" "$admin_uuid" "$admin_remark"
 
     echo ""
     print_success "✅ 节点创建完成并已绑定admin用户！"
@@ -872,7 +872,7 @@ add_trojan_node() {
     echo ""
 
     # 生成并显示Trojan分享链接
-    generate_trojan_share_link "$admin_password" "$tls_domain" "$port"
+    show_node_share_link "$port" "$admin_password" "admin"
 
     echo ""
     print_success "✅ 节点创建完成并已绑定admin用户！"
@@ -940,7 +940,7 @@ add_shadowsocks_node() {
     echo ""
 
     # 生成并显示SS分享链接
-    generate_ss_share_link "$cipher" "$admin_password" "$port"
+    show_node_share_link "$port" "$admin_password" "admin"
 
     echo ""
     print_success "✅ 节点创建完成并已绑定admin用户！"
@@ -948,10 +948,15 @@ add_shadowsocks_node() {
     echo ""
 }
 
-# 删除节点
+# 删除节点（支持单个或多个）
 delete_node() {
     list_nodes
 
+    echo ""
+    echo -e "${YELLOW}提示：${NC}"
+    echo -e "  • 可以输入单个节点：${CYAN}1${NC} 或 ${CYAN}8080${NC}"
+    echo -e "  • 可以输入多个节点（逗号分隔）：${CYAN}1,2,3${NC} 或 ${CYAN}8080,8081,8082${NC}"
+    echo -e "  • 可以输入多个节点（空格分隔）：${CYAN}1 2 3${NC} 或 ${CYAN}8080 8081 8082${NC}"
     echo ""
     read -p "请输入要删除的节点序号或端口: " input
     if [[ -z "$input" ]]; then
@@ -959,70 +964,92 @@ delete_node() {
         return 1
     fi
 
-    local port=""
-    # 判断是序号还是端口
-    if [[ "$input" =~ ^[0-9]+$ ]] && [[ "$input" -le 100 ]]; then
-        # 可能是序号，尝试获取端口
-        port=$(get_node_port_by_index "$input")
-        if [[ -z "$port" || "$port" == "null" ]]; then
-            # 不是有效序号，当作端口处理
-            port="$input"
+    # 处理输入（支持逗号和空格分隔）
+    input=$(echo "$input" | tr ',' ' ')
+    local inputs=($input)
+    
+    # 收集要删除的端口
+    local ports_to_delete=()
+    for item in "${inputs[@]}"; do
+        local port=""
+        # 判断是序号还是端口
+        if [[ "$item" =~ ^[0-9]+$ ]] && [[ "$item" -le 100 ]]; then
+            # 可能是序号，尝试获取端口
+            port=$(get_node_port_by_index "$item")
+            if [[ -z "$port" || "$port" == "null" ]]; then
+                # 不是有效序号，当作端口处理
+                port="$item"
+            fi
         else
-            print_info "选择的节点端口: $port"
+            port="$item"
         fi
-    else
-        port="$input"
+        
+        # 验证端口存在
+        local node_exists=$(jq -r ".nodes[] | select(.port == \"$port\") | .port" "$NODES_FILE" 2>/dev/null)
+        if [[ -n "$node_exists" ]]; then
+            ports_to_delete+=("$port")
+        else
+            print_warning "节点端口 $port 不存在，已跳过"
+        fi
+    done
+
+    if [[ ${#ports_to_delete[@]} -eq 0 ]]; then
+        print_error "没有有效的节点可删除"
+        return 1
     fi
 
-    # 获取节点的出站标签（如果有）
-    local outbound_tag=$(jq -r ".nodes[] | select(.port == \"$port\") | .outbound_tag // empty" "$NODES_FILE" 2>/dev/null)
-
-    # 确认删除
+    # 显示将要删除的节点
+    echo ""
+    if [[ ${#ports_to_delete[@]} -eq 1 ]]; then
+        print_warning "将删除以下节点："
+    else
+        print_warning "将删除以下 ${#ports_to_delete[@]} 个节点："
+    fi
+    
+    for port in "${ports_to_delete[@]}"; do
+        local protocol=$(jq -r ".nodes[] | select(.port == \"$port\") | .protocol" "$NODES_FILE" 2>/dev/null)
+        local name=$(jq -r ".nodes[] | select(.port == \"$port\") | .name // \"未命名\"" "$NODES_FILE" 2>/dev/null)
+        local outbound_tag=$(jq -r ".nodes[] | select(.port == \"$port\") | .outbound_tag // empty" "$NODES_FILE" 2>/dev/null)
+        
+        echo -n "  • 端口 ${YELLOW}$port${NC} - $protocol ($name)"
+        [[ -n "$outbound_tag" ]] && echo -n " [出站: $outbound_tag]"
+        echo ""
+    done
+    
     echo ""
     print_warning "删除节点将同时清理所有用户绑定关系和相关订阅"
-    if [[ -n "$outbound_tag" ]]; then
-        print_warning "该节点使用出站规则: $outbound_tag"
-    fi
-    read -p "确认删除端口 $port 的节点? [y/N]: " confirm
+    read -p "确认删除? [y/N]: " confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
         print_info "已取消删除"
         return 0
     fi
 
-    # 1. 从节点绑定关系中删除该端口
-    if [[ -f "$NODE_USERS_FILE" ]]; then
-        if ! update_json_file --arg port "$port" '.bindings = [.bindings[] | select(.port != $port)]' "$NODE_USERS_FILE"; then
-            print_error "清理节点绑定关系失败"
-            return 1
+    # 执行删除
+    local success_count=0
+    for port in "${ports_to_delete[@]}"; do
+        # 1. 从节点绑定关系中删除该端口
+        if [[ -f "$NODE_USERS_FILE" ]]; then
+            update_json_file --arg port "$port" '.bindings = [.bindings[] | select(.port != $port)]' "$NODE_USERS_FILE" 2>/dev/null
         fi
-        print_info "已清理节点绑定关系"
-    fi
 
-    # 2. 删除包含该节点的订阅（需要重新生成）
-    # 注意：这里我们标记需要重新生成订阅，而不是直接删除
-    # 因为订阅可能包含多个节点，删除一个节点后应该更新订阅内容
-    if [[ -f "$SUBSCRIPTION_META_FILE" ]]; then
-        # 获取所有订阅的用户
-        local user_ids=$(jq -r '.subscriptions[].user_id' "$SUBSCRIPTION_META_FILE" 2>/dev/null | sort -u)
-        if [[ -n "$user_ids" ]]; then
-            print_info "将更新受影响的订阅..."
-            # 这里需要调用订阅重新生成函数
-            # 由于订阅生成逻辑在 subscription.sh 中，这里只做标记
-            # 实际的重新生成会在配置更新后由用户手动触发或自动触发
-        fi
-    fi
+        # 2. 从数据库删除节点
+        remove_node_info "$port"
+        
+        # 3. 从配置删除
+        remove_inbound_from_config "$port"
+        
+        ((success_count++))
+    done
 
-    # 3. 从配置文件中删除
-    remove_inbound_from_config "$port"
-
-    # 4. 从节点数据库中删除
-    remove_node_info "$port"
-
+    # 4. 重新生成配置并重启服务
+    generate_singbox_config
     restart_sing-box
-    print_success "节点删除成功！"
 
-    if [[ -f "$SUBSCRIPTION_META_FILE" ]] && [[ -n "$user_ids" ]]; then
-        print_warning "提示：该节点的用户订阅需要重新生成才能生效"
+    echo ""
+    if [[ $success_count -eq 1 ]]; then
+        print_success "节点删除成功！"
+    else
+        print_success "批量删除完成！已删除 $success_count 个节点"
     fi
 }
 
@@ -1774,6 +1801,44 @@ add_socks_inbound_node() {
     echo ""
 }
 
+
+# ============================================================================
+# 统一链接生成函数（调用 subscription.sh 中的函数）
+# ============================================================================
+
+# 显示节点分享链接（统一接口）
+show_node_share_link() {
+    local port=$1
+    local user_id=$2      # UUID (vless/vmess) 或 password (hysteria2/trojan/ss)
+    local username=${3:-"admin"}
+    
+    # 从数据库读取节点配置
+    local node_json=$(jq -c ".nodes[] | select(.port == \"$port\")" "$NODES_FILE" 2>/dev/null)
+    
+    if [[ -z "$node_json" || "$node_json" == "null" ]]; then
+        print_warning "无法读取节点配置，链接生成失败"
+        return 1
+    fi
+    
+    # 检查 subscription.sh 中的函数是否可用
+    if ! declare -f generate_share_link_smart &>/dev/null; then
+        print_warning "链接生成函数未加载，请在【订阅管理】中查看节点链接"
+        return 1
+    fi
+    
+    # 调用统一的链接生成函数
+    local share_link=$(generate_share_link_smart "$user_id" "$username" "$node_json")
+    
+    if [[ -n "$share_link" ]]; then
+        echo ""
+        echo -e "${CYAN}分享链接：${NC}"
+        echo -e "${GREEN}$share_link${NC}"
+        echo ""
+    else
+        print_warning "链接生成失败，请在【订阅管理】中查看节点链接"
+    fi
+}
+
 # ============================================================================
 # Hysteria2 节点管理
 # ============================================================================
@@ -1843,6 +1908,21 @@ add_hysteria2_node() {
         print_info "混淆密码: $obfs_password"
     fi
 
+    # 端口跳跃配置
+    echo -e "
+${CYAN}端口跳跃配置（可选）：${NC}"
+    read -p "是否启用端口跳跃? [y/N]: " enable_hopping
+    local port_hopping=""
+    if [[ "$enable_hopping" == "y" || "$enable_hopping" == "Y" ]]; then
+        read -p "请输入跳跃端口范围 [例如: 20000-30000]: " hopping_range
+        if [[ -n "$hopping_range" && "$hopping_range" =~ ^[0-9]+-[0-9]+$ ]]; then
+            port_hopping="$hopping_range"
+            print_info "端口跳跃: $port_hopping"
+        else
+            print_warning "格式错误，跳过端口跳跃配置"
+        fi
+    fi
+
     # 构建 extra_config
     local extra_config=$(jq -n \
         --arg tls_domain "$tls_domain" \
@@ -1851,13 +1931,14 @@ add_hysteria2_node() {
         --argjson up_mbps "$up_mbps" \
         --argjson down_mbps "$down_mbps" \
         --arg obfs_password "$obfs_password" \
+--arg port_hopping "$port_hopping" 
         '{
             tls_domain: $tls_domain,
             tls_cert: $tls_cert,
             tls_key: $tls_key,
             up_mbps: $up_mbps,
             down_mbps: $down_mbps,
-            obfs_password: $obfs_password
+        } + (if $port_hopping != "" then {port_hopping: $port_hopping} else {} end)
         }')
 
     # 保存节点信息
@@ -1869,6 +1950,8 @@ add_hysteria2_node() {
         print_error "绑定默认用户失败"
         return 1
     fi
+
+    IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
 
     # 生成配置并重启
     generate_singbox_config
@@ -1882,6 +1965,9 @@ add_hysteria2_node() {
     echo "  下行: ${down_mbps} Mbps"
     [[ -n "$obfs_password" ]] && echo "  混淆: Salamander"
     echo ""
+
+    # 生成并显示分享链接（调用统一函数）
+    show_node_share_link "$port" "$admin_password" "$admin_remark"
 }
 
 # ============================================================================
@@ -2559,14 +2645,7 @@ quick_setup_vless_reality() {
     echo -e "  ShortId: ${YELLOW}$short_id${NC}"
     echo ""
 
-    # 生成分享链接
-    local server_ip=$(curl -s4 ifconfig.me 2>/dev/null || curl -s4 icanhazip.com 2>/dev/null)
-    if [[ -n "$server_ip" ]]; then
-        local share_link="vless://${admin_uuid}@${server_ip}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${server_names}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=tcp&headerType=none#Reality-${admin_remark}"
-        echo -e "${CYAN}分享链接：${NC}"
-        echo -e "${GREEN}$share_link${NC}"
-        echo ""
-    fi
+# 生成并显示分享链接（调用统一函数）    show_node_share_link "$port" "$admin_uuid" "$admin_remark"
 }
 
 # 快速搭建 Hysteria2 节点（一键配置）
@@ -2887,72 +2966,7 @@ quick_setup_hysteria2() {
     fi
     echo ""
 
-    # 生成分享链接
-    local server_ip=$(curl -s4 ifconfig.me 2>/dev/null || curl -s4 icanhazip.com 2>/dev/null)
-    if [[ -n "$server_ip" ]]; then
-        # URL编码函数（简化版）
-        urlencode_simple() {
-            local string="$1"
-            local encoded=""
-            local pos c
-            for (( pos=0 ; pos<${#string} ; pos++ )); do
-                c=${string:$pos:1}
-                case "$c" in
-                    [-_.~a-zA-Z0-9] ) encoded+="${c}" ;;
-                    * ) printf -v hex '%%%02x' "'$c"; encoded+="${hex}" ;;
-                esac
-            done
-            echo "${encoded}"
-        }
-
-        # 对密码进行URL编码
-        local encoded_auth_password=$(urlencode_simple "$admin_password")
-        local encoded_obfs_password=$(urlencode_simple "$obfs_password")
-
-        # 构建分享链接（标准Hysteria2格式）
-        local share_link="hysteria2://${encoded_auth_password}@${server_ip}:${port}?"
-
-        # 添加参数（顺序很重要）
-        local params=()
-
-        # 混淆配置
-        params+=("obfs=salamander")
-        params+=("obfs-password=${encoded_obfs_password}")
-
-        # SNI
-        params+=("sni=${tls_domain}")
-
-        # 自签名证书
-        params+=("insecure=1")
-
-        # 端口跳跃
-        if [[ -n "$port_hopping" ]]; then
-            params+=("mport=${port_hopping}")
-        fi
-
-        # 拼接参数
-        local IFS='&'
-        share_link+="${params[*]}"
-
-        # 添加备注
-        share_link+="#HY2-admin"
-
-        echo -e "${CYAN}分享链接：${NC}"
-        echo -e "${GREEN}$share_link${NC}"
-        echo ""
-
-        # 显示解码后的密码用于调试
-        echo -e "${YELLOW}节点凭证：${NC}"
-        echo -e "  • 认证密码: ${CYAN}$admin_password${NC}"
-        echo -e "  • 混淆密码: ${CYAN}$obfs_password${NC}"
-        echo ""
-
-        echo -e "${YELLOW}提示：${NC}"
-        echo -e "  • 链接已包含所有配置参数（密码已URL编码）"
-        [[ -n "$port_hopping" ]] && echo -e "  • 端口跳跃：$port_hopping"
-        echo -e "  • 自签名证书，客户端需启用跳过证书验证"
-        echo ""
-    fi
+# 生成并显示分享链接（调用统一函数）    show_node_share_link "$port" "$admin_password" "$admin_username"
 }
 
 # 快速搭建菜单

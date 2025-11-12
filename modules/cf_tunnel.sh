@@ -1218,12 +1218,23 @@ start_warp() {
         print_success "✅ WireGuard 内核模块已加载"
     fi
 
-    # 2. 检查 IPv6 支持
-    if [[ ! -d /proc/sys/net/ipv6 ]]; then
-        print_warning "系统未启用 IPv6，WARP 需要 IPv6 支持"
-        print_info "尝试启用 IPv6..."
-        sysctl -w net.ipv6.conf.all.disable_ipv6=0 2>/dev/null
-        sysctl -w net.ipv6.conf.default.disable_ipv6=0 2>/dev/null
+    # 2. 检查并启用 IPv6
+    local ipv6_available=false
+    if [[ -d /proc/sys/net/ipv6 ]]; then
+        # 尝试启用 IPv6
+        sysctl -w net.ipv6.conf.all.disable_ipv6=0 &>/dev/null
+        sysctl -w net.ipv6.conf.default.disable_ipv6=0 &>/dev/null
+
+        # 验证 IPv6 是否真的可用
+        sleep 1
+        if [[ $(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null) == "0" ]]; then
+            ipv6_available=true
+            print_success "✅ IPv6 已启用"
+        else
+            print_warning "⚠️  IPv6 启用失败，将使用纯 IPv4 模式"
+        fi
+    else
+        print_warning "⚠️  系统不支持 IPv6，将使用纯 IPv4 模式"
     fi
 
     # 3. 检查是否已有同名接口
@@ -1233,12 +1244,28 @@ start_warp() {
     fi
 
     # ========================================
-    # 启动 WARP
+    # 准备配置文件
     # ========================================
-    print_info "正在启动 WARP 连接..."
+    print_info "正在准备配置文件..."
 
     # 复制配置到标准位置
     cp "$WGCF_PROFILE" "${WGCF_CONFIG_DIR}/wgcf.conf"
+
+    # 如果 IPv6 不可用，从配置中移除 IPv6 地址
+    if [[ "$ipv6_available" == "false" ]]; then
+        print_info "移除配置中的 IPv6 地址..."
+        # 移除 IPv6 地址行（格式: Address = xxxx:xxxx::/128）
+        sed -i '/Address.*:.*:.*\/128/d' "${WGCF_CONFIG_DIR}/wgcf.conf"
+        # 移除 AllowedIPs 中的 IPv6 部分
+        sed -i 's/,:://' "${WGCF_CONFIG_DIR}/wgcf.conf"
+        sed -i 's/, :://' "${WGCF_CONFIG_DIR}/wgcf.conf"
+        print_success "✅ 已切换到纯 IPv4 模式"
+    fi
+
+    # ========================================
+    # 启动 WARP
+    # ========================================
+    print_info "正在启动 WARP 连接..."
 
     # 启动 WireGuard，并捕获详细错误
     local error_log=$(mktemp)
@@ -1482,13 +1509,15 @@ warp_diagnose() {
     if [[ -d /proc/sys/net/ipv6 ]]; then
         local ipv6_disabled=$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null)
         if [[ "$ipv6_disabled" == "0" ]]; then
-            echo -e "   ✅ IPv6 已启用"
+            echo -e "   ✅ IPv6 已启用（推荐）"
         else
             echo -e "   ⚠️  IPv6 已禁用"
             echo -e "   ${YELLOW}启用命令: sysctl -w net.ipv6.conf.all.disable_ipv6=0${NC}"
+            echo -e "   ${CYAN}提示: 如无法启用，系统会自动使用纯 IPv4 模式${NC}"
         fi
     else
         echo -e "   ❌ 系统不支持 IPv6"
+        echo -e "   ${CYAN}提示: 系统会自动使用纯 IPv4 模式${NC}"
     fi
     echo ""
 
@@ -1554,12 +1583,16 @@ warp_diagnose() {
     fi
 
     if [[ ! -d /proc/sys/net/ipv6 ]] || [[ $(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null) != "0" ]]; then
-        echo -e "  • ${YELLOW}启用 IPv6 支持${NC}"
-        has_issue=true
+        echo -e "  • ${CYAN}建议启用 IPv6（可选，系统会自动降级到 IPv4）${NC}"
     fi
 
     if ! command -v wg-quick &>/dev/null; then
         echo -e "  • ${RED}安装 wireguard-tools: apt install wireguard-tools${NC}"
+        has_issue=true
+    fi
+
+    if [[ ! -f "$WGCF_PROFILE" ]]; then
+        echo -e "  • ${YELLOW}需要先生成 WARP 配置文件${NC}"
         has_issue=true
     fi
 

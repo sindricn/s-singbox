@@ -1639,15 +1639,19 @@ generate_singbox_subscription_config() {
             dns: {
                 servers: [
                     {
+                        type: "https",
                         tag: "dns-remote",
-                        address: "https://223.5.5.5/dns-query",
-                        strategy: "ipv4_only",
+                        server: "223.5.5.5",
+                        server_port: 443,
+                        path: "/dns-query",
+                        domain_resolver: "dns-local",
                         detour: "Direct"
                     },
                     {
+                        type: "tcp",
                         tag: "dns-local",
-                        address: "223.5.5.5",
-                        strategy: "ipv4_only",
+                        server: "223.5.5.5",
+                        server_port: 53,
                         detour: "Direct"
                     }
                 ],
@@ -1658,8 +1662,7 @@ generate_singbox_subscription_config() {
                         server: "dns-local"
                     }
                 ],
-                final: "dns-remote",
-                strategy: "ipv4_only"
+                final: "dns-remote"
             },
             inbounds: [
                 {

@@ -166,28 +166,28 @@ generate_singbox_config() {
             dns: {
                 servers: [
                     {
+                        type: "https",
                         tag: "dns-remote",
-                        address: "https://1.1.1.1/dns-query",
-                        address_resolver: "dns-local",
-                        strategy: "prefer_ipv4",
+                        server: "1.1.1.1",
+                        server_port: 443,
+                        path: "/dns-query",
+                        domain_resolver: "dns-local",
                         detour: "direct-out"
                     },
                     {
+                        type: "local",
                         tag: "dns-local",
-                        address: "local",
                         detour: "direct-out"
                     }
                 ],
                 rules: [],
-                strategy: "prefer_ipv4",
                 final: "dns-remote"
             },
             inbounds: $inbounds,
             outbounds: [
                 {
                     type: "direct",
-                    tag: "direct-out",
-                    domain_strategy: "prefer_ipv4"
+                    tag: "direct-out"
                 },
                 {
                     type: "block",

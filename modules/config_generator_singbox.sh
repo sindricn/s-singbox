@@ -166,18 +166,20 @@ generate_singbox_config() {
             dns: {
                 servers: [
                     {
-                        type: "https",
                         tag: "dns-remote",
-                        server: "1.1.1.1",
-                        server_port: 443,
-                        path: "/dns-query"
+                        address: "https://1.1.1.1/dns-query",
+                        address_resolver: "dns-local",
+                        strategy: "prefer_ipv4",
+                        detour: "direct-out"
                     },
                     {
-                        type: "local",
-                        tag: "dns-local"
+                        tag: "dns-local",
+                        address: "local",
+                        detour: "direct-out"
                     }
                 ],
                 rules: [],
+                strategy: "prefer_ipv4",
                 final: "dns-remote"
             },
             inbounds: $inbounds,
@@ -381,7 +383,7 @@ generate_singbox_inbound() {
             local obfs_password=$(echo "$extra" | jq -r '.obfs_password // ""')
             local port_hopping=$(echo "$extra" | jq -r '.port_hopping // ""')
 
-            echo "    [调试] Hysteria2配置: up_mbps=$up_mbps, down_mbps=$down_mbps, port_hopping=$port_hopping" >&2
+            echo "    [调试] Hysteria2配置: up_mbps=$up_mbps, down_mbps=$down_mbps, obfs_password=${obfs_password:0:10}***, port_hopping=$port_hopping" >&2
 
             # 构建基础配置
             # 端口跳跃通过iptables实现，配置中只使用单端口监听

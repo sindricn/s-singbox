@@ -573,6 +573,7 @@ create_default_config() {
     }
   ],
   "route": {
+    "default_domain_resolver": "dns-local",
     "rules": [
       {
         "protocol": "dns",

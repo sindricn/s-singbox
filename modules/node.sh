@@ -957,6 +957,7 @@ delete_node() {
     echo -e "  • 可以输入单个节点：${CYAN}1${NC} 或 ${CYAN}8080${NC}"
     echo -e "  • 可以输入多个节点（逗号分隔）：${CYAN}1,2,3${NC} 或 ${CYAN}8080,8081,8082${NC}"
     echo -e "  • 可以输入多个节点（空格分隔）：${CYAN}1 2 3${NC} 或 ${CYAN}8080 8081 8082${NC}"
+    echo -e "  • 输入 ${CYAN}all${NC} 或 ${CYAN}*${NC} 删除所有节点"
     echo ""
     read -p "请输入要删除的节点序号或端口: " input
     if [[ -z "$input" ]]; then
@@ -964,34 +965,48 @@ delete_node() {
         return 1
     fi
 
-    # 处理输入（支持逗号和空格分隔）
-    input=$(echo "$input" | tr ',' ' ')
-    local inputs=($input)
-    
     # 收集要删除的端口
     local ports_to_delete=()
-    for item in "${inputs[@]}"; do
-        local port=""
-        # 判断是序号还是端口
-        if [[ "$item" =~ ^[0-9]+$ ]] && [[ "$item" -le 100 ]]; then
-            # 可能是序号，尝试获取端口
-            port=$(get_node_port_by_index "$item")
-            if [[ -z "$port" || "$port" == "null" ]]; then
-                # 不是有效序号，当作端口处理
+
+    # 检查是否删除所有节点
+    if [[ "$input" == "all" || "$input" == "*" ]]; then
+        # 获取所有节点端口
+        while IFS= read -r port; do
+            [[ -n "$port" && "$port" != "null" ]] && ports_to_delete+=("$port")
+        done < <(jq -r '.nodes[].port' "$NODES_FILE" 2>/dev/null)
+
+        if [[ ${#ports_to_delete[@]} -eq 0 ]]; then
+            print_warning "没有节点可删除"
+            return 0
+        fi
+    else
+        # 处理输入（支持逗号和空格分隔）
+        input=$(echo "$input" | tr ',' ' ')
+        local inputs=($input)
+
+        for item in "${inputs[@]}"; do
+            local port=""
+            # 判断是序号还是端口
+            if [[ "$item" =~ ^[0-9]+$ ]] && [[ "$item" -le 100 ]]; then
+                # 可能是序号，尝试获取端口
+                port=$(get_node_port_by_index "$item")
+                if [[ -z "$port" || "$port" == "null" ]]; then
+                    # 不是有效序号，当作端口处理
+                    port="$item"
+                fi
+            else
                 port="$item"
             fi
-        else
-            port="$item"
-        fi
-        
-        # 验证端口存在
-        local node_exists=$(jq -r ".nodes[] | select(.port == \"$port\") | .port" "$NODES_FILE" 2>/dev/null)
-        if [[ -n "$node_exists" ]]; then
-            ports_to_delete+=("$port")
-        else
-            print_warning "节点端口 $port 不存在，已跳过"
-        fi
-    done
+
+            # 验证端口存在
+            local node_exists=$(jq -r ".nodes[] | select(.port == \"$port\") | .port" "$NODES_FILE" 2>/dev/null)
+            if [[ -n "$node_exists" ]]; then
+                ports_to_delete+=("$port")
+            else
+                print_warning "节点端口 $port 不存在，已跳过"
+            fi
+        done
+    fi
 
     if [[ ${#ports_to_delete[@]} -eq 0 ]]; then
         print_error "没有有效的节点可删除"
@@ -2638,7 +2653,8 @@ quick_setup_vless_reality() {
     echo -e "  ShortId: ${YELLOW}$short_id${NC}"
     echo ""
 
-# 生成并显示分享链接（调用统一函数）    show_node_share_link "$port" "$admin_uuid" "$admin_remark"
+    # 生成并显示分享链接（调用统一函数）
+    show_node_share_link "$port" "$admin_uuid" "$admin_remark"
 }
 
 # 快速搭建 Hysteria2 节点（一键配置）
@@ -2959,7 +2975,8 @@ quick_setup_hysteria2() {
     fi
     echo ""
 
-# 生成并显示分享链接（调用统一函数）    show_node_share_link "$port" "$admin_password" "$admin_username"
+    # 生成并显示分享链接（调用统一函数）
+    show_node_share_link "$port" "$admin_password" "$admin_username"
 }
 
 # 快速搭建菜单

@@ -466,6 +466,8 @@ show_node_menu() {
     echo -e "${GREEN}1.${NC} 添加节点"
     echo -e "${GREEN}2.${NC} 删除节点"
     echo -e "${GREEN}3.${NC} 列出节点"
+    echo -e "${GREEN}4.${NC} 查看节点详情"
+    echo -e "${GREEN}5.${NC} 修改节点配置"
     echo -e "${GREEN}0.${NC} 返回主菜单"
     echo ""
 }
@@ -596,6 +598,26 @@ handle_node_menu() {
             3)
                 # 列出节点
                 list_nodes
+                read -p "按回车键继续..."
+                ;;
+            4)
+                # 查看节点详情
+                list_nodes true  # 不清屏
+                echo ""
+                read -p "请输入要查看的节点序号 (0返回): " node_idx
+                if [[ "$node_idx" != "0" && -n "$node_idx" ]]; then
+                    local port=$(get_node_port_by_index "$node_idx")
+                    if [[ -n "$port" && "$port" != "null" ]]; then
+                        show_node_detail "$port"
+                    else
+                        print_error "无效的节点序号"
+                    fi
+                fi
+                read -p "按回车键继续..."
+                ;;
+            5)
+                # 修改节点配置
+                modify_node_config
                 read -p "按回车键继续..."
                 ;;
             0)

@@ -39,7 +39,8 @@
       "WebFetch(domain:github.com)",
       "Bash(sqlite3:*)",
       "Bash(jq:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(modules/subscription.sh)"
     ],
     "deny": [],
     "ask": []

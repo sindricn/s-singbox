@@ -393,8 +393,24 @@ generate_vless_reality_link_from_config() {
     local short_id=$(echo "$extra" | jq -r '.short_ids[0] // ""')
     local flow=$(echo "$extra" | jq -r '.flow // "xtls-rprx-vision"')
 
+    # 调试信息
+    if [[ "${DEBUG:-0}" == "1" ]]; then
+        echo "[调试 generate_vless_reality_link_from_config]" >&2
+        echo "  uuid: $uuid" >&2
+        echo "  remark: $remark" >&2
+        echo "  port: $port" >&2
+        echo "  dest: $dest" >&2
+        echo "  server_names: $server_names" >&2
+        echo "  public_key: ${public_key:0:20}..." >&2
+        echo "  short_id: $short_id" >&2
+        echo "  flow: $flow" >&2
+    fi
+
     # 验证必需参数
     if [[ -z "$dest" || -z "$public_key" ]]; then
+        if [[ "${DEBUG:-0}" == "1" ]]; then
+            echo "  [错误] 缺少必需参数: dest=$dest, public_key=${public_key:0:10}" >&2
+        fi
         echo ""
         return 1
     fi
@@ -408,8 +424,18 @@ generate_vless_reality_link_from_config() {
     local server_host
     server_host=$(resolve_subscription_host "$node_json")
 
+    # 调试信息
+    if [[ "${DEBUG:-0}" == "1" ]]; then
+        echo "  server_host: $server_host" >&2
+        echo "  sni: $sni" >&2
+    fi
+
     # 构建VLESS Reality链接
     local share_link="vless://${uuid}@${server_host}:${port}?encryption=none&flow=${flow}&security=reality&sni=${sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=tcp&headerType=none#$(urlencode "$remark")"
+
+    if [[ "${DEBUG:-0}" == "1" ]]; then
+        echo "  生成的链接: $share_link" >&2
+    fi
 
     echo "$share_link"
 }
@@ -636,6 +662,16 @@ generate_share_link_smart() {
 
     local protocol=$(echo "$node_json" | jq -r '.protocol')
     local security=$(echo "$node_json" | jq -r '.security // "none"')
+
+    # 调试信息（可通过环境变量DEBUG=1启用）
+    if [[ "${DEBUG:-0}" == "1" ]]; then
+        echo "[调试 generate_share_link_smart]" >&2
+        echo "  user_id: $user_id" >&2
+        echo "  user_email: $user_email" >&2
+        echo "  protocol: $protocol" >&2
+        echo "  security: $security" >&2
+        echo "  node_json: $(echo "$node_json" | jq -c '.')" >&2
+    fi
 
     # 获取节点名称和用户信息
     local node_name=$(echo "$node_json" | jq -r '.name // "未命名"')
@@ -3177,12 +3213,14 @@ menu_subscription() {
         echo -e "${GREEN}1.${NC}  生成订阅链接"
         echo -e "${GREEN}2.${NC}  查看单个节点链接"
         echo -e "${GREEN}3.${NC}  查看所有订阅"
-        echo -e "${GREEN}4.${NC}  删除订阅"
+        echo -e "${GREEN}4.${NC}  查看用户订阅"
+        echo -e "${GREEN}5.${NC}  更新订阅"
+        echo -e "${GREEN}6.${NC}  删除订阅"
         echo ""
         echo -e "${GREEN}0.${NC}  返回主菜单"
         echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo ""
-        read -p "请选择 [0-4]: " choice
+        read -p "请选择 [0-6]: " choice
 
         case $choice in
             1)
@@ -3198,7 +3236,15 @@ menu_subscription() {
                 read -p "按 Enter 键继续..."
                 ;;
             4)
-                delete_subscription
+                show_user_subscriptions
+                read -p "按 Enter 键继续..."
+                ;;
+            5)
+                update_subscription_menu
+                read -p "按 Enter 键继续..."
+                ;;
+            6)
+                delete_subscription_menu
                 read -p "按 Enter 键继续..."
                 ;;
             0)
@@ -3339,4 +3385,404 @@ delete_subscription() {
     delete_subscription_metadata "$name"
 
     print_success "订阅 '$name' 已删除"
+}
+
+#================================================================
+# 新增订阅管理功能
+#================================================================
+
+# 查看单个用户的所有订阅
+show_user_subscriptions() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║        查看用户订阅链接              ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    if [[ ! -f "$USERS_FILE" ]]; then
+        print_error "暂无用户"
+        return 1
+    fi
+
+    local user_count=$(jq -r '.users | length' "$USERS_FILE" 2>/dev/null)
+    if [[ "$user_count" -eq 0 ]]; then
+        print_error "暂无用户"
+        return 1
+    fi
+
+    # 显示用户列表
+    echo -e "${YELLOW}用户列表：${NC}"
+    echo ""
+
+    local index=1
+    while IFS= read -r user; do
+        if [[ -z "$user" || "$user" == "null" ]]; then
+            continue
+        fi
+
+        local uid=$(echo "$user" | jq -r '.id')
+        local uname=$(echo "$user" | jq -r '.username')
+        local uemail=$(echo "$user" | jq -r '.email // "无邮箱"')
+
+        printf "${CYAN}[%d]${NC} ${YELLOW}%-20s${NC} (%s)\n" "$index" "$uname" "$uemail"
+        ((index++))
+    done < <(jq -c '.users[]' "$USERS_FILE" 2>/dev/null)
+
+    echo ""
+    read -p "请输入用户序号 (0取消): " user_index
+
+    if [[ "$user_index" == "0" ]]; then
+        return 0
+    fi
+
+    # 验证输入
+    if [[ ! "$user_index" =~ ^[0-9]+$ ]] || [[ "$user_index" -lt 1 ]] || [[ "$user_index" -gt "$((index-1))" ]]; then
+        print_error "无效的序号"
+        return 1
+    fi
+
+    # 获取用户信息
+    local user=$(jq -c ".users[$((user_index-1))]" "$USERS_FILE" 2>/dev/null)
+    if [[ -z "$user" || "$user" == "null" ]]; then
+        print_error "用户不存在"
+        return 1
+    fi
+
+    local user_id=$(echo "$user" | jq -r '.id')
+    local username=$(echo "$user" | jq -r '.username')
+
+    echo ""
+    echo -e "${CYAN}用户：${NC} ${YELLOW}$username${NC}"
+    echo ""
+
+    # 从元数据中查找该用户的订阅
+    if [[ ! -f "$SUBSCRIPTION_META_FILE" ]]; then
+        print_warning "该用户没有订阅"
+        return 0
+    fi
+
+    local user_subs=$(jq -c ".subscriptions[] | select(.user_id == \"$user_id\")" "$SUBSCRIPTION_META_FILE" 2>/dev/null)
+
+    if [[ -z "$user_subs" ]]; then
+        print_warning "该用户没有订阅"
+        return 0
+    fi
+
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}订阅链接：${NC}"
+    echo ""
+
+    local link_count=0
+    while IFS= read -r sub; do
+        if [[ -z "$sub" ]]; then
+            continue
+        fi
+
+        ((link_count++))
+        local sub_name=$(echo "$sub" | jq -r '.name')
+        local sub_type=$(echo "$sub" | jq -r '.type')
+        local sub_url=$(echo "$sub" | jq -r '.url // "N/A"')
+
+        echo -e "${YELLOW}[$link_count] $sub_name${NC} (${CYAN}$sub_type${NC})"
+        echo -e "    ${GREEN}$sub_url${NC}"
+        echo ""
+    done <<< "$user_subs"
+
+    if [[ $link_count -eq 0 ]]; then
+        print_warning "未找到订阅"
+    else
+        echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        print_success "共 $link_count 个订阅"
+    fi
+}
+
+# 更新订阅菜单
+update_subscription_menu() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║           更新订阅                   ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    echo -e "${YELLOW}请选择更新方式：${NC}"
+    echo -e "${GREEN}1.${NC} 更新单个用户的所有订阅"
+    echo -e "${GREEN}2.${NC} 更新所有用户的所有订阅"
+    echo -e "${GREEN}0.${NC} 返回"
+    echo ""
+    read -p "请选择 [0-2]: " choice
+
+    case $choice in
+        1)
+            # 更新单个用户
+            if [[ ! -f "$USERS_FILE" ]]; then
+                print_error "暂无用户"
+                return 1
+            fi
+
+            local user_count=$(jq -r '.users | length' "$USERS_FILE" 2>/dev/null)
+            if [[ "$user_count" -eq 0 ]]; then
+                print_error "暂无用户"
+                return 1
+            fi
+
+            # 显示用户列表
+            echo ""
+            echo -e "${YELLOW}用户列表：${NC}"
+            echo ""
+
+            local index=1
+            while IFS= read -r user; do
+                if [[ -z "$user" || "$user" == "null" ]]; then
+                    continue
+                fi
+
+                local uid=$(echo "$user" | jq -r '.id')
+                local uname=$(echo "$user" | jq -r '.username')
+                local uemail=$(echo "$user" | jq -r '.email // "无邮箱"')
+
+                printf "${CYAN}[%d]${NC} ${YELLOW}%-20s${NC} (%s)\n" "$index" "$uname" "$uemail"
+                ((index++))
+            done < <(jq -c '.users[]' "$USERS_FILE" 2>/dev/null)
+
+            echo ""
+            read -p "请输入用户序号 (0取消): " user_index
+
+            if [[ "$user_index" == "0" ]]; then
+                return 0
+            fi
+
+            # 验证输入
+            if [[ ! "$user_index" =~ ^[0-9]+$ ]] || [[ "$user_index" -lt 1 ]] || [[ "$user_index" -gt "$((index-1))" ]]; then
+                print_error "无效的序号"
+                return 1
+            fi
+
+            # 获取用户信息
+            local user=$(jq -c ".users[$((user_index-1))]" "$USERS_FILE" 2>/dev/null)
+            if [[ -z "$user" || "$user" == "null" ]]; then
+                print_error "用户不存在"
+                return 1
+            fi
+
+            local user_id=$(echo "$user" | jq -r '.id')
+            local username=$(echo "$user" | jq -r '.username')
+
+            echo ""
+            print_info "正在更新用户 $username 的订阅..."
+            echo ""
+
+            update_user_subscriptions "$user_id"
+            ;;
+        2)
+            # 更新所有用户
+            echo ""
+            read -p "确认更新所有用户的订阅? [y/N]: " confirm
+
+            if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+                print_info "取消更新"
+                return 0
+            fi
+
+            print_info "正在更新所有用户的订阅..."
+            echo ""
+
+            local total_users=0
+            local updated_users=0
+
+            while IFS= read -r user; do
+                if [[ -z "$user" || "$user" == "null" ]]; then
+                    continue
+                fi
+
+                ((total_users++))
+                local user_id=$(echo "$user" | jq -r '.id')
+                local username=$(echo "$user" | jq -r '.username')
+
+                echo -e "${CYAN}[用户 $total_users]${NC} $username"
+
+                if update_user_subscriptions "$user_id"; then
+                    ((updated_users++))
+                fi
+                echo ""
+            done < <(jq -c '.users[]' "$USERS_FILE" 2>/dev/null)
+
+            echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+            print_success "更新完成！共更新 $updated_users/$total_users 个用户的订阅"
+            ;;
+        0)
+            return 0
+            ;;
+        *)
+            print_error "无效选择"
+            return 1
+            ;;
+    esac
+}
+
+# 增强的删除订阅菜单
+delete_subscription_menu() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║           删除订阅                   ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    echo -e "${YELLOW}请选择删除方式：${NC}"
+    echo -e "${GREEN}1.${NC} 删除单个订阅（按序号）"
+    echo -e "${GREEN}2.${NC} 删除用户的所有订阅"
+    echo -e "${GREEN}3.${NC} 删除所有订阅"
+    echo -e "${GREEN}0.${NC} 返回"
+    echo ""
+    read -p "请选择 [0-3]: " choice
+
+    case $choice in
+        1)
+            # 删除单个订阅（调用原有函数）
+            delete_subscription
+            ;;
+        2)
+            # 删除用户的所有订阅
+            if [[ ! -f "$USERS_FILE" ]]; then
+                print_error "暂无用户"
+                return 1
+            fi
+
+            local user_count=$(jq -r '.users | length' "$USERS_FILE" 2>/dev/null)
+            if [[ "$user_count" -eq 0 ]]; then
+                print_error "暂无用户"
+                return 1
+            fi
+
+            # 显示用户列表
+            echo ""
+            echo -e "${YELLOW}用户列表：${NC}"
+            echo ""
+
+            local index=1
+            while IFS= read -r user; do
+                if [[ -z "$user" || "$user" == "null" ]]; then
+                    continue
+                fi
+
+                local uid=$(echo "$user" | jq -r '.id')
+                local uname=$(echo "$user" | jq -r '.username')
+                local uemail=$(echo "$user" | jq -r '.email // "无邮箱"')
+
+                printf "${CYAN}[%d]${NC} ${YELLOW}%-20s${NC} (%s)\n" "$index" "$uname" "$uemail"
+                ((index++))
+            done < <(jq -c '.users[]' "$USERS_FILE" 2>/dev/null)
+
+            echo ""
+            read -p "请输入用户序号 (0取消): " user_index
+
+            if [[ "$user_index" == "0" ]]; then
+                return 0
+            fi
+
+            # 验证输入
+            if [[ ! "$user_index" =~ ^[0-9]+$ ]] || [[ "$user_index" -lt 1 ]] || [[ "$user_index" -gt "$((index-1))" ]]; then
+                print_error "无效的序号"
+                return 1
+            fi
+
+            # 获取用户信息
+            local user=$(jq -c ".users[$((user_index-1))]" "$USERS_FILE" 2>/dev/null)
+            if [[ -z "$user" || "$user" == "null" ]]; then
+                print_error "用户不存在"
+                return 1
+            fi
+
+            local user_id=$(echo "$user" | jq -r '.id')
+            local username=$(echo "$user" | jq -r '.username')
+
+            echo ""
+            read -p "确认删除用户 $username 的所有订阅? [y/N]: " confirm
+
+            if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+                print_info "取消删除"
+                return 0
+            fi
+
+            # 删除该用户的所有订阅
+            local deleted_count=0
+            local sub_db="${DATA_DIR}/subscriptions.json"
+
+            if [[ -f "$sub_db" ]]; then
+                # 获取该用户的所有订阅名称
+                local user_sub_names=()
+                if [[ -f "$SUBSCRIPTION_META_FILE" ]]; then
+                    while IFS= read -r sub_name; do
+                        [[ -n "$sub_name" && "$sub_name" != "null" ]] && user_sub_names+=("$sub_name")
+                    done < <(jq -r ".subscriptions[] | select(.user_id == \"$user_id\") | .name" "$SUBSCRIPTION_META_FILE" 2>/dev/null)
+                fi
+
+                for sub_name in "${user_sub_names[@]}"; do
+                    # 删除订阅文件
+                    local sub_file=$(jq -r ".subscriptions[] | select(.name == \"$sub_name\") | .file" "$sub_db" 2>/dev/null)
+                    if [[ -n "$sub_file" && -f "$sub_file" ]]; then
+                        rm -f "$sub_file"
+                    fi
+
+                    # 从数据库删除
+                    jq ".subscriptions |= map(select(.name != \"$sub_name\"))" "$sub_db" > "${sub_db}.tmp"
+                    mv "${sub_db}.tmp" "$sub_db"
+
+                    # 删除元数据
+                    delete_subscription_metadata "$sub_name"
+
+                    ((deleted_count++))
+                done
+            fi
+
+            echo ""
+            print_success "已删除用户 $username 的 $deleted_count 个订阅"
+            ;;
+        3)
+            # 删除所有订阅
+            local sub_db="${DATA_DIR}/subscriptions.json"
+            if [[ ! -f "$sub_db" ]]; then
+                print_warning "暂无订阅"
+                return 0
+            fi
+
+            local sub_count=$(jq -r '.subscriptions | length' "$sub_db" 2>/dev/null)
+            if [[ "$sub_count" -eq 0 ]]; then
+                print_warning "暂无订阅"
+                return 0
+            fi
+
+            echo ""
+            echo -e "${RED}警告：此操作将删除所有 $sub_count 个订阅！${NC}"
+            echo ""
+            read -p "确认删除所有订阅? [y/N]: " confirm
+
+            if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+                print_info "取消删除"
+                return 0
+            fi
+
+            # 删除所有订阅文件
+            while IFS= read -r sub_file; do
+                [[ -n "$sub_file" && -f "$sub_file" ]] && rm -f "$sub_file"
+            done < <(jq -r '.subscriptions[].file' "$sub_db" 2>/dev/null)
+
+            # 清空数据库
+            echo '{"subscriptions":[]}' > "$sub_db"
+
+            # 清空元数据
+            if [[ -f "$SUBSCRIPTION_META_FILE" ]]; then
+                echo '{"subscriptions":[]}' > "$SUBSCRIPTION_META_FILE"
+            fi
+
+            echo ""
+            print_success "已删除所有 $sub_count 个订阅"
+            ;;
+        0)
+            return 0
+            ;;
+        *)
+            print_error "无效选择"
+            return 1
+            ;;
+    esac
 }

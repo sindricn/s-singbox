@@ -494,15 +494,10 @@ generate_singbox_inbound() {
             inbound="$merged"
             echo "    [调试] Hysteria2 TLS配置合并成功" >&2
 
-            # 添加伪装配置（需要添加domain_resolver支持域名解析）
+            # 添加伪装配置
             local masquerade=$(echo "$extra" | jq -r '.masquerade // "https://bing.com"')
             if [[ -n "$masquerade" && "$masquerade" != "null" ]]; then
-                inbound=$(echo "$inbound" | jq \
-                    --arg masq "$masquerade" \
-                    '. + {
-                        masquerade: $masq,
-                        domain_resolver: "dns-local"
-                    }') || return 1
+                inbound=$(echo "$inbound" | jq --arg masq "$masquerade" '. + {masquerade: $masq}') || return 1
             fi
             ;;
 

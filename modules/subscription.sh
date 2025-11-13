@@ -1541,7 +1541,17 @@ generate_singbox_subscription_config() {
                 local down_mbps=$(echo "$extra" | jq -r '.down_mbps // 0')
 
                 # 构建基础配置
-                outbound_config=$(jq -n                     --arg tag "$node_tag"                     --arg server "$node_host"                     --argjson port "$port"                     --arg password "$user_password"                     --arg sni "$tls_domain"                     --arg obfs_pwd "$obfs_password"                     --arg port_hop "$port_hopping"                     --argjson up "$up_mbps"                     --argjson down "$down_mbps"                     '{
+                outbound_config=$(jq -n \
+                    --arg tag "$node_tag" \
+                    --arg server "$node_host" \
+                    --argjson port "$port" \
+                    --arg password "$user_password" \
+                    --arg sni "$tls_domain" \
+                    --arg obfs_pwd "$obfs_password" \
+                    --arg port_hop "$port_hopping" \
+                    --argjson up "$up_mbps" \
+                    --argjson down "$down_mbps" \
+                    '{
                         type: "hysteria2",
                         tag: $tag,
                         server: $server,
@@ -1673,7 +1683,6 @@ generate_singbox_subscription_config() {
             ],
             outbounds: $outbounds,
             route: {
-                default_domain_resolver: "dns-local",
                 rules: [
                     {
                         ip_is_private: true,

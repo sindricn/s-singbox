@@ -171,13 +171,11 @@ generate_singbox_config() {
                         server: "1.1.1.1",
                         server_port: 443,
                         path: "/dns-query",
-                        domain_resolver: "dns-local",
-                        detour: "direct-out"
+                        domain_resolver: "dns-local"
                     },
                     {
                         type: "local",
-                        tag: "dns-local",
-                        detour: "direct-out"
+                        tag: "dns-local"
                     }
                 ],
                 rules: [],
@@ -496,10 +494,15 @@ generate_singbox_inbound() {
             inbound="$merged"
             echo "    [调试] Hysteria2 TLS配置合并成功" >&2
 
-            # 添加伪装配置
+            # 添加伪装配置（需要添加domain_resolver支持域名解析）
             local masquerade=$(echo "$extra" | jq -r '.masquerade // "https://bing.com"')
             if [[ -n "$masquerade" && "$masquerade" != "null" ]]; then
-                inbound=$(echo "$inbound" | jq --arg masq "$masquerade" '. + {masquerade: $masq}') || return 1
+                inbound=$(echo "$inbound" | jq \
+                    --arg masq "$masquerade" \
+                    '. + {
+                        masquerade: $masq,
+                        domain_resolver: "dns-local"
+                    }') || return 1
             fi
             ;;
 

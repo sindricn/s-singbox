@@ -1644,15 +1644,13 @@ generate_singbox_subscription_config() {
                         server: "223.5.5.5",
                         server_port: 443,
                         path: "/dns-query",
-                        domain_resolver: "dns-local",
-                        detour: "Direct"
+                        domain_resolver: "dns-local"
                     },
                     {
                         type: "tcp",
                         tag: "dns-local",
                         server: "223.5.5.5",
-                        server_port: 53,
-                        detour: "Direct"
+                        server_port: 53
                     }
                 ],
                 rules: [

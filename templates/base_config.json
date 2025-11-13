@@ -7,27 +7,26 @@
   "dns": {
     "servers": [
       {
+        "type": "tls",
         "tag": "dns_proxy",
-        "address": "tls://8.8.8.8",
-        "address_resolver": "dns_resolver"
+        "server": "8.8.8.8",
+        "server_port": 853,
+        "domain_resolver": "dns_resolver"
       },
       {
+        "type": "udp",
         "tag": "dns_direct",
-        "address": "223.5.5.5",
-        "address_resolver": "dns_resolver",
-        "detour": "direct"
+        "server": "223.5.5.5",
+        "server_port": 53
       },
       {
+        "type": "udp",
         "tag": "dns_resolver",
-        "address": "223.5.5.5",
-        "detour": "direct"
+        "server": "223.5.5.5",
+        "server_port": 53
       }
     ],
     "rules": [
-      {
-        "outbound": "any",
-        "server": "dns_resolver"
-      },
       {
         "rule_set": "geosite-cn",
         "server": "dns_direct"
@@ -53,6 +52,7 @@
     }
   ],
   "route": {
+    "default_domain_resolver": "dns_resolver",
     "rule_set": [
       {
         "type": "remote",
@@ -72,7 +72,8 @@
     "rules": [
       {
         "protocol": "dns",
-        "outbound": "dns-out"
+        "action": "route",
+        "outbound": "direct"
       },
       {
         "rule_set": "geosite-cn",
@@ -87,7 +88,8 @@
         "outbound": "direct"
       }
     ],
-    "final": "direct"
+    "final": "direct",
+    "auto_detect_interface": true
   },
   "experimental": {
     "cache_file": {

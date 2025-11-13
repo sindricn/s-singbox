@@ -1920,7 +1920,8 @@ add_hysteria2_node() {
     read -p "是否启用 Salamander 混淆? [y/N]: " enable_obfs
     local obfs_password=""
     if [[ "$enable_obfs" == "y" || "$enable_obfs" == "Y" ]]; then
-        obfs_password=$(openssl rand -base64 16)
+        # 使用hex编码避免URL特殊字符（不包含+/=等）
+        obfs_password=$(openssl rand -hex 16)
         print_info "混淆密码: $obfs_password"
     fi
 
@@ -1930,12 +1931,18 @@ ${CYAN}端口跳跃配置（可选）：${NC}"
     read -p "是否启用端口跳跃? [y/N]: " enable_hopping
     local port_hopping=""
     if [[ "$enable_hopping" == "y" || "$enable_hopping" == "Y" ]]; then
-        read -p "请输入跳跃端口范围 [例如: 20000-30000]: " hopping_range
-        if [[ -n "$hopping_range" && "$hopping_range" =~ ^[0-9]+-[0-9]+$ ]]; then
-            port_hopping="$hopping_range"
-            print_info "端口跳跃: $port_hopping"
-        else
-            print_warning "格式错误，跳过端口跳跃配置"
+        read -p "请输入跳跃端口范围 [格式: 20000:30000]: " hopping_range
+        if [[ -n "$hopping_range" ]]; then
+            # 支持减号格式，自动转换为冒号（sing-box官方格式）
+            if [[ "$hopping_range" =~ ^[0-9]+-[0-9]+$ ]]; then
+                port_hopping="${hopping_range/-/:}"
+                print_info "端口跳跃: $port_hopping (已转换为官方格式)"
+            elif [[ "$hopping_range" =~ ^[0-9]+:[0-9]+$ ]]; then
+                port_hopping="$hopping_range"
+                print_info "端口跳跃: $port_hopping"
+            else
+                print_warning "格式错误，跳过端口跳跃配置"
+            fi
         fi
     fi
 
@@ -2755,7 +2762,8 @@ quick_setup_hysteria2() {
 
     # 步骤 3/6: 生成混淆密码（认证密码将使用admin用户密码）
     echo -e "${BLUE}步骤 3/6: 生成混淆密码${NC}"
-    local obfs_password=$(openssl rand -base64 16)
+    # 使用hex编码避免URL特殊字符（不包含+/=等）
+    local obfs_password=$(openssl rand -hex 16)
     print_success "混淆密码: $obfs_password"
     echo ""
 
@@ -2814,11 +2822,17 @@ quick_setup_hysteria2() {
 
     local port_hopping=""
     if [[ "$enable_hopping" != "n" && "$enable_hopping" != "N" ]]; then
-        read -p "跳跃端口范围 [默认: 2000-3000]: " hopping_range
+        read -p "跳跃端口范围 [默认: 2000:3000]: " hopping_range
         if [[ -z "$hopping_range" ]]; then
-            port_hopping="2000-3000"
+            # 使用冒号格式（sing-box官方格式）
+            port_hopping="2000:3000"
         else
-            port_hopping="$hopping_range"
+            # 支持减号格式，自动转换为冒号
+            if [[ "$hopping_range" =~ ^[0-9]+-[0-9]+$ ]]; then
+                port_hopping="${hopping_range/-/:}"
+            else
+                port_hopping="$hopping_range"
+            fi
         fi
         print_success "跳跃端口: $port_hopping"
     else
@@ -2898,9 +2912,9 @@ quick_setup_hysteria2() {
         echo ""
         echo -e "${BLUE}配置端口跳跃iptables规则...${NC}"
 
-        # 提取端口范围的起始和结束端口
-        local start_port=$(echo "$port_hopping" | cut -d'-' -f1)
-        local end_port=$(echo "$port_hopping" | cut -d'-' -f2)
+        # 提取端口范围的起始和结束端口（冒号分隔）
+        local start_port=$(echo "$port_hopping" | cut -d':' -f1)
+        local end_port=$(echo "$port_hopping" | cut -d':' -f2)
 
         # 获取主网络接口
         local main_interface=$(ip route | grep default | head -n1 | awk '{print $5}')

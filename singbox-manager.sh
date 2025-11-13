@@ -341,9 +341,12 @@ menu_core() {
         echo -e "${GREEN}9.${NC} 重置用户数据 ${GRAY}(保留节点)${NC}"
         echo -e "${GREEN}10.${NC} 重置节点数据 ${GRAY}(保留用户)${NC}"
         echo -e "${GREEN}11.${NC} 重置所有数据 ${RED}(删除所有)${NC}"
+        echo ""
+        echo -e "${YELLOW}配置查看：${NC}"
+        echo -e "${GREEN}12.${NC} 查看配置信息"
         echo -e "${GREEN}0.${NC} 返回主菜单"
         echo ""
-        read -p "请选择操作 [0-11]: " choice
+        read -p "请选择操作 [0-12]: " choice
 
         case $choice in
             1)
@@ -438,6 +441,26 @@ menu_core() {
                 else
                     print_error "reset_all_data 函数未加载"
                 fi
+                read -p "按回车键继续..."
+                ;;
+            12)
+                # 查看配置信息
+                clear
+                echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+                echo -e "${CYAN}║${NC}          sing-box 配置信息"
+                echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+                echo ""
+
+                if [[ -f "$SINGBOX_CONFIG" ]]; then
+                    echo -e "${YELLOW}配置文件路径:${NC} $SINGBOX_CONFIG"
+                    echo ""
+                    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                    cat "$SINGBOX_CONFIG" | jq '.' 2>/dev/null || cat "$SINGBOX_CONFIG"
+                    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                else
+                    print_error "配置文件不存在: $SINGBOX_CONFIG"
+                fi
+                echo ""
                 read -p "按回车键继续..."
                 ;;
             0)

@@ -620,22 +620,7 @@ generate_hysteria2_link_from_config() {
     local port=$(echo "$node_json" | jq -r '.port')
     local extra=$(echo "$node_json" | jq -c '.extra // {}')
 
-    # 从extra提取参数
-    local obfs_password=$(echo "$extra" | jq -r '.obfs_password // ""')
-    local port_hopping=$(echo "$extra" | jq -r '.port_hopping // ""')
-    local tls_domain=$(echo "$extra" | jq -r '.tls_domain // ""')
-    local tls_cert=$(echo "$extra" | jq -r '.tls_cert // ""')
-
-    # 提取域名作为SNI（优先使用 tls_domain）
-    local sni="$tls_domain"
-    if [[ -z "$sni" && -n "$tls_cert" ]]; then
-        # 从证书路径提取域名（支持多种格式）
-        sni=$(basename "$(dirname "$tls_cert")")
-        # 如果证书路径是旧格式 /path/domain.crt，则提取文件名
-        if [[ "$sni" == "certs" || -z "$sni" ]]; then
-            sni=$(basename "$tls_cert" | sed -e 's/.crt$//' -e 's/.cer$//' -e 's/fullchain.//')
-        fi
-    fi
+# 从extra提取参数    local obfs_password=$(echo "$extra" | jq -r '.obfs_password // ""')    local port_hopping=$(echo "$extra" | jq -r '.port_hopping // ""')    local tls_domain=$(echo "$extra" | jq -r '.tls_domain // ""')    local tls_cert=$(echo "$extra" | jq -r '.tls_cert // ""')    # 提取域名作为SNI（优先使用 tls_domain）    local sni="$tls_domain"    if [[ -z "$sni" && -n "$tls_cert" ]]; then        # 从证书路径提取域名（支持多种格式）        sni=$(basename "$(dirname "$tls_cert")")        # 如果证书路径是旧格式 /path/domain.crt，则提取文件名        if [[ "$sni" == "certs" || -z "$sni" ]]; then            sni=$(basename "$tls_cert" | sed -e 's/.crt$//' -e 's/.cer$//' -e 's/fullchain.//')        fi    fi
 
     local server_host
     server_host=$(resolve_subscription_host "$node_json")

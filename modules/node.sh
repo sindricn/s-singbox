@@ -682,7 +682,7 @@ add_vless_node() {
     echo ""
 
     # 生成并显示VLESS分享链接
-    show_node_share_link "$port" "$admin_uuid" "$admin_remark"
+    generate_and_show_node_link "$port" "$admin_uuid" "$admin_remark"
 
     echo ""
     print_success "✅ 节点创建完成并已绑定admin用户！"
@@ -781,7 +781,7 @@ add_vmess_node() {
     echo ""
 
     # 生成并显示VMess分享链接
-    show_node_share_link "$port" "$admin_uuid" "$admin_remark"
+    generate_and_show_node_link "$port" "$admin_uuid" "$admin_remark"
 
     echo ""
     print_success "✅ 节点创建完成并已绑定admin用户！"
@@ -872,7 +872,7 @@ add_trojan_node() {
     echo ""
 
     # 生成并显示Trojan分享链接
-    show_node_share_link "$port" "$admin_password" "admin"
+    generate_and_show_node_link "$port" "$admin_password" "admin"
 
     echo ""
     print_success "✅ 节点创建完成并已绑定admin用户！"
@@ -940,7 +940,7 @@ add_shadowsocks_node() {
     echo ""
 
     # 生成并显示SS分享链接
-    show_node_share_link "$port" "$admin_password" "admin"
+    generate_and_show_node_link "$port" "$admin_password" "admin"
 
     echo ""
     print_success "✅ 节点创建完成并已绑定admin用户！"
@@ -1822,28 +1822,29 @@ add_socks_inbound_node() {
 # ============================================================================
 
 # 显示节点分享链接（统一接口）
-show_node_share_link() {
+# 生成并显示节点分享链接（用于快速搭建完成后）
+generate_and_show_node_link() {
     local port=$1
     local user_id=$2      # UUID (vless/vmess) 或 password (hysteria2/trojan/ss)
     local username=${3:-"admin"}
-    
+
     # 从数据库读取节点配置
     local node_json=$(jq -c ".nodes[] | select(.port == \"$port\")" "$NODES_FILE" 2>/dev/null)
-    
+
     if [[ -z "$node_json" || "$node_json" == "null" ]]; then
         print_warning "无法读取节点配置，链接生成失败"
         return 1
     fi
-    
+
     # 检查 subscription.sh 中的函数是否可用
     if ! declare -f generate_share_link_smart &>/dev/null; then
         print_warning "链接生成函数未加载，请在【订阅管理】中查看节点链接"
         return 1
     fi
-    
+
     # 调用统一的链接生成函数
     local share_link=$(generate_share_link_smart "$user_id" "$username" "$node_json")
-    
+
     if [[ -n "$share_link" ]]; then
         echo ""
         echo -e "${CYAN}分享链接：${NC}"
@@ -1975,7 +1976,7 @@ ${CYAN}端口跳跃配置（可选）：${NC}"
     echo ""
 
     # 生成并显示分享链接（调用统一函数）
-    show_node_share_link "$port" "$admin_password" "$admin_remark"
+    generate_and_show_node_link "$port" "$admin_password" "$admin_remark"
 }
 
 # ============================================================================
@@ -2654,7 +2655,7 @@ quick_setup_vless_reality() {
     echo ""
 
     # 生成并显示分享链接（调用统一函数）
-    show_node_share_link "$port" "$admin_uuid" "$admin_remark"
+    generate_and_show_node_link "$port" "$admin_uuid" "$admin_remark"
 }
 
 # 快速搭建 Hysteria2 节点（一键配置）
@@ -2976,7 +2977,7 @@ quick_setup_hysteria2() {
     echo ""
 
     # 生成并显示分享链接（调用统一函数）
-    show_node_share_link "$port" "$admin_password" "$admin_username"
+    generate_and_show_node_link "$port" "$admin_password" "$admin_username"
 }
 
 # 快速搭建菜单

@@ -193,6 +193,7 @@ generate_singbox_config() {
                 }
             ],
             route: {
+                default_domain_resolver: "dns-local",
                 rules: [
                     {
                         protocol: "dns",

@@ -1684,6 +1684,7 @@ generate_singbox_subscription_config() {
             ],
             outbounds: $outbounds,
             route: {
+                default_domain_resolver: "dns-local",
                 rules: [
                     {
                         ip_is_private: true,

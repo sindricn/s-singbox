@@ -959,6 +959,54 @@ EOF
     password: ${user_password}
     udp: true"
                 ;;
+            hysteria2)
+                # Hysteria2 必需 password，如果为空则跳过
+                if [[ -z "$user_password" ]]; then
+                    echo "# WARNING: Skipping Hysteria2-${port} - password required" >&2
+                    ((skipped_count++))
+                    continue
+                fi
+
+                local tls_domain=$(echo "$extra" | jq -r '.tls_domain // ""')
+                local obfs_password=$(echo "$extra" | jq -r '.obfs_password // ""')
+                local port_hopping=$(echo "$extra" | jq -r '.port_hopping // ""')
+                local up_mbps=$(echo "$extra" | jq -r '.up_mbps // 0')
+                local down_mbps=$(echo "$extra" | jq -r '.down_mbps // 0')
+
+                # 基本配置
+                node_config="  - name: \"${safe_node_name}\"
+    type: hysteria2
+    server: ${node_host}
+    port: ${port}
+    password: ${user_password}
+    skip-cert-verify: true
+    udp: true"
+
+                # 添加SNI
+                [[ -n "$tls_domain" ]] && node_config="${node_config}
+    sni: ${tls_domain}"
+
+                # 添加混淆
+                if [[ -n "$obfs_password" ]]; then
+                    node_config="${node_config}
+    obfs: salamander
+    obfs-password: ${obfs_password}"
+                fi
+
+                # 添加端口跳跃
+                if [[ -n "$port_hopping" ]]; then
+                    node_config="${node_config}
+    ports: ${port_hopping}"
+                fi
+
+                # 添加速率限制（如果配置了）
+                if [[ "$up_mbps" -gt 0 ]] || [[ "$down_mbps" -gt 0 ]]; then
+                    [[ "$up_mbps" -gt 0 ]] && node_config="${node_config}
+    up: \"${up_mbps} Mbps\""
+                    [[ "$down_mbps" -gt 0 ]] && node_config="${node_config}
+    down: \"${down_mbps} Mbps\""
+                fi
+                ;;
         esac
 
         if [[ -n "$node_config" ]]; then

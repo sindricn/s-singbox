@@ -184,11 +184,15 @@ generate_singbox_config() {
             outbounds: [
                 {
                     type: "direct",
-                    tag: "direct-out"
+                    tag: "direct-out",
+                    domain_strategy: "prefer_ipv4"
+                },
+                {
+                    type: "block",
+                    tag: "block-out"
                 }
             ],
             route: {
-                default_domain_resolver: "dns-local",
                 rules: [
                     {
                         protocol: "dns",

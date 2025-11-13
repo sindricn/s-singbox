@@ -993,10 +993,12 @@ EOF
     obfs-password: ${obfs_password}"
                 fi
 
-                # 添加端口跳跃
-                if [[ -n "$port_hopping" ]]; then
+                # 添加端口跳跃（Clash使用连字符格式，需要转换）
+                if [[ -n "$port_hopping" && "$port_hopping" != "null" ]]; then
+                    # 将冒号格式转换为连字符格式（sing-box: 2000:3000 → Clash: 2000-3000）
+                    local clash_port_range="${port_hopping//:/-}"
                     node_config="${node_config}
-    ports: ${port_hopping}"
+    ports: ${clash_port_range}"
                 fi
 
                 # 添加速率限制（如果配置了）
@@ -3263,10 +3265,22 @@ regenerate_subscription_content() {
     local sub_filename=$(basename "$sub_file")
     local sub_url="http://${server_ip}:${port}/sub/${sub_filename}"
 
-    local sub_db="${DATA_DIR}/subscriptions.json"
-    jq --arg name "$sub_name" --arg url "$sub_url" --arg file "$sub_file" \
+    # 使用正确的元数据文件（SUBSCRIPTION_META_FILE而不是subscriptions.json）
+    if [[ ! -f "$SUBSCRIPTION_META_FILE" ]]; then
+        print_warning "元数据文件不存在，跳过元数据更新"
+        return 0
+    fi
+
+    # 更新元数据：URL、文件路径和更新时间
+    if jq --arg name "$sub_name" --arg url "$sub_url" --arg file "$sub_file" \
        '(.subscriptions[] | select(.name == $name)) |= (. + {url: $url, file: $file, updated: (now|todate)})' \
-       "$sub_db" > "${sub_db}.tmp" && mv "${sub_db}.tmp" "$sub_db"
+       "$SUBSCRIPTION_META_FILE" > "${SUBSCRIPTION_META_FILE}.tmp"; then
+        mv "${SUBSCRIPTION_META_FILE}.tmp" "$SUBSCRIPTION_META_FILE"
+    else
+        print_error "更新元数据失败"
+        rm -f "${SUBSCRIPTION_META_FILE}.tmp"
+        return 1
+    fi
 
     return 0
 }

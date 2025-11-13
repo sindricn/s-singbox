@@ -36,6 +36,91 @@ check_port_exists() {
     return 1  # 端口可用
 }
 
+# 清理端口跳跃的iptables规则
+cleanup_port_hopping_rules() {
+    local target_port=$1
+    local port_range=$2
+
+    if [[ -z "$port_range" || "$port_range" == "null" ]]; then
+        return 0
+    fi
+
+    # 提取端口范围的起始和结束端口（冒号分隔）
+    local start_port=$(echo "$port_range" | cut -d':' -f1)
+    local end_port=$(echo "$port_range" | cut -d':' -f2)
+
+    # 获取主网络接口
+    local main_interface=$(ip route | grep default | head -n1 | awk '{print $5}')
+    if [[ -z "$main_interface" ]]; then
+        main_interface="eth0"
+    fi
+
+    # 删除IPv4规则
+    iptables -t nat -D PREROUTING -i "$main_interface" -p udp --dport ${start_port}:${end_port} -j REDIRECT --to-ports $target_port 2>/dev/null
+    if [[ $? -eq 0 ]]; then
+        echo "    ✓ IPv4端口跳跃规则已删除"
+    fi
+
+    # 删除IPv6规则
+    ip6tables -t nat -D PREROUTING -i "$main_interface" -p udp --dport ${start_port}:${end_port} -j REDIRECT --to-ports $target_port 2>/dev/null
+    if [[ $? -eq 0 ]]; then
+        echo "    ✓ IPv6端口跳跃规则已删除"
+    fi
+
+    # 保存iptables规则（持久化）
+    if command -v iptables-save >/dev/null 2>&1; then
+        if [[ -d /etc/iptables ]]; then
+            iptables-save > /etc/iptables/rules.v4 2>/dev/null
+        elif [[ -d /etc/sysconfig ]]; then
+            iptables-save > /etc/sysconfig/iptables 2>/dev/null
+        fi
+    fi
+
+    if command -v ip6tables-save >/dev/null 2>&1; then
+        if [[ -d /etc/iptables ]]; then
+            ip6tables-save > /etc/iptables/rules.v6 2>/dev/null
+        elif [[ -d /etc/sysconfig ]]; then
+            ip6tables-save > /etc/sysconfig/ip6tables 2>/dev/null
+        fi
+    fi
+}
+
+# 检查端口跳跃范围是否已被占用
+check_port_hopping_conflict() {
+    local new_range=$1
+    local current_port=$2  # 当前节点的端口（用于排除自己）
+
+    if [[ -z "$new_range" || "$new_range" == "null" ]]; then
+        return 1  # 没有冲突
+    fi
+
+    # 提取新范围
+    local new_start=$(echo "$new_range" | cut -d':' -f1)
+    local new_end=$(echo "$new_range" | cut -d':' -f2)
+
+    # 检查所有现有的Hysteria2节点
+    local existing_ranges=$(jq -r '.nodes[] | select(.protocol == "hysteria2") | select(.extra.port_hopping != null and .extra.port_hopping != "") | "\(.port)|\(.extra.port_hopping)"' "$NODES_FILE" 2>/dev/null)
+
+    while IFS='|' read -r port existing_range; do
+        # 跳过当前节点自己
+        if [[ "$port" == "$current_port" ]]; then
+            continue
+        fi
+
+        # 提取现有范围
+        local exist_start=$(echo "$existing_range" | cut -d':' -f1)
+        local exist_end=$(echo "$existing_range" | cut -d':' -f2)
+
+        # 检查范围是否重叠
+        if [[ $new_start -le $exist_end && $new_end -ge $exist_start ]]; then
+            echo "端口跳跃范围 $new_range 与节点端口 $port 的范围 $existing_range 冲突"
+            return 0  # 有冲突
+        fi
+    done <<< "$existing_ranges"
+
+    return 1  # 没有冲突
+}
+
 # 绑定admin用户到节点（通用函数）
 # 参数: $1=port, $2=protocol
 # 返回: admin用户信息（通过echo）
@@ -1042,6 +1127,16 @@ delete_node() {
     # 执行删除
     local success_count=0
     for port in "${ports_to_delete[@]}"; do
+        # 0. 获取节点信息，检查是否需要清理iptables规则
+        local protocol=$(jq -r ".nodes[] | select(.port == \"$port\") | .protocol" "$NODES_FILE" 2>/dev/null)
+        local port_hopping=$(jq -r ".nodes[] | select(.port == \"$port\") | .extra.port_hopping // \"\"" "$NODES_FILE" 2>/dev/null)
+
+        # 如果是Hysteria2且有端口跳跃，清理iptables规则
+        if [[ "$protocol" == "hysteria2" && -n "$port_hopping" && "$port_hopping" != "null" ]]; then
+            echo "  清理端口跳跃规则: $port_hopping → $port"
+            cleanup_port_hopping_rules "$port" "$port_hopping"
+        fi
+
         # 1. 从节点绑定关系中删除该端口
         if [[ -f "$NODE_USERS_FILE" ]]; then
             update_json_file --arg port "$port" '.bindings = [.bindings[] | select(.port != $port)]' "$NODE_USERS_FILE" 2>/dev/null
@@ -1049,10 +1144,10 @@ delete_node() {
 
         # 2. 从数据库删除节点
         remove_node_info "$port"
-        
+
         # 3. 从配置删除
         remove_inbound_from_config "$port"
-        
+
         ((success_count++))
     done
 
@@ -2822,19 +2917,29 @@ quick_setup_hysteria2() {
 
     local port_hopping=""
     if [[ "$enable_hopping" != "n" && "$enable_hopping" != "N" ]]; then
-        read -p "跳跃端口范围 [默认: 2000:3000]: " hopping_range
-        if [[ -z "$hopping_range" ]]; then
-            # 使用冒号格式（sing-box官方格式）
-            port_hopping="2000:3000"
-        else
-            # 支持减号格式，自动转换为冒号
-            if [[ "$hopping_range" =~ ^[0-9]+-[0-9]+$ ]]; then
-                port_hopping="${hopping_range/-/:}"
+        while true; do
+            read -p "跳跃端口范围 [默认: 2000:3000]: " hopping_range
+            if [[ -z "$hopping_range" ]]; then
+                # 使用冒号格式（sing-box官方格式）
+                port_hopping="2000:3000"
             else
-                port_hopping="$hopping_range"
+                # 支持减号格式，自动转换为冒号
+                if [[ "$hopping_range" =~ ^[0-9]+-[0-9]+$ ]]; then
+                    port_hopping="${hopping_range/-/:}"
+                else
+                    port_hopping="$hopping_range"
+                fi
             fi
-        fi
-        print_success "跳跃端口: $port_hopping"
+
+            # 检查端口跳跃范围是否冲突
+            if check_port_hopping_conflict "$port_hopping" "$port"; then
+                print_warning "该端口跳跃范围与已有节点冲突，请重新输入"
+                continue
+            fi
+
+            print_success "跳跃端口: $port_hopping"
+            break
+        done
     else
         print_info "不启用端口跳跃"
     fi

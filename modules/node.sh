@@ -872,7 +872,7 @@ add_trojan_node() {
     echo ""
 
     # 生成并显示Trojan分享链接
-    generate_and_show_node_link "$port" "$admin_password" "admin"
+    generate_and_show_node_link "$port" "$admin_uuid" "admin"
 
     echo ""
     print_success "✅ 节点创建完成并已绑定admin用户！"
@@ -940,7 +940,7 @@ add_shadowsocks_node() {
     echo ""
 
     # 生成并显示SS分享链接
-    generate_and_show_node_link "$port" "$admin_password" "admin"
+    generate_and_show_node_link "$port" "$admin_uuid" "admin"
 
     echo ""
     print_success "✅ 节点创建完成并已绑定admin用户！"
@@ -1976,7 +1976,7 @@ ${CYAN}端口跳跃配置（可选）：${NC}"
     echo ""
 
     # 生成并显示分享链接（调用统一函数）
-    generate_and_show_node_link "$port" "$admin_password" "$admin_remark"
+    generate_and_show_node_link "$port" "$admin_uuid" "$admin_remark"
 }
 
 # ============================================================================
@@ -2765,8 +2765,8 @@ quick_setup_hysteria2() {
     # 确保证书目录存在
     mkdir -p "${SINGBOX_DIR}/certs/${tls_domain}"
 
-    # 生成自签名证书
-    if ! openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) \
+    # 生成自签名证书（使用RSA 2048位）
+    if ! openssl req -x509 -nodes -newkey rsa:2048 \
         -keyout "${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key" \
         -out "${SINGBOX_DIR}/certs/${tls_domain}/fullchain.cer" \
         -subj "/CN=$tls_domain" \
@@ -2931,16 +2931,26 @@ quick_setup_hysteria2() {
 
         # 保存iptables规则（持久化）
         if command -v iptables-save >/dev/null 2>&1; then
+            local saved=false
             if command -v netfilter-persistent >/dev/null 2>&1; then
-                netfilter-persistent save >/dev/null 2>&1
+                netfilter-persistent save >/dev/null 2>&1 && saved=true
             elif [[ -f /etc/debian_version ]]; then
-                iptables-save > /etc/iptables/rules.v4 2>/dev/null
-                ip6tables-save > /etc/iptables/rules.v6 2>/dev/null
+                # 确保目录存在
+                mkdir -p /etc/iptables 2>/dev/null
+                if iptables-save > /etc/iptables/rules.v4 2>/dev/null && \
+                   ip6tables-save > /etc/iptables/rules.v6 2>/dev/null; then
+                    saved=true
+                fi
             elif [[ -f /etc/redhat-release ]]; then
-                service iptables save >/dev/null 2>&1
-                service ip6tables save >/dev/null 2>&1
+                service iptables save >/dev/null 2>&1 && \
+                service ip6tables save >/dev/null 2>&1 && saved=true
             fi
-            print_success "iptables规则已持久化"
+
+            if [[ "$saved" == "true" ]]; then
+                print_success "iptables规则已持久化"
+            else
+                print_warning "iptables规则持久化失败（规则仍生效但重启后会丢失）"
+            fi
         fi
         echo ""
     fi
@@ -2977,7 +2987,8 @@ quick_setup_hysteria2() {
     echo ""
 
     # 生成并显示分享链接（调用统一函数）
-    generate_and_show_node_link "$port" "$admin_password" "$admin_username"
+    # 对于Hysteria2，传递UUID而不是密码，让generate_share_link_smart自动查找密码
+    generate_and_show_node_link "$port" "$admin_uuid" "$admin_username"
 }
 
 # 快速搭建菜单

@@ -6,6 +6,67 @@
 # 重要：使用sing-box原生格式，不是Xray格式
 #================================================================
 
+# 从WARP配置文件读取密钥信息
+get_warp_config() {
+    local wgcf_profile="/etc/wireguard/wgcf-profile.conf"
+
+    if [[ ! -f "$wgcf_profile" ]]; then
+        print_warning "WARP配置文件不存在: $wgcf_profile"
+        echo "{}"
+        return 1
+    fi
+
+    # 读取Interface段的配置
+    local private_key=$(grep "^PrivateKey" "$wgcf_profile" | cut -d= -f2 | tr -d ' \t\r\n')
+    local address=$(grep "^Address" "$wgcf_profile" | grep -oP '\d+\.\d+\.\d+\.\d+/\d+' | head -1)
+
+    # 读取Peer段的配置
+    local public_key=$(grep "^PublicKey" "$wgcf_profile" | cut -d= -f2 | tr -d ' \t\r\n')
+    local endpoint=$(grep "^Endpoint" "$wgcf_profile" | cut -d= -f2 | tr -d ' \t\r\n')
+
+    # WARP配置读取（静默）
+
+    # 验证必需字段
+    if [[ -z "$private_key" || -z "$public_key" || -z "$endpoint" ]]; then
+        print_error "WARP配置缺少必需字段"
+        echo "{}"
+        return 1
+    fi
+
+    # 验证base64格式（WireGuard密钥应该是44字符的base64）
+    if [[ ${#private_key} -ne 44 ]] || [[ ! "$private_key" =~ ^[A-Za-z0-9+/=]+$ ]]; then
+        print_error "WARP私钥格式无效 (长度: ${#private_key}, 应为44)"
+        echo "{}"
+        return 1
+    fi
+
+    if [[ ${#public_key} -ne 44 ]] || [[ ! "$public_key" =~ ^[A-Za-z0-9+/=]+$ ]]; then
+        print_error "WARP公钥格式无效 (长度: ${#public_key}, 应为44)"
+        echo "{}"
+        return 1
+    fi
+
+    # 分离服务器地址和端口
+    local server=$(echo "$endpoint" | cut -d: -f1)
+    local server_port=$(echo "$endpoint" | cut -d: -f2)
+    server_port=${server_port:-2408}
+
+    # 输出JSON格式
+    jq -n \
+        --arg private_key "$private_key" \
+        --arg public_key "$public_key" \
+        --arg server "$server" \
+        --argjson server_port "$server_port" \
+        --arg address "$address" \
+        '{
+            private_key: $private_key,
+            peer_public_key: $public_key,
+            server: $server,
+            server_port: $server_port,
+            local_address: [$address]
+        }'
+}
+
 # 生成sing-box完整配置文件
 generate_singbox_config() {
     print_info "开始生成 sing-box 配置..."
@@ -261,8 +322,8 @@ generate_singbox_config() {
         print_success "配置文件生成成功: $config_file"
 
         # 验证配置
-        local inbound_count=$(jq '.inbounds | length' "$config_file")
-        local outbound_count=$(jq '.outbounds | length' "$config_file")
+        local inbound_count=$(jq '.inbounds | length' "$config_file" 2>/dev/null || echo "0")
+        local outbound_count=$(jq '.outbounds | length' "$config_file" 2>/dev/null || echo "0")
 
         # 验证WARP配置（新格式：检查endpoints）
         if [[ "$warp_check_count" -gt 0 ]]; then

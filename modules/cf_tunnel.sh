@@ -1591,14 +1591,9 @@ bind_warp_to_node() {
     fi
 
     # 更新节点配置，启用WARP出站
-    echo -e "${CYAN}[调试]${NC} 正在更新节点配置..."
     jq --arg port "$selected_port" \
        '(.nodes[] | select(.port == $port)) |= (. + {warp_outbound: true})' \
        "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
-
-    # 验证更新
-    local warp_status=$(jq -r ".nodes[] | select(.port == \"$selected_port\") | .warp_outbound" "$nodes_file")
-    echo -e "${CYAN}[调试]${NC} 节点端口 $selected_port 的 warp_outbound 状态: $warp_status"
 
     print_success "✅ WARP已关联到节点 (端口: $selected_port)"
     echo ""

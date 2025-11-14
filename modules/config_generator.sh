@@ -79,6 +79,12 @@ generate_singbox_config() {
         echo '{"bindings":[]}' > "$node_users_file"
     fi
 
+    # 提前检查WARP节点（避免悖论：只有配置成功才能看到WARP信息）
+    local warp_check_count=$(jq -r '[.nodes[] | select(.warp_outbound == true)] | length' "$nodes_file" 2>/dev/null)
+    if [[ "$warp_check_count" -gt 0 ]]; then
+        print_success "→ 检测到 $warp_check_count 个节点已启用WARP出站"
+    fi
+
     # 生成inbounds配置
     local inbounds="[]"
     local node_count=$(jq '.nodes | length' "$nodes_file")
@@ -191,13 +197,12 @@ generate_singbox_config() {
         done < <(jq -c '.nodes[]' "$nodes_file" 2>/dev/null)
     fi
 
-    # 检查是否有节点启用WARP
+    # 检查是否有节点启用WARP（用于配置生成）
     local warp_enabled_count=$(jq -r '[.nodes[] | select(.warp_outbound == true)] | length' "$nodes_file" 2>/dev/null)
 
     local has_warp="false"
     if [[ "$warp_enabled_count" -gt 0 ]]; then
         has_warp="true"
-        print_info "检测到 $warp_enabled_count 个节点启用WARP出站"
     fi
 
     # 获取WARP配置
@@ -281,16 +286,20 @@ generate_singbox_config() {
         # 验证配置
         local inbound_count=$(jq '.inbounds | length' "$config_file")
         local outbound_count=$(jq '.outbounds | length' "$config_file")
-        print_info "配置统计:"
-        print_info "  入站数量: $inbound_count"
-        print_info "  出站数量: $outbound_count"
 
-        # 检查WARP出站
-        local warp_out_exists=$(jq -r '.outbounds[] | select(.tag == "warp-out") | .tag' "$config_file" 2>/dev/null)
-        if [[ -n "$warp_out_exists" ]]; then
-            local warp_detour_count=$(jq -r '[.inbounds[] | select(.detour == "warp-out")] | length' "$config_file")
-            print_success "  ✓ WARP出站已添加 (绑定节点数: $warp_detour_count)"
+        # 验证WARP配置
+        if [[ "$warp_check_count" -gt 0 ]]; then
+            local warp_out_exists=$(jq -r '.outbounds[] | select(.tag == "warp-out") | .tag' "$config_file" 2>/dev/null)
+            if [[ -n "$warp_out_exists" ]]; then
+                local warp_detour_count=$(jq -r '[.inbounds[] | select(.detour == "warp-out")] | length' "$config_file")
+                print_success "→ WARP出站配置成功 (配置了 $warp_detour_count 个节点)"
+            else
+                print_error "→ WARP出站配置失败！已启用WARP的节点未添加到配置文件"
+                print_warning "   请检查WARP配置文件: /etc/wireguard/wgcf-profile.conf"
+            fi
         fi
+
+        print_info "配置统计: 入站=$inbound_count, 出站=$outbound_count"
 
         return 0
     else

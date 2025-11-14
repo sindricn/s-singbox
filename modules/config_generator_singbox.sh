@@ -51,12 +51,6 @@ generate_singbox_config() {
 
             print_info "  处理节点: $protocol/$port (security: $security)"
 
-            # 调试：显示extra内容
-            if [[ "$security" == "reality" ]]; then
-                echo "    [调试] extra类型: $(echo "$extra" | jq type 2>/dev/null || echo 'invalid')"
-                echo "    [调试] extra内容: $(echo "$extra" | jq -c '.' 2>/dev/null || echo 'parse error')"
-            fi
-
             # 获取该节点的用户列表
             local user_uuids=$(jq -r ".bindings[] | select(.port == \"$port\") | .users[]" "$node_users_file" 2>/dev/null)
 
@@ -84,7 +78,6 @@ generate_singbox_config() {
                                     flow="xtls-rprx-vision"
                                 fi
 
-                                echo "      [调试] VLESS用户: $username, security=$security, flow=$flow" >&2
 
                                 if [[ -n "$flow" ]]; then
                                     user_item=$(jq -n \
@@ -98,7 +91,6 @@ generate_singbox_config() {
                                         --arg uuid "$uuid" \
                                         '{name: $name, uuid: $uuid}')
                                 fi
-                                echo "      [调试] user_item: $(echo "$user_item" | jq -c .)" >&2
                                 ;;
                             vmess)
                                 user_item=$(jq -n \
@@ -248,7 +240,6 @@ generate_singbox_inbound() {
 
             # 添加TLS配置
             if [[ "$security" == "tls" || "$security" == "reality" ]]; then
-                echo "    [调试] 开始生成TLS配置 (security=$security)" >&2
                 local tls_config
                 tls_config=$(generate_singbox_tls_config "$security" "$extra")
                 local tls_exit_code=$?
@@ -258,8 +249,6 @@ generate_singbox_inbound() {
                     return 1
                 fi
 
-                echo "    [调试] TLS配置生成成功，长度: ${#tls_config}" >&2
-                echo "    [调试] 合并TLS配置到inbound..." >&2
 
                 local merged_inbound
                 merged_inbound=$(echo "$inbound" | jq --argjson tls "$tls_config" '. + {tls: $tls}' 2>&1)
@@ -268,12 +257,10 @@ generate_singbox_inbound() {
                 if [[ $merge_exit_code -ne 0 ]]; then
                     echo "    [错误] 合并TLS配置失败，退出码: $merge_exit_code" >&2
                     echo "    [错误] jq输出: $merged_inbound" >&2
-                    echo "    [调试] tls_config内容: $tls_config" >&2
                     return 1
                 fi
 
                 inbound="$merged_inbound"
-                echo "    [调试] TLS配置合并成功" >&2
             fi
 
             # 添加传输层配置
@@ -382,13 +369,11 @@ generate_singbox_inbound() {
             local obfs_password=$(echo "$extra" | jq -r '.obfs_password // ""')
             local port_hopping=$(echo "$extra" | jq -r '.port_hopping // ""')
 
-            echo "    [调试] Hysteria2配置: up_mbps=$up_mbps, down_mbps=$down_mbps, obfs_password=${obfs_password:0:10}***, port_hopping=$port_hopping" >&2
 
             # 构建基础配置
             # 端口跳跃通过iptables实现，配置中只使用单端口监听
             if [[ $up_mbps -eq 0 && $down_mbps -eq 0 ]]; then
                 # 不限速配置（不包含up_mbps和down_mbps字段）
-                echo "    [调试] Hysteria2: 不限速模式" >&2
                 inbound=$(jq -n \
                     --arg type "hysteria2" \
                     --arg tag "hysteria2-$port" \
@@ -404,7 +389,6 @@ generate_singbox_inbound() {
                     }')
             else
                 # 有速率限制
-                echo "    [调试] Hysteria2: 限速模式 ${up_mbps}/${down_mbps} Mbps" >&2
                 inbound=$(jq -n \
                     --arg type "hysteria2" \
                     --arg tag "hysteria2-$port" \
@@ -424,21 +408,14 @@ generate_singbox_inbound() {
                     }')
             fi
 
-            # 端口跳跃信息保存在extra中，用于设置iptables规则
-            if [[ -n "$port_hopping" && "$port_hopping" != "null" ]]; then
-                echo "    [调试] Hysteria2: 端口跳跃 $port_hopping (通过iptables转发到端口 $port)" >&2
-            fi
-
             local jq_exit=$?
             if [[ $jq_exit -ne 0 ]]; then
                 echo "    [错误] Hysteria2 inbound生成失败" >&2
                 return 1
             fi
-            echo "    [调试] Hysteria2 inbound基础配置生成成功" >&2
 
             # 添加混淆配置
             if [[ -n "$obfs_password" && "$obfs_password" != "null" ]]; then
-                echo "    [调试] 添加Salamander混淆配置..." >&2
                 local obfs_config
                 obfs_config=$(jq -n \
                     --arg password "$obfs_password" \
@@ -453,7 +430,6 @@ generate_singbox_inbound() {
                     return 1
                 fi
 
-                echo "    [调试] Obfs配置: $(echo "$obfs_config" | jq -c .)" >&2
 
                 local merged
                 merged=$(echo "$inbound" | jq --argjson obfs "$obfs_config" '. + {obfs: $obfs}' 2>&1)
@@ -465,11 +441,9 @@ generate_singbox_inbound() {
                 fi
 
                 inbound="$merged"
-                echo "    [调试] Obfs配置合并成功" >&2
             fi
 
             # Hysteria2 必须启用TLS
-            echo "    [调试] 开始生成Hysteria2 TLS配置..." >&2
             local tls_config
             tls_config=$(generate_singbox_tls_config "tls" "$extra")
             local tls_exit=$?
@@ -479,8 +453,6 @@ generate_singbox_inbound() {
                 return 1
             fi
 
-            echo "    [调试] Hysteria2 TLS配置生成成功，长度: ${#tls_config}" >&2
-            echo "    [调试] TLS配置内容: $(echo "$tls_config" | jq -c .)" >&2
 
             local merged
             merged=$(echo "$inbound" | jq --argjson tls "$tls_config" '. + {tls: $tls}' 2>&1)
@@ -493,7 +465,6 @@ generate_singbox_inbound() {
             fi
 
             inbound="$merged"
-            echo "    [调试] Hysteria2 TLS配置合并成功" >&2
 
             # 添加伪装配置
             local masquerade=$(echo "$extra" | jq -r '.masquerade // "https://bing.com"')
@@ -590,8 +561,6 @@ generate_singbox_tls_config() {
             local private_key=$(echo "$extra" | jq -r '.private_key // ""')
 
             # 调试输出（重定向到stderr避免污染返回值）
-            echo "    [调试] 提取的private_key: [$private_key]" >&2
-            echo "    [调试] private_key长度: ${#private_key}" >&2
 
             local short_id_json
             # 修复：移除空字符串，避免sing-box启动失败
@@ -630,11 +599,6 @@ generate_singbox_tls_config() {
                 server_name="$server"
             fi
 
-            echo "    [调试] 准备生成Reality TLS配置..." >&2
-            echo "    [调试] server=$server, server_port=$server_port" >&2
-            echo "    [调试] server_name=$server_name (SNI)" >&2
-            echo "    [调试] private_key长度=${#private_key}" >&2
-            echo "    [调试] short_id_json=$short_id_json" >&2
 
             tls_config=$(jq -n \
                 --argjson enabled true \
@@ -664,7 +628,6 @@ generate_singbox_tls_config() {
                 return 1
             fi
 
-            echo "    [调试] Reality TLS配置生成成功" >&2
             ;;
 
         tls)
@@ -673,7 +636,6 @@ generate_singbox_tls_config() {
             local key_path=$(echo "$extra" | jq -r '.tls_key // ""')
             local tls_domain=$(echo "$extra" | jq -r '.tls_domain // ""')
 
-            echo "    [调试] TLS配置: domain=$tls_domain, cert=$cert_path, key=$key_path" >&2
 
             if [[ -n "$cert_path" && -n "$key_path" ]]; then
                 # 完整TLS配置（带证书）
@@ -706,7 +668,6 @@ generate_singbox_tls_config() {
                     echo "    [错误] TLS配置生成失败" >&2
                     return 1
                 fi
-                echo "    [调试] TLS配置生成成功: $(echo "$tls_config" | jq -c .)" >&2
             else
                 echo "    [警告] 缺少证书路径，使用基本TLS配置" >&2
                 # 没有证书路径，返回基本TLS配置

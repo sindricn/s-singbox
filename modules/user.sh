@@ -1317,7 +1317,6 @@ show_online_users() {
         ((checked_count++))
 
         if [[ "$debug_mode" == "true" ]]; then
-            echo -e "\n${YELLOW}[调试] 检查用户 #$checked_count: $username${NC}"
             echo "  UUID: $uuid"
             echo "  Enabled: $enabled"
         fi

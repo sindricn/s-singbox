@@ -20,13 +20,13 @@ get_warp_config() {
     echo "[DEBUG] WARP配置文件前10行:" >&2
     head -10 "$wgcf_profile" | sed 's/^/  /' >&2
 
-    # 读取Interface段的配置（兼容多种格式）
-    local private_key=$(grep -i "^[[:space:]]*PrivateKey" "$wgcf_profile" | cut -d= -f2 | tr -d ' \t\r\n')
+    # 读取Interface段的配置（兼容多种格式，保留密钥末尾的=填充）
+    local private_key=$(grep -i "^[[:space:]]*PrivateKey" "$wgcf_profile" | cut -d= -f2- | tr -d ' \t\r\n')
     local address=$(grep -i "^[[:space:]]*Address" "$wgcf_profile" | grep -oP '\d+\.\d+\.\d+\.\d+/\d+' | head -1)
 
     # 读取Peer段的配置
-    local public_key=$(grep -i "^[[:space:]]*PublicKey" "$wgcf_profile" | cut -d= -f2 | tr -d ' \t\r\n')
-    local endpoint=$(grep -i "^[[:space:]]*Endpoint" "$wgcf_profile" | cut -d= -f2 | tr -d ' \t\r\n')
+    local public_key=$(grep -i "^[[:space:]]*PublicKey" "$wgcf_profile" | cut -d= -f2- | tr -d ' \t\r\n')
+    local endpoint=$(grep -i "^[[:space:]]*Endpoint" "$wgcf_profile" | cut -d= -f2- | tr -d ' \t\r\n')
 
     # 调试输出（临时）
     echo "[DEBUG] WARP配置读取:" >&2
@@ -42,15 +42,15 @@ get_warp_config() {
         return 1
     fi
 
-    # 验证base64格式（WireGuard密钥应该是44字符的base64）
+    # 验证base64格式（WireGuard密钥应该是44字符）
     if [[ ${#private_key} -ne 44 ]] || [[ ! "$private_key" =~ ^[A-Za-z0-9+/=]+$ ]]; then
-        print_error "WARP私钥格式无效 (长度: ${#private_key}, 应为44)" >&2
+        print_error "WARP私钥格式无效 (长度: ${#private_key}, 应为44字符)" >&2
         echo "{}"
         return 1
     fi
 
     if [[ ${#public_key} -ne 44 ]] || [[ ! "$public_key" =~ ^[A-Za-z0-9+/=]+$ ]]; then
-        print_error "WARP公钥格式无效 (长度: ${#public_key}, 应为44)" >&2
+        print_error "WARP公钥格式无效 (长度: ${#public_key}, 应为44字符)" >&2
         echo "{}"
         return 1
     fi

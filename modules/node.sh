@@ -1588,6 +1588,13 @@ save_node_info() {
     local extra_config=$5  # JSON格式的额外配置（Reality参数等）
     local name=$6          # 节点名称（可选，如果为空则自动生成）
 
+    echo "[调试 save_node_info] 函数被调用"
+    echo "[调试 save_node_info] protocol=$protocol"
+    echo "[调试 save_node_info] port=$port"
+    echo "[调试 save_node_info] transport=$transport"
+    echo "[调试 save_node_info] security=$security"
+    echo "[调试 save_node_info] name=$name"
+
     # 验证并修复节点文件
     if ! validate_json_file "$NODES_FILE"; then
         print_warning "节点文件格式错误，尝试修复..."
@@ -1623,11 +1630,18 @@ save_node_info() {
         --argjson extra "$extra_config" \
         '{name: $name, protocol: $protocol, port: $port, transport: $transport, security: $security, extra: $extra, created: (now|todate)}')
 
+    echo "[调试 save_node_info] 生成的node_data:"
+    echo "$node_data" | jq -c '.'
+    echo "[调试 save_node_info] 提取的port字段: $(echo "$node_data" | jq -r '.port')"
+
     # 读取现有数据
     local current_data=$(cat "$NODES_FILE")
 
     # 添加新节点
     echo "$current_data" | jq ".nodes += [$node_data]" > "$NODES_FILE"
+
+    echo "[调试 save_node_info] 节点已保存到文件"
+    echo "[调试 save_node_info] 验证保存结果: $(jq -r ".nodes[] | select(.protocol == \"$protocol\" and .name == \"$name\") | .port" "$NODES_FILE" 2>/dev/null)"
 }
 
 # 从数据库删除节点
@@ -3046,6 +3060,7 @@ quick_setup_hysteria2() {
     fi
 
     # 保存节点信息
+    echo "[调试] 准备保存节点，port=$port"
     save_node_info "hysteria2" "$port" "udp" "tls" "$extra_config" "hy2-$port"
     if [[ $? -ne 0 ]]; then
         print_error "保存节点信息失败"
@@ -3053,8 +3068,10 @@ quick_setup_hysteria2() {
         rm -f "$tls_cert" "$tls_key"
         return 1
     fi
+    echo "[调试] 节点保存完成，port=$port"
 
     # 绑定 admin 用户到节点
+    echo "[调试] 准备绑定admin用户，port=$port"
     local admin_info=$(bind_admin_to_node "$port" "hysteria2")
     if [[ $? -ne 0 ]]; then
         print_error "绑定默认用户失败，正在回滚..."
@@ -3067,8 +3084,10 @@ quick_setup_hysteria2() {
     fi
 
     IFS='|' read -r admin_uuid admin_password admin_username <<< "$admin_info"
+    echo "[调试] admin信息读取完成，port=$port, admin_uuid=$admin_uuid"
 
     # 重新生成sing-box配置文件
+    echo "[调试] 准备生成配置文件，port=$port"
     generate_singbox_config
     if [[ $? -ne 0 ]]; then
         print_error "生成配置文件失败，正在回滚..."
@@ -3082,10 +3101,13 @@ quick_setup_hysteria2() {
         return 1
     fi
 
+    echo "[调试] 配置文件生成完成，port=$port"
+
     # 配置端口跳跃（如果启用）
     if [[ -n "$port_hopping" ]]; then
         echo ""
         echo -e "${BLUE}配置端口跳跃iptables规则...${NC}"
+        echo "[调试] 准备配置端口跳跃，port=$port, port_hopping=$port_hopping"
 
         # 提取端口范围的起始和结束端口（冒号分隔）
         local start_port=$(echo "$port_hopping" | cut -d':' -f1)
@@ -3145,11 +3167,13 @@ quick_setup_hysteria2() {
     fi
 
     # 重启服务
+    echo "[调试] 准备重启sing-box，port=$port"
     restart_sing-box
     if [[ $? -ne 0 ]]; then
         print_error "sing-box 启动失败"
         return 1
     fi
+    echo "[调试] sing-box重启完成，port=$port"
 
     echo ""
     echo -e "${GREEN}═══════════════════════════════════${NC}"
@@ -3157,6 +3181,7 @@ quick_setup_hysteria2() {
     echo -e "${GREEN}═══════════════════════════════════${NC}"
     echo ""
     echo -e "${CYAN}节点信息：${NC}"
+    echo "[调试] 准备显示端口信息，port变量值='$port'"
     echo -e "  端口: ${YELLOW}$port${NC}"
     if [[ -n "$port_hopping" ]]; then
         echo -e "  跳跃端口: ${YELLOW}$port_hopping${NC}"

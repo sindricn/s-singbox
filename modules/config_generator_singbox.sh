@@ -98,7 +98,6 @@ generate_singbox_config() {
 
     # 生成inbounds配置
     local inbounds="[]"
-    local warp_inbound_tags="[]"
     local node_count=$(jq '.nodes | length' "$nodes_file")
 
     if [[ $node_count -eq 0 ]]; then
@@ -206,11 +205,9 @@ generate_singbox_config() {
                 return 1
             fi
 
-            # 如果节点启用了WARP出站，记录tag（后续在路由规则中使用）
+            # 如果节点启用了WARP出站，添加 detour 引用 endpoint
             if [[ "$warp_outbound" == "true" ]]; then
-                # 将该inbound的tag添加到WARP标签列表
-                local inbound_tag="${protocol}-${port}"
-                warp_inbound_tags=$(echo "$warp_inbound_tags" | jq ". += [\"$inbound_tag\"]")
+                inbound=$(echo "$inbound" | jq '. + {detour: "warp-ep"}')
             fi
 
             # 添加到inbounds列表
@@ -248,7 +245,6 @@ generate_singbox_config() {
         --argjson inbounds "$inbounds" \
         --argjson warp_cfg "$warp_config" \
         --argjson has_warp "$has_warp" \
-        --argjson warp_inbound_tags "$warp_inbound_tags" \
         '{
             log: {
                 disabled: false,
@@ -274,54 +270,48 @@ generate_singbox_config() {
                 final: "dns-remote"
             },
             inbounds: $inbounds,
-            outbounds: (
-                [
-                    {
-                        type: "direct",
-                        tag: "direct-out"
-                    },
-                    {
-                        type: "block",
-                        tag: "block-out"
-                    }
-                ] + (
-                    if $has_warp then
-                        [{
-                            type: "wireguard",
-                            tag: "warp-out",
-                            server: ($warp_cfg.server // "engage.cloudflareclient.com"),
-                            server_port: ($warp_cfg.server_port // 2408),
-                            local_address: ($warp_cfg.local_address // ["172.16.0.2/32"]),
-                            private_key: ($warp_cfg.private_key // ""),
-                            peer_public_key: ($warp_cfg.peer_public_key // "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="),
-                            mtu: 1280
-                        }]
-                    else
-                        []
-                    end
-                )
+            endpoints: (
+                if $has_warp then
+                    [{
+                        type: "wireguard",
+                        tag: "warp-ep",
+                        name: "wgcf",
+                        mtu: 1280,
+                        address: ($warp_cfg.local_address // ["172.16.0.2/32"]),
+                        private_key: ($warp_cfg.private_key // ""),
+                        peers: [
+                            {
+                                address: ($warp_cfg.server // "engage.cloudflareclient.com"),
+                                port: ($warp_cfg.server_port // 2408),
+                                public_key: ($warp_cfg.peer_public_key // "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="),
+                                allowed_ips: ["0.0.0.0/0", "::/0"],
+                                reserved: [0, 0, 0]
+                            }
+                        ]
+                    }]
+                else
+                    []
+                end
             ),
+            outbounds: [
+                {
+                    type: "direct",
+                    tag: "direct-out"
+                },
+                {
+                    type: "block",
+                    tag: "block-out"
+                }
+            ],
             route: {
                 default_domain_resolver: "dns-local",
-                rules: (
-                    [
-                        {
-                            protocol: "dns",
-                            action: "route",
-                            outbound: "direct-out"
-                        }
-                    ] + (
-                        if ($has_warp and ($warp_inbound_tags | length) > 0) then
-                            [$warp_inbound_tags | {
-                                inbound: .,
-                                action: "route",
-                                outbound: "warp-out"
-                            }]
-                        else
-                            []
-                        end
-                    )
-                ),
+                rules: [
+                    {
+                        protocol: "dns",
+                        action: "route",
+                        outbound: "direct-out"
+                    }
+                ],
                 final: "direct-out",
                 auto_detect_interface: true
             }
@@ -337,14 +327,14 @@ generate_singbox_config() {
         local inbound_count=$(jq '.inbounds | length' "$config_file" 2>/dev/null || echo "0")
         local outbound_count=$(jq '.outbounds | length' "$config_file" 2>/dev/null || echo "0")
 
-        # 验证WARP配置（检查wireguard outbound和路由规则）
+        # 验证WARP配置（检查wireguard endpoint和inbound detour）
         if [[ "$warp_check_count" -gt 0 ]]; then
-            local warp_out_exists=$(jq -r '.outbounds[]? | select(.tag == "warp-out" and .type == "wireguard") | .tag' "$config_file" 2>/dev/null)
-            if [[ -n "$warp_out_exists" ]]; then
-                local warp_route_count=$(jq -r '[.route.rules[] | select(.outbound == "warp-out")] | length' "$config_file" 2>/dev/null)
-                print_success "→ WARP配置成功 (wireguard outbound + $warp_route_count 条路由规则)"
+            local warp_ep_exists=$(jq -r '.endpoints[]? | select(.tag == "warp-ep" and .type == "wireguard") | .tag' "$config_file" 2>/dev/null)
+            if [[ -n "$warp_ep_exists" ]]; then
+                local warp_detour_count=$(jq -r '[.inbounds[] | select(.detour == "warp-ep")] | length' "$config_file" 2>/dev/null)
+                print_success "→ WARP配置成功 (wireguard endpoint + $warp_detour_count 个inbound绑定)"
             else
-                print_error "→ WARP配置失败！缺少 wireguard outbound"
+                print_error "→ WARP配置失败！缺少 wireguard endpoint"
             fi
         fi
 

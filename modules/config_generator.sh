@@ -17,18 +17,31 @@ get_warp_config() {
     fi
 
     # 读取Interface段的配置
-    local private_key=$(grep "^PrivateKey" "$wgcf_profile" | cut -d= -f2 | tr -d ' ' | tr -d '\r')
+    local private_key=$(grep "^PrivateKey" "$wgcf_profile" | cut -d= -f2 | tr -d ' \t\r\n')
     local address=$(grep "^Address" "$wgcf_profile" | grep -oP '\d+\.\d+\.\d+\.\d+/\d+' | head -1)
 
     # 读取Peer段的配置
-    local public_key=$(grep "^PublicKey" "$wgcf_profile" | cut -d= -f2 | tr -d ' ' | tr -d '\r')
-    local endpoint=$(grep "^Endpoint" "$wgcf_profile" | cut -d= -f2 | tr -d ' ' | tr -d '\r')
+    local public_key=$(grep "^PublicKey" "$wgcf_profile" | cut -d= -f2 | tr -d ' \t\r\n')
+    local endpoint=$(grep "^Endpoint" "$wgcf_profile" | cut -d= -f2 | tr -d ' \t\r\n')
 
     # WARP配置读取（静默）
 
     # 验证必需字段
     if [[ -z "$private_key" || -z "$public_key" || -z "$endpoint" ]]; then
         print_error "WARP配置缺少必需字段"
+        echo "{}"
+        return 1
+    fi
+
+    # 验证base64格式（WireGuard密钥应该是44字符的base64）
+    if [[ ${#private_key} -ne 44 ]] || [[ ! "$private_key" =~ ^[A-Za-z0-9+/=]+$ ]]; then
+        print_error "WARP私钥格式无效 (长度: ${#private_key}, 应为44)"
+        echo "{}"
+        return 1
+    fi
+
+    if [[ ${#public_key} -ne 44 ]] || [[ ! "$public_key" =~ ^[A-Za-z0-9+/=]+$ ]]; then
+        print_error "WARP公钥格式无效 (长度: ${#public_key}, 应为44)"
         echo "{}"
         return 1
     fi

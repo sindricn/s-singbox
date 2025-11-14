@@ -347,7 +347,7 @@ start_temp_argo_tunnel() {
                '(.nodes[] | select(.port == $port)) |= (
                    . + {
                        tunnel_domain: $domain,
-                       tunnel_name: "temp-tunnel-" + $pid,
+                       tunnel_name: ("temp-tunnel-" + $pid),
                        tunnel_type: "argo_temp"
                    }
                )' \

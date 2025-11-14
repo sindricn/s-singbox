@@ -5,6 +5,38 @@
 # 功能：查看配置、编辑配置、备份配置、恢复配置、验证配置
 #================================================================
 
+# 清理所有Hysteria2端口跳跃的iptables规则
+cleanup_all_port_hopping_rules() {
+    if [[ ! -f "$NODES_FILE" ]]; then
+        return 0
+    fi
+
+    local hy2_nodes=$(jq -r '.nodes[] | select(.protocol == "hysteria2") | select(.extra.port_hopping != null and .extra.port_hopping != "") | "\(.port)|\(.extra.port_hopping)"' "$NODES_FILE" 2>/dev/null)
+
+    if [[ -z "$hy2_nodes" ]]; then
+        return 0
+    fi
+
+    while IFS='|' read -r port port_hopping; do
+        [[ -z "$port" || -z "$port_hopping" ]] && continue
+        echo "  清理端口 $port 的跳跃规则: $port_hopping"
+
+        # 调用清理函数（如果存在）
+        if declare -f cleanup_port_hopping_rules >/dev/null 2>&1; then
+            cleanup_port_hopping_rules "$port" "$port_hopping"
+        else
+            # 手动清理
+            local start_port=$(echo "$port_hopping" | cut -d':' -f1)
+            local end_port=$(echo "$port_hopping" | cut -d':' -f2)
+            local main_interface=$(ip route | grep default | head -n1 | awk '{print $5}')
+            [[ -z "$main_interface" ]] && main_interface="eth0"
+
+            iptables -t nat -D PREROUTING -i "$main_interface" -p udp --dport ${start_port}:${end_port} -j REDIRECT --to-ports $port 2>/dev/null
+            ip6tables -t nat -D PREROUTING -i "$main_interface" -p udp --dport ${start_port}:${end_port} -j REDIRECT --to-ports $port 2>/dev/null
+        fi
+    done <<< "$hy2_nodes"
+}
+
 # 查看当前配置
 show_config() {
     clear
@@ -361,7 +393,13 @@ reset_nodes() {
         return 0
     fi
 
+    # 清理Hysteria2端口跳跃的iptables规则
+    print_info "清理端口跳跃规则..."
+    cleanup_all_port_hopping_rules
+    print_success "端口跳跃规则清理完成"
+
     # 备份
+    print_info "备份节点数据..."
     if [[ -f "$NODES_FILE" ]]; then
         cp "$NODES_FILE" "${NODES_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
     fi
@@ -409,7 +447,13 @@ reset_all_data() {
         return 0
     fi
 
+    # 清理Hysteria2端口跳跃的iptables规则
+    print_info "清理端口跳跃规则..."
+    cleanup_all_port_hopping_rules
+    print_success "端口跳跃规则清理完成"
+
     # 备份所有数据
+    print_info "备份现有数据..."
     if [[ -f "$USERS_FILE" ]]; then
         cp "$USERS_FILE" "${USERS_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
     fi

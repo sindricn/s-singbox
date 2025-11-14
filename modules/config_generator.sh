@@ -104,8 +104,8 @@ generate_singbox_config() {
 
             print_info "  处理节点: $protocol/$port (security: $security, warp: $warp_outbound)"
 
-            # 获取该节点的用户列表（兼容字符串和数字端口）
-            local user_uuids=$(jq -r ".bindings[] | select(.port == \"$port\" or .port == $port) | .users[]" "$node_users_file" 2>/dev/null)
+            # 获取该节点的用户列表
+            local user_uuids=$(jq -r ".bindings[] | select(.port == \"$port\") | .users[]" "$node_users_file" 2>/dev/null)
 
             # 生成users列表（sing-box格式）
             local users="[]"
@@ -198,7 +198,15 @@ generate_singbox_config() {
     fi
 
     # 检查是否有节点启用WARP
-    local has_warp=$(jq -r '[.nodes[] | select(.warp_outbound == true)] | length > 0' "$nodes_file" 2>/dev/null)
+    print_info "检查WARP出站配置..."
+    local warp_enabled_count=$(jq -r '[.nodes[] | select(.warp_outbound == true)] | length' "$nodes_file" 2>/dev/null)
+    print_info "  启用WARP的节点数: $warp_enabled_count"
+
+    local has_warp="false"
+    if [[ "$warp_enabled_count" -gt 0 ]]; then
+        has_warp="true"
+    fi
+    print_info "  has_warp=$has_warp"
 
     # 获取WARP配置
     local warp_config="{}"
@@ -207,7 +215,11 @@ generate_singbox_config() {
         warp_config=$(get_warp_config)
         if [[ "$warp_config" == "{}" ]]; then
             print_warning "WARP配置不存在或无效，将使用默认配置"
+        else
+            print_success "WARP配置读取成功"
         fi
+    else
+        print_info "没有节点启用WARP，跳过WARP配置"
     fi
 
     # 生成完整配置（sing-box 1.11.0+ 兼容格式）
@@ -278,6 +290,24 @@ generate_singbox_config() {
 
     if [[ $? -eq 0 ]]; then
         print_success "配置文件生成成功: $config_file"
+
+        # 验证配置
+        local inbound_count=$(jq '.inbounds | length' "$config_file")
+        local outbound_count=$(jq '.outbounds | length' "$config_file")
+        print_info "配置统计:"
+        print_info "  入站数量: $inbound_count"
+        print_info "  出站数量: $outbound_count"
+
+        # 检查WARP出站
+        local warp_out_exists=$(jq -r '.outbounds[] | select(.tag == "warp-out") | .tag' "$config_file" 2>/dev/null)
+        if [[ -n "$warp_out_exists" ]]; then
+            print_success "  ✓ WARP出站已添加到配置"
+            local warp_detour_count=$(jq -r '[.inbounds[] | select(.detour == "warp-out")] | length' "$config_file")
+            print_info "  绑定WARP的节点数: $warp_detour_count"
+        else
+            print_info "  未添加WARP出站（无节点启用）"
+        fi
+
         return 0
     else
         print_error "配置文件生成失败"

@@ -89,6 +89,119 @@ uninstall_cloudflared() {
 # Argo 临时隧道管理
 # ============================================================================
 
+# Argo隧道保活脚本路径
+readonly ARGO_KEEPALIVE_SCRIPT="/usr/local/bin/argo-keepalive.sh"
+
+# 创建Argo隧道保活脚本
+create_argo_keepalive_script() {
+    cat > "$ARGO_KEEPALIVE_SCRIPT" << 'EOF'
+#!/bin/bash
+# Argo临时隧道保活脚本
+# 每5分钟检查一次隧道状态，如果隧道进程消失则自动重启
+
+CLOUDFLARED_BIN="/usr/local/bin/cloudflared"
+DATA_DIR="/var/lib/sing-box/data"
+TUNNELS_FILE="${DATA_DIR}/argo_temp_tunnels.json"
+
+# 检查并重启隧道
+check_and_restart_tunnels() {
+    [[ ! -f "$TUNNELS_FILE" ]] && return
+
+    while IFS= read -r tunnel; do
+        local pid=$(echo "$tunnel" | jq -r '.pid')
+        local port=$(echo "$tunnel" | jq -r '.port')
+        local log_file="/tmp/argo-tunnel-${port}.log"
+
+        # 检查进程是否存在
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo "[$(date)] 隧道PID $pid (端口$port) 已停止，正在重启..."
+
+            # 重启隧道
+            nohup "$CLOUDFLARED_BIN" tunnel --url "http://localhost:${port}" > "$log_file" 2>&1 &
+            local new_pid=$!
+
+            # 等待启动
+            sleep 3
+
+            if kill -0 "$new_pid" 2>/dev/null; then
+                # 更新PID
+                local tmp_file=$(mktemp)
+                jq --arg old_pid "$pid" --arg new_pid "$new_pid" \
+                   '(.tunnels[] | select(.pid == $old_pid)) |= (.pid = $new_pid)' \
+                   "$TUNNELS_FILE" > "$tmp_file" && mv "$tmp_file" "$TUNNELS_FILE"
+
+                echo "[$(date)] 隧道已重启，新PID: $new_pid"
+            else
+                echo "[$(date)] 隧道重启失败"
+            fi
+        fi
+    done < <(jq -c '.tunnels[]' "$TUNNELS_FILE" 2>/dev/null)
+}
+
+# 主循环
+while true; do
+    check_and_restart_tunnels
+    sleep 300  # 5分钟
+done
+EOF
+
+    chmod +x "$ARGO_KEEPALIVE_SCRIPT"
+}
+
+# 启动保活服务
+start_argo_keepalive_service() {
+    # 检查保活脚本是否存在
+    if [[ ! -f "$ARGO_KEEPALIVE_SCRIPT" ]]; then
+        create_argo_keepalive_script
+    fi
+
+    # 检查服务是否已运行
+    if pgrep -f "argo-keepalive.sh" > /dev/null; then
+        return 0
+    fi
+
+    # 启动保活服务
+    nohup "$ARGO_KEEPALIVE_SCRIPT" > /dev/null 2>&1 &
+    print_info "Argo隧道保活服务已启动"
+}
+
+# 停止保活服务
+stop_argo_keepalive_service() {
+    pkill -f "argo-keepalive.sh"
+    print_info "Argo隧道保活服务已停止"
+}
+
+# 记录临时隧道信息
+# 参数: $1=pid, $2=port
+save_temp_tunnel_info() {
+    local pid=$1
+    local port=$2
+    local tunnels_file="${DATA_DIR}/argo_temp_tunnels.json"
+
+    # 初始化文件
+    if [[ ! -f "$tunnels_file" ]]; then
+        echo '{"tunnels":[]}' > "$tunnels_file"
+    fi
+
+    # 添加隧道信息
+    local tmp_file=$(mktemp)
+    jq --arg pid "$pid" --arg port "$port" \
+       '.tunnels += [{pid: $pid, port: $port, created: now}]' \
+       "$tunnels_file" > "$tmp_file" && mv "$tmp_file" "$tunnels_file"
+}
+
+# 移除临时隧道信息
+remove_temp_tunnel_info() {
+    local pid=$1
+    local tunnels_file="${DATA_DIR}/argo_temp_tunnels.json"
+
+    if [[ -f "$tunnels_file" ]]; then
+        local tmp_file=$(mktemp)
+        jq --arg pid "$pid" 'del(.tunnels[] | select(.pid == $pid))' \
+           "$tunnels_file" > "$tmp_file" && mv "$tmp_file" "$tunnels_file"
+    fi
+}
+
 # 启动临时 Argo 隧道
 start_temp_argo_tunnel() {
     clear
@@ -108,17 +221,69 @@ start_temp_argo_tunnel() {
         fi
     fi
 
-    # 输入本地服务端口
-    read -p "请输入本地服务端口 [例如: 8080]: " local_port
-    if [[ -z "$local_port" ]]; then
-        print_error "端口不能为空"
-        return 1
-    fi
+    # 询问是直接指定端口还是选择节点
+    echo ""
+    echo -e "${YELLOW}隧道配置方式：${NC}"
+    echo -e "${GREEN}1.${NC} 选择已有节点（推荐）"
+    echo -e "${GREEN}2.${NC} 手动指定端口"
+    echo ""
+    read -p "请选择 [1-2]: " config_choice
 
-    # 验证端口
-    if ! [[ "$local_port" =~ ^[0-9]+$ ]] || [[ "$local_port" -lt 1 ]] || [[ "$local_port" -gt 65535 ]]; then
-        print_error "无效的端口号"
-        return 1
+    local local_port=""
+    local selected_node_port=""
+    local bind_to_node=false
+
+    if [[ "$config_choice" == "1" ]]; then
+        # 选择节点模式
+        local nodes_file="${DATA_DIR}/nodes.json"
+        if [[ ! -f "$nodes_file" ]]; then
+            print_error "节点文件不存在，请先创建节点"
+            return 1
+        fi
+
+        local nodes=$(jq -r '.nodes[] | "\(.port)|\(.protocol)|\(.tag // "N/A")"' "$nodes_file" 2>/dev/null)
+        if [[ -z "$nodes" ]]; then
+            print_error "没有可用节点，请先创建节点"
+            return 1
+        fi
+
+        echo ""
+        echo -e "${YELLOW}可用节点：${NC}"
+        local index=1
+        echo "$nodes" | while IFS='|' read -r port protocol tag; do
+            echo -e "${GREEN}$index.${NC} 端口: $port | 协议: $protocol | 标签: $tag"
+            ((index++))
+        done
+        echo ""
+        read -p "请选择节点 [1-$(echo "$nodes" | wc -l)]: " node_choice
+
+        if [[ "$node_choice" =~ ^[0-9]+$ ]]; then
+            selected_node_port=$(echo "$nodes" | sed -n "${node_choice}p" | cut -d'|' -f1)
+            if [[ -n "$selected_node_port" ]]; then
+                local_port=$selected_node_port
+                bind_to_node=true
+                print_info "已选择节点端口: $local_port"
+            else
+                print_error "无效的节点选择"
+                return 1
+            fi
+        else
+            print_error "无效的选择"
+            return 1
+        fi
+    else
+        # 手动指定端口模式
+        read -p "请输入本地服务端口 [例如: 8080]: " local_port
+        if [[ -z "$local_port" ]]; then
+            print_error "端口不能为空"
+            return 1
+        fi
+
+        # 验证端口
+        if ! [[ "$local_port" =~ ^[0-9]+$ ]] || [[ "$local_port" -lt 1 ]] || [[ "$local_port" -gt 65535 ]]; then
+            print_error "无效的端口号"
+            return 1
+        fi
     fi
 
     # 启动临时隧道
@@ -131,6 +296,12 @@ start_temp_argo_tunnel() {
     nohup "$CLOUDFLARED_BIN" tunnel --url "http://localhost:${local_port}" > "$log_file" 2>&1 &
     local pid=$!
 
+    # 记录隧道信息用于保活
+    save_temp_tunnel_info "$pid" "$local_port"
+
+    # 启动保活服务（如果未启动）
+    start_argo_keepalive_service
+
     # 等待隧道启动
     sleep 3
 
@@ -138,6 +309,7 @@ start_temp_argo_tunnel() {
     if ! kill -0 $pid 2>/dev/null; then
         print_error "隧道启动失败"
         cat "$log_file"
+        remove_temp_tunnel_info "$pid"
         return 1
     fi
 
@@ -156,61 +328,37 @@ start_temp_argo_tunnel() {
         echo -e "  进程 PID: ${GREEN}$pid${NC}"
         echo -e "  日志文件: ${GREEN}$log_file${NC}"
         echo ""
+        echo -e "${YELLOW}访问流程：${NC}"
+        echo -e "  用户 → ${GREEN}$tunnel_url${NC} (Argo隧道) → localhost:$local_port (节点监听)"
+        echo ""
         echo -e "${YELLOW}提示：${NC}"
-        echo -e "  • 这是临时隧道，重启后失效"
+        echo -e "  • 这是临时隧道，重启后域名会变化"
         echo -e "  • 使用 kill $pid 可停止隧道"
         echo -e "  • 查看日志: tail -f $log_file"
+        echo -e "  • 建议使用专用隧道以获得固定域名"
         echo ""
 
-        # 询问是否绑定到节点
-        local nodes_file="${DATA_DIR}/nodes.json"
-        if [[ -f "$nodes_file" ]]; then
-            local nodes=$(jq -r '.nodes[] | "\(.port)|\(.protocol)|\(.tag // "N/A")"' "$nodes_file" 2>/dev/null)
+        # 如果是绑定到节点模式，更新节点配置
+        if [[ "$bind_to_node" == true ]]; then
+            local nodes_file="${DATA_DIR}/nodes.json"
+            jq --arg port "$selected_node_port" \
+               --arg domain "$tunnel_url" \
+               --arg pid "$pid" \
+               '(.nodes[] | select(.port == $port)) |= (
+                   . + {
+                       tunnel_domain: $domain,
+                       tunnel_name: "temp-tunnel-" + $pid,
+                       tunnel_type: "argo_temp"
+                   }
+               )' \
+               "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
 
-            if [[ -n "$nodes" ]]; then
-                echo ""
-                read -p "是否将此隧道绑定到某个节点？[y/N]: " bind_choice
-
-                if [[ "$bind_choice" == "y" || "$bind_choice" == "Y" ]]; then
-                    echo ""
-                    echo -e "${YELLOW}可用节点：${NC}"
-                    local index=1
-                    echo "$nodes" | while IFS='|' read -r port protocol tag; do
-                        echo -e "${GREEN}$index.${NC} 端口: $port | 协议: $protocol | 标签: $tag"
-                        ((index++))
-                    done
-                    echo ""
-                    read -p "请选择节点 [1-$(echo "$nodes" | wc -l)]: " node_choice
-
-                    if [[ "$node_choice" =~ ^[0-9]+$ ]]; then
-                        local selected_port=$(echo "$nodes" | sed -n "${node_choice}p" | cut -d'|' -f1)
-
-                        if [[ -n "$selected_port" ]]; then
-                            # 在节点中添加tunnel_domain字段
-                            jq --arg port "$selected_port" \
-                               --arg domain "$tunnel_url" \
-                               --arg pid "$pid" \
-                               '(.nodes[] | select(.port == $port)) |= (
-                                   . + {
-                                       tunnel_domain: $domain,
-                                       tunnel_name: "temp-tunnel-" + $pid,
-                                       tunnel_type: "argo_temp"
-                                   }
-                               )' \
-                               "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
-
-                            print_success "✅ 临时隧道已绑定到节点(端口:$selected_port)"
-                            echo ""
-                            echo -e "${YELLOW}访问流程：${NC}"
-                            echo -e "  用户 → ${GREEN}$tunnel_url${NC} (临时Argo) → 隧道端口($local_port) → 节点端口($selected_port)"
-                            echo ""
-                            echo -e "${YELLOW}注意：${NC}"
-                            echo -e "  • 临时隧道重启后域名会变化，需重新绑定"
-                            echo -e "  • 建议使用专用隧道以获得固定域名"
-                        fi
-                    fi
-                fi
-            fi
+            print_success "✅ 临时隧道已绑定到节点(端口:$selected_node_port)"
+            echo ""
+            echo -e "${YELLOW}说明：${NC}"
+            echo -e "  • 节点监听在 localhost:$selected_node_port"
+            echo -e "  • Argo隧道转发 $tunnel_url → localhost:$selected_node_port"
+            echo -e "  • 外部用户通过 $tunnel_url 访问此节点"
         fi
     else
         print_warning "隧道可能已启动，但无法获取 URL"
@@ -292,10 +440,16 @@ stop_temp_argo_tunnel() {
     read -p "请选择要停止的隧道 [0-$count]: " choice
 
     if [[ "$choice" == "0" ]]; then
+        # 停止所有隧道并清理保活记录
+        for pid in $pids; do
+            remove_temp_tunnel_info "$pid"
+        done
         pkill -f "cloudflared tunnel --url"
         print_success "所有临时隧道已停止"
     elif [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le "$count" ]]; then
         local target_pid="${pid_array[$((choice-1))]}"
+        # 移除保活记录
+        remove_temp_tunnel_info "$target_pid"
         kill "$target_pid"
         print_success "隧道 (PID: $target_pid) 已停止"
     else
@@ -1446,10 +1600,32 @@ bind_warp_to_node() {
     echo -e "${YELLOW}访问流程：${NC}"
     echo -e "  用户 → 节点($selected_port) → ${GREEN}WARP${NC} → 目标服务器"
     echo ""
-    echo -e "${YELLOW}提示：${NC}"
-    echo -e "  • 节点的出站流量将通过WARP代理"
-    echo -e "  • 需要重新生成sing-box配置才能生效"
-    echo -e "  • 确保WARP连接已启动"
+
+    # 询问是否立即重新生成配置
+    read -p "是否立即重新生成sing-box配置以应用更改？[Y/n]: " regen_choice
+    if [[ "$regen_choice" != "n" && "$regen_choice" != "N" ]]; then
+        print_info "正在重新生成配置..."
+
+        # 检查配置生成函数是否可用
+        if declare -f generate_singbox_config >/dev/null 2>&1; then
+            generate_singbox_config
+
+            # 询问是否重启服务
+            read -p "配置已更新，是否重启sing-box服务？[Y/n]: " restart_choice
+            if [[ "$restart_choice" != "n" && "$restart_choice" != "N" ]]; then
+                systemctl restart sing-box
+                print_success "sing-box服务已重启"
+            fi
+        else
+            print_warning "配置生成函数不可用，请手动重新生成配置"
+            print_info "提示：运行主菜单中的'重新生成配置'选项"
+        fi
+    else
+        echo -e "${YELLOW}提示：${NC}"
+        echo -e "  • 节点的出站流量将通过WARP代理"
+        echo -e "  • 需要重新生成sing-box配置才能生效"
+        echo -e "  • 确保WARP连接已启动"
+    fi
 }
 
 # 解除WARP与节点的关联
@@ -1497,6 +1673,25 @@ unbind_warp_from_node() {
        "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
 
     print_success "已解除节点 $selected_port 的WARP关联"
+    echo ""
+
+    # 询问是否立即重新生成配置
+    read -p "是否立即重新生成sing-box配置以应用更改？[Y/n]: " regen_choice
+    if [[ "$regen_choice" != "n" && "$regen_choice" != "N" ]]; then
+        print_info "正在重新生成配置..."
+
+        if declare -f generate_singbox_config >/dev/null 2>&1; then
+            generate_singbox_config
+
+            read -p "配置已更新，是否重启sing-box服务？[Y/n]: " restart_choice
+            if [[ "$restart_choice" != "n" && "$restart_choice" != "N" ]]; then
+                systemctl restart sing-box
+                print_success "sing-box服务已重启"
+            fi
+        else
+            print_warning "配置生成函数不可用，请手动重新生成配置"
+        fi
+    fi
 }
 
 # WARP 系统诊断

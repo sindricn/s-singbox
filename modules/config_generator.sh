@@ -6,6 +6,35 @@
 # 重要：使用sing-box原生格式，不是Xray格式
 #================================================================
 
+# 从WARP配置文件读取密钥信息
+get_warp_config() {
+    local wgcf_profile="/etc/wireguard/wgcf-profile.conf"
+
+    if [[ ! -f "$wgcf_profile" ]]; then
+        echo "{}"
+        return 1
+    fi
+
+    local private_key=$(grep "^PrivateKey" "$wgcf_profile" | cut -d= -f2 | tr -d ' ')
+    local public_key=$(grep "^PublicKey" "$wgcf_profile" | cut -d= -f2 | tr -d ' ')
+    local endpoint=$(grep "^Endpoint" "$wgcf_profile" | cut -d= -f2 | tr -d ' ')
+    local address=$(grep "^Address" "$wgcf_profile" | grep -oP '\d+\.\d+\.\d+\.\d+/\d+' | head -1)
+
+    # 输出JSON格式
+    jq -n \
+        --arg private_key "$private_key" \
+        --arg public_key "$public_key" \
+        --arg endpoint "$endpoint" \
+        --arg address "$address" \
+        '{
+            private_key: $private_key,
+            peer_public_key: $public_key,
+            server: ($endpoint | split(":")[0]),
+            server_port: (($endpoint | split(":")[1]) // "2408" | tonumber),
+            local_address: [$address]
+        }'
+}
+
 # 生成sing-box完整配置文件
 generate_singbox_config() {
     print_info "开始生成 sing-box 配置..."
@@ -47,8 +76,9 @@ generate_singbox_config() {
             local transport=$(echo "$node" | jq -r '.transport // "tcp"')
             local security=$(echo "$node" | jq -r '.security // "none"')
             local extra=$(echo "$node" | jq -r '.extra // "{}"')
+            local warp_outbound=$(echo "$node" | jq -r '.warp_outbound // false')
 
-            print_info "  处理节点: $protocol/$port (security: $security)"
+            print_info "  处理节点: $protocol/$port (security: $security, warp: $warp_outbound)"
 
             # 获取该节点的用户列表
             local user_uuids=$(jq -r ".bindings[] | select(.port == \"$port\") | .users[]" "$node_users_file" 2>/dev/null)
@@ -131,15 +161,36 @@ generate_singbox_config() {
             # 生成inbound配置（sing-box格式）
             local inbound=$(generate_singbox_inbound "$port" "$protocol" "$transport" "$security" "$extra" "$users")
 
+            # 如果节点启用了WARP出站，添加出站标签
+            if [[ "$warp_outbound" == "true" ]]; then
+                inbound=$(echo "$inbound" | jq '. + {detour: "warp-out"}')
+                print_info "    已设置WARP出站"
+            fi
+
             # 添加到inbounds列表
             inbounds=$(echo "$inbounds" | jq ". += [$inbound]")
 
         done < <(jq -c '.nodes[]' "$nodes_file" 2>/dev/null)
     fi
 
+    # 检查是否有节点启用WARP
+    local has_warp=$(jq -r '[.nodes[] | select(.warp_outbound == true)] | length > 0' "$nodes_file" 2>/dev/null)
+
+    # 获取WARP配置
+    local warp_config="{}"
+    if [[ "$has_warp" == "true" ]]; then
+        print_info "检测到WARP出站需求，读取WARP配置..."
+        warp_config=$(get_warp_config)
+        if [[ "$warp_config" == "{}" ]]; then
+            print_warning "WARP配置不存在或无效，将使用默认配置"
+        fi
+    fi
+
     # 生成完整配置（sing-box 1.11.0+ 兼容格式）
     local full_config=$(jq -n \
         --argjson inbounds "$inbounds" \
+        --argjson warp_cfg "$warp_config" \
+        --argjson has_warp "$has_warp" \
         '{
             log: {
                 disabled: false,
@@ -164,12 +215,27 @@ generate_singbox_config() {
                 final: "dns-remote"
             },
             inbounds: $inbounds,
-            outbounds: [
-                {
+            outbounds: (
+                [{
                     type: "direct",
                     tag: "direct-out"
-                }
-            ],
+                }] +
+                (if $has_warp then
+                    [{
+                        type: "wireguard",
+                        tag: "warp-out",
+                        server: ($warp_cfg.server // "engage.cloudflareclient.com"),
+                        server_port: ($warp_cfg.server_port // 2408),
+                        local_address: ($warp_cfg.local_address // ["172.16.0.2/32"]),
+                        private_key: ($warp_cfg.private_key // ""),
+                        peer_public_key: ($warp_cfg.peer_public_key // "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="),
+                        reserved: [0, 0, 0],
+                        mtu: 1280
+                    }]
+                else
+                    []
+                end)
+            ),
             route: {
                 rules: [
                     {

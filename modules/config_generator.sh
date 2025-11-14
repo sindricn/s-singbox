@@ -24,12 +24,7 @@ get_warp_config() {
     local public_key=$(grep "^PublicKey" "$wgcf_profile" | cut -d= -f2 | tr -d ' ' | tr -d '\r')
     local endpoint=$(grep "^Endpoint" "$wgcf_profile" | cut -d= -f2 | tr -d ' ' | tr -d '\r')
 
-    # 调试输出
-    print_info "读取WARP配置:"
-    echo "  Private Key: ${private_key:0:10}... (长度: ${#private_key})"
-    echo "  Public Key: ${public_key:0:10}... (长度: ${#public_key})"
-    echo "  Endpoint: $endpoint"
-    echo "  Address: $address"
+    # WARP配置读取（静默）
 
     # 验证必需字段
     if [[ -z "$private_key" || -z "$public_key" || -z "$endpoint" ]]; then
@@ -91,8 +86,6 @@ generate_singbox_config() {
     if [[ $node_count -eq 0 ]]; then
         print_warning "没有配置节点"
     else
-        print_info "处理 $node_count 个节点..."
-
         # 遍历所有节点
         while IFS= read -r node; do
             local port=$(echo "$node" | jq -r '.port')
@@ -107,8 +100,6 @@ generate_singbox_config() {
                 print_warning "  跳过端口为空的节点: $protocol (请删除此节点)"
                 continue
             fi
-
-            print_info "  处理节点: $protocol/$port (security: $security, warp: $warp_outbound)"
 
             # 获取该节点的用户列表
             local user_uuids=$(jq -r ".bindings[] | select(.port == \"$port\") | .users[]" "$node_users_file" 2>/dev/null)
@@ -182,10 +173,8 @@ generate_singbox_config() {
                         fi
                     fi
                 done <<< "$user_uuids"
-
-                print_info "    绑定用户: $user_count 个"
             else
-                print_warning "    没有绑定用户，节点将无法使用"
+                print_warning "  端口 $port 没有绑定用户，节点将无法使用"
             fi
 
             # 生成inbound配置（sing-box格式）
@@ -194,7 +183,6 @@ generate_singbox_config() {
             # 如果节点启用了WARP出站，添加出站标签
             if [[ "$warp_outbound" == "true" ]]; then
                 inbound=$(echo "$inbound" | jq '. + {detour: "warp-out"}')
-                print_info "    已设置WARP出站"
             fi
 
             # 添加到inbounds列表
@@ -218,8 +206,6 @@ generate_singbox_config() {
         warp_config=$(get_warp_config)
         if [[ "$warp_config" == "{}" ]]; then
             print_warning "WARP配置不存在或无效，将使用默认配置"
-        else
-            print_success "WARP配置读取成功"
         fi
     fi
 

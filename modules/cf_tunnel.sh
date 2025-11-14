@@ -1591,9 +1591,14 @@ bind_warp_to_node() {
     fi
 
     # 更新节点配置，启用WARP出站
+    echo -e "${CYAN}[调试]${NC} 正在更新节点配置..."
     jq --arg port "$selected_port" \
        '(.nodes[] | select(.port == $port)) |= (. + {warp_outbound: true})' \
        "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
+
+    # 验证更新
+    local warp_status=$(jq -r ".nodes[] | select(.port == \"$selected_port\") | .warp_outbound" "$nodes_file")
+    echo -e "${CYAN}[调试]${NC} 节点端口 $selected_port 的 warp_outbound 状态: $warp_status"
 
     print_success "✅ WARP已关联到节点 (端口: $selected_port)"
     echo ""
@@ -1604,11 +1609,18 @@ bind_warp_to_node() {
     # 询问是否立即重新生成配置
     read -p "是否立即重新生成sing-box配置以应用更改？[Y/n]: " regen_choice
     if [[ "$regen_choice" != "n" && "$regen_choice" != "N" ]]; then
-        print_info "正在重新生成配置..."
+        echo ""
+        echo -e "${CYAN}════════════════════════════════════════${NC}"
+        echo -e "${CYAN}开始重新生成sing-box配置${NC}"
+        echo -e "${CYAN}════════════════════════════════════════${NC}"
 
         # 检查配置生成函数是否可用
         if declare -f generate_singbox_config >/dev/null 2>&1; then
             generate_singbox_config
+
+            echo -e "${CYAN}════════════════════════════════════════${NC}"
+            echo -e "${CYAN}配置生成完成${NC}"
+            echo -e "${CYAN}════════════════════════════════════════${NC}"
 
             # 询问是否重启服务
             read -p "配置已更新，是否重启sing-box服务？[Y/n]: " restart_choice

@@ -31,6 +31,12 @@ generate_singbox_config() {
         echo '{"bindings":[]}' > "$node_users_file"
     fi
 
+    # 提前检查WARP节点（避免悖论：只有配置成功才能看到WARP信息）
+    local warp_check_count=$(jq -r '[.nodes[] | select(.warp_outbound == true)] | length' "$nodes_file" 2>/dev/null)
+    if [[ "$warp_check_count" -gt 0 ]]; then
+        print_success "→ 检测到 $warp_check_count 个节点已启用WARP出站"
+    fi
+
     # 生成inbounds配置
     local inbounds="[]"
     local node_count=$(jq '.nodes | length' "$nodes_file")
@@ -38,16 +44,21 @@ generate_singbox_config() {
     if [[ $node_count -eq 0 ]]; then
         print_warning "没有配置节点"
     else
-        print_info "处理 $node_count 个节点..."
-
         # 遍历所有节点
         while IFS= read -r node; do
             local port=$(echo "$node" | jq -r '.port')
             local protocol=$(echo "$node" | jq -r '.protocol')
             local transport=$(echo "$node" | jq -r '.transport // "tcp"')
             local security=$(echo "$node" | jq -r '.security // "none"')
+            local warp_outbound=$(echo "$node" | jq -r '.warp_outbound // false')
             # 修复：不使用-r参数，保持extra为JSON格式
             local extra=$(echo "$node" | jq '.extra // {}')
+
+            # 跳过端口为空的节点
+            if [[ -z "$port" || "$port" == "null" ]]; then
+                print_warning "  跳过端口为空的节点: $protocol (请删除此节点)"
+                continue
+            fi
 
             print_info "  处理节点: $protocol/$port (security: $security)"
 
@@ -124,10 +135,8 @@ generate_singbox_config() {
                         fi
                     fi
                 done <<< "$user_uuids"
-
-                print_info "    绑定用户: $user_count 个"
             else
-                print_warning "    没有绑定用户，节点将无法使用"
+                print_warning "  端口 $port 没有绑定用户，节点将无法使用"
             fi
 
             # 生成inbound配置（sing-box格式）
@@ -135,6 +144,11 @@ generate_singbox_config() {
             if ! inbound=$(generate_singbox_inbound "$port" "$protocol" "$transport" "$security" "$extra" "$users"); then
                 print_error "生成入站配置失败: ${protocol}/${port}"
                 return 1
+            fi
+
+            # 如果节点启用了WARP出站，添加出站标签
+            if [[ "$warp_outbound" == "true" ]]; then
+                inbound=$(echo "$inbound" | jq '. + {detour: "warp-out"}')
             fi
 
             # 添加到inbounds列表
@@ -146,9 +160,28 @@ generate_singbox_config() {
         done < <(jq -c '.nodes[]' "$nodes_file" 2>/dev/null)
     fi
 
+    # 检查是否有节点启用WARP（用于配置生成）
+    local warp_enabled_count=$(jq -r '[.nodes[] | select(.warp_outbound == true)] | length' "$nodes_file" 2>/dev/null)
+
+    local has_warp="false"
+    if [[ "$warp_enabled_count" -gt 0 ]]; then
+        has_warp="true"
+    fi
+
+    # 获取WARP配置
+    local warp_config="{}"
+    if [[ "$has_warp" == "true" ]]; then
+        warp_config=$(get_warp_config)
+        if [[ "$warp_config" == "{}" ]]; then
+            print_warning "WARP配置不存在或无效，将使用默认配置"
+        fi
+    fi
+
     # 生成完整配置（sing-box 1.11.0+ 兼容格式）
     local full_config=$(jq -n \
         --argjson inbounds "$inbounds" \
+        --argjson warp_cfg "$warp_config" \
+        --argjson has_warp "$has_warp" \
         '{
             log: {
                 disabled: false,
@@ -174,16 +207,31 @@ generate_singbox_config() {
                 final: "dns-remote"
             },
             inbounds: $inbounds,
-            outbounds: [
-                {
+            outbounds: (
+                [{
                     type: "direct",
                     tag: "direct-out"
-                },
-                {
+                }] +
+                (if $has_warp then
+                    [{
+                        type: "wireguard",
+                        tag: "warp-out",
+                        server: ($warp_cfg.server // "engage.cloudflareclient.com"),
+                        server_port: ($warp_cfg.server_port // 2408),
+                        local_address: ($warp_cfg.local_address // ["172.16.0.2/32"]),
+                        private_key: ($warp_cfg.private_key // ""),
+                        peer_public_key: ($warp_cfg.peer_public_key // "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="),
+                        reserved: [0, 0, 0],
+                        mtu: 1280
+                    }]
+                else
+                    []
+                end) +
+                [{
                     type: "block",
                     tag: "block-out"
-                }
-            ],
+                }]
+            ),
             route: {
                 default_domain_resolver: "dns-local",
                 rules: [
@@ -203,6 +251,25 @@ generate_singbox_config() {
 
     if [[ $? -eq 0 ]]; then
         print_success "配置文件生成成功: $config_file"
+
+        # 验证配置
+        local inbound_count=$(jq '.inbounds | length' "$config_file")
+        local outbound_count=$(jq '.outbounds | length' "$config_file")
+
+        # 验证WARP配置
+        if [[ "$warp_check_count" -gt 0 ]]; then
+            local warp_out_exists=$(jq -r '.outbounds[] | select(.tag == "warp-out") | .tag' "$config_file" 2>/dev/null)
+            if [[ -n "$warp_out_exists" ]]; then
+                local warp_detour_count=$(jq -r '[.inbounds[] | select(.detour == "warp-out")] | length' "$config_file")
+                print_success "→ WARP出站配置成功 (配置了 $warp_detour_count 个节点)"
+            else
+                print_error "→ WARP出站配置失败！已启用WARP的节点未添加到配置文件"
+                print_warning "   请检查WARP配置文件: /etc/wireguard/wgcf-profile.conf"
+            fi
+        fi
+
+        print_info "配置统计: 入站=$inbound_count, 出站=$outbound_count"
+
         return 0
     else
         print_error "配置文件生成失败"

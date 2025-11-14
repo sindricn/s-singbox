@@ -95,21 +95,37 @@ check_port_hopping_conflict() {
     fi
 
     # 提取新范围
-    local new_start=$(echo "$new_range" | cut -d':' -f1)
-    local new_end=$(echo "$new_range" | cut -d':' -f2)
+    local new_start=$(echo "$new_range" | cut -d':' -f1 | tr -cd '0-9')
+    local new_end=$(echo "$new_range" | cut -d':' -f2 | tr -cd '0-9')
+
+    # 验证是否为有效数字
+    if [[ ! "$new_start" =~ ^[0-9]+$ ]] || [[ ! "$new_end" =~ ^[0-9]+$ ]]; then
+        print_warning "无效的端口范围格式: $new_range"
+        return 1  # 格式错误，当作没有冲突但会在外层处理
+    fi
 
     # 检查所有现有的Hysteria2节点
     local existing_ranges=$(jq -r '.nodes[] | select(.protocol == "hysteria2") | select(.extra.port_hopping != null and .extra.port_hopping != "") | "\(.port)|\(.extra.port_hopping)"' "$NODES_FILE" 2>/dev/null)
 
     while IFS='|' read -r port existing_range; do
+        # 跳过空行或无效数据
+        if [[ -z "$port" || -z "$existing_range" ]]; then
+            continue
+        fi
+
         # 跳过当前节点自己
         if [[ "$port" == "$current_port" ]]; then
             continue
         fi
 
-        # 提取现有范围
-        local exist_start=$(echo "$existing_range" | cut -d':' -f1)
-        local exist_end=$(echo "$existing_range" | cut -d':' -f2)
+        # 提取现有范围并清理
+        local exist_start=$(echo "$existing_range" | cut -d':' -f1 | tr -cd '0-9')
+        local exist_end=$(echo "$existing_range" | cut -d':' -f2 | tr -cd '0-9')
+
+        # 验证现有范围是否为有效数字
+        if [[ ! "$exist_start" =~ ^[0-9]+$ ]] || [[ ! "$exist_end" =~ ^[0-9]+$ ]]; then
+            continue  # 跳过无效的现有范围
+        fi
 
         # 检查范围是否重叠
         if [[ $new_start -le $exist_end && $new_end -ge $exist_start ]]; then
@@ -1050,17 +1066,19 @@ delete_node() {
         return 1
     fi
 
-    # 收集要删除的端口
-    local ports_to_delete=()
+    # 收集要删除的节点（支持序号和端口两种方式）
+    local nodes_to_delete=()  # 存储格式: "index:port" 或 "index:" (port为空时)
 
     # 检查是否删除所有节点
     if [[ "$input" == "all" || "$input" == "*" ]]; then
-        # 获取所有节点端口
-        while IFS= read -r port; do
-            [[ -n "$port" && "$port" != "null" ]] && ports_to_delete+=("$port")
-        done < <(jq -r '.nodes[].port' "$NODES_FILE" 2>/dev/null)
+        # 获取所有节点（通过索引）
+        local total_nodes=$(jq -r '.nodes | length' "$NODES_FILE" 2>/dev/null)
+        for ((i=0; i<total_nodes; i++)); do
+            local port=$(jq -r ".nodes[$i].port // empty" "$NODES_FILE" 2>/dev/null)
+            nodes_to_delete+=("$i:$port")
+        done
 
-        if [[ ${#ports_to_delete[@]} -eq 0 ]]; then
+        if [[ ${#nodes_to_delete[@]} -eq 0 ]]; then
             print_warning "没有节点可删除"
             return 0
         fi
@@ -1070,65 +1088,65 @@ delete_node() {
         local inputs=($input)
 
         for item in "${inputs[@]}"; do
-            local port=""
-            local is_by_index=false
-
             # 判断是序号还是端口
             if [[ "$item" =~ ^[0-9]+$ ]] && [[ "$item" -le 100 ]]; then
-                # 可能是序号，尝试通过序号获取端口
+                # 当作序号处理
                 local index=$((item - 1))
-                port=$(jq -r ".nodes[$index].port // empty" "$NODES_FILE" 2>/dev/null)
 
-                if [[ -n "$port" && "$port" != "null" ]]; then
-                    # 序号有效，直接使用
-                    is_by_index=true
-                    ports_to_delete+=("$port")
+                # 检查该索引位置是否存在节点
+                local node_exists=$(jq -r ".nodes[$index] // empty" "$NODES_FILE" 2>/dev/null)
+                if [[ -n "$node_exists" && "$node_exists" != "null" ]]; then
+                    # 序号有效，获取对应的端口（可能为空）
+                    local port=$(jq -r ".nodes[$index].port // empty" "$NODES_FILE" 2>/dev/null)
+                    nodes_to_delete+=("$index:$port")
                 else
-                    # 序号无效，可能是想输入端口
-                    port="$item"
-                    is_by_index=false
+                    print_warning "序号 $item 不存在，已跳过"
                 fi
             else
-                # 大于100或非纯数字，当作端口处理
-                port="$item"
-                is_by_index=false
-            fi
+                # 当作端口处理（大于100或非纯数字）
+                local port="$item"
 
-            # 如果不是通过序号（即通过端口），需要验证端口是否存在
-            if [[ "$is_by_index" == false ]]; then
-                local node_exists=$(jq -r ".nodes[] | select(.port == \"$port\") | .port" "$NODES_FILE" 2>/dev/null)
-                if [[ -n "$node_exists" && "$node_exists" != "null" ]]; then
-                    ports_to_delete+=("$port")
+                # 查找该端口对应的索引
+                local index=$(jq -r ".nodes | to_entries | .[] | select(.value.port == \"$port\") | .key" "$NODES_FILE" 2>/dev/null | head -n1)
+                if [[ -n "$index" && "$index" != "null" ]]; then
+                    nodes_to_delete+=("$index:$port")
                 else
-                    print_warning "节点端口 $port 不存在，已跳过"
+                    print_warning "端口 $port 不存在，已跳过"
                 fi
             fi
         done
     fi
 
-    if [[ ${#ports_to_delete[@]} -eq 0 ]]; then
+    if [[ ${#nodes_to_delete[@]} -eq 0 ]]; then
         print_error "没有有效的节点可删除"
         return 1
     fi
 
     # 显示将要删除的节点
     echo ""
-    if [[ ${#ports_to_delete[@]} -eq 1 ]]; then
+    if [[ ${#nodes_to_delete[@]} -eq 1 ]]; then
         print_warning "将删除以下节点："
     else
-        print_warning "将删除以下 ${#ports_to_delete[@]} 个节点："
+        print_warning "将删除以下 ${#nodes_to_delete[@]} 个节点："
     fi
-    
-    for port in "${ports_to_delete[@]}"; do
-        local protocol=$(jq -r ".nodes[] | select(.port == \"$port\") | .protocol" "$NODES_FILE" 2>/dev/null)
-        local name=$(jq -r ".nodes[] | select(.port == \"$port\") | .name // \"未命名\"" "$NODES_FILE" 2>/dev/null)
-        local outbound_tag=$(jq -r ".nodes[] | select(.port == \"$port\") | .outbound_tag // empty" "$NODES_FILE" 2>/dev/null)
-        
-        echo -n "  • 端口 ${YELLOW}$port${NC} - $protocol ($name)"
+
+    for node_entry in "${nodes_to_delete[@]}"; do
+        local index="${node_entry%%:*}"
+        local port="${node_entry#*:}"
+
+        local protocol=$(jq -r ".nodes[$index].protocol" "$NODES_FILE" 2>/dev/null)
+        local name=$(jq -r ".nodes[$index].name // \"未命名\"" "$NODES_FILE" 2>/dev/null)
+        local outbound_tag=$(jq -r ".nodes[$index].outbound_tag // empty" "$NODES_FILE" 2>/dev/null)
+
+        if [[ -n "$port" && "$port" != "null" ]]; then
+            echo -n "  • 序号 $((index + 1)) [端口 ${YELLOW}$port${NC}] - $protocol ($name)"
+        else
+            echo -n "  • 序号 $((index + 1)) [端口 ${RED}未设置${NC}] - $protocol ($name)"
+        fi
         [[ -n "$outbound_tag" ]] && echo -n " [出站: $outbound_tag]"
         echo ""
     done
-    
+
     echo ""
     print_warning "删除节点将同时清理所有用户绑定关系和相关订阅"
     read -p "确认删除? [y/N]: " confirm
@@ -1137,12 +1155,17 @@ delete_node() {
         return 0
     fi
 
-    # 执行删除
+    # 执行删除（从后往前删除，避免索引错位）
     local success_count=0
-    for port in "${ports_to_delete[@]}"; do
-        # 0. 获取节点信息，检查是否需要清理iptables规则
-        local protocol=$(jq -r ".nodes[] | select(.port == \"$port\") | .protocol" "$NODES_FILE" 2>/dev/null)
-        local port_hopping=$(jq -r ".nodes[] | select(.port == \"$port\") | .extra.port_hopping // \"\"" "$NODES_FILE" 2>/dev/null)
+    local sorted_indices=($(for node_entry in "${nodes_to_delete[@]}"; do
+        echo "${node_entry%%:*}"
+    done | sort -rn))
+
+    for index in "${sorted_indices[@]}"; do
+        # 获取节点信息
+        local port=$(jq -r ".nodes[$index].port // empty" "$NODES_FILE" 2>/dev/null)
+        local protocol=$(jq -r ".nodes[$index].protocol" "$NODES_FILE" 2>/dev/null)
+        local port_hopping=$(jq -r ".nodes[$index].extra.port_hopping // \"\"" "$NODES_FILE" 2>/dev/null)
 
         # 如果是Hysteria2且有端口跳跃，清理iptables规则
         if [[ "$protocol" == "hysteria2" && -n "$port_hopping" && "$port_hopping" != "null" ]]; then
@@ -1150,16 +1173,22 @@ delete_node() {
             cleanup_port_hopping_rules "$port" "$port_hopping"
         fi
 
-        # 1. 从节点绑定关系中删除该端口
-        if [[ -f "$NODE_USERS_FILE" ]]; then
-            update_json_file --arg port "$port" '.bindings = [.bindings[] | select(.port != $port)]' "$NODE_USERS_FILE" 2>/dev/null
+        # 如果有端口，清理端口相关的绑定关系
+        if [[ -n "$port" && "$port" != "null" ]]; then
+            # 1. 从节点绑定关系中删除该端口
+            if [[ -f "$NODE_USERS_FILE" ]]; then
+                update_json_file --arg port "$port" '.bindings = [.bindings[] | select(.port != $port)]' "$NODE_USERS_FILE" 2>/dev/null
+            fi
+
+            # 2. 从数据库删除节点（通过端口）
+            remove_node_info "$port"
+
+            # 3. 从配置删除（通过端口）
+            remove_inbound_from_config "$port"
         fi
 
-        # 2. 从数据库删除节点
-        remove_node_info "$port"
-
-        # 3. 从配置删除
-        remove_inbound_from_config "$port"
+        # 4. 通过索引从nodes.json中删除节点（无论端口是否存在）
+        update_json_file --argjson index "$index" '.nodes = [.nodes | to_entries | .[] | select(.key != $index) | .value]' "$NODES_FILE" 2>/dev/null
 
         ((success_count++))
     done
@@ -2939,6 +2968,10 @@ quick_setup_hysteria2() {
     if [[ "$enable_hopping" != "n" && "$enable_hopping" != "N" ]]; then
         while true; do
             read -p "跳跃端口范围 [默认: 2000:3000]: " hopping_range
+
+            # 清理输入：去除非ASCII字符和空格
+            hopping_range=$(echo "$hopping_range" | tr -cd '0-9:-')
+
             if [[ -z "$hopping_range" ]]; then
                 # 使用冒号格式（sing-box官方格式）
                 port_hopping="2000:3000"
@@ -2946,8 +2979,25 @@ quick_setup_hysteria2() {
                 # 支持减号格式，自动转换为冒号
                 if [[ "$hopping_range" =~ ^[0-9]+-[0-9]+$ ]]; then
                     port_hopping="${hopping_range/-/:}"
-                else
+                elif [[ "$hopping_range" =~ ^[0-9]+:[0-9]+$ ]]; then
                     port_hopping="$hopping_range"
+                else
+                    print_warning "格式错误，请输入有效的端口范围（例如: 20000:30000 或 20000-30000）"
+                    continue
+                fi
+
+                # 验证端口范围的合法性
+                local start_port=$(echo "$port_hopping" | cut -d':' -f1)
+                local end_port=$(echo "$port_hopping" | cut -d':' -f2)
+
+                if [[ $start_port -ge $end_port ]]; then
+                    print_warning "起始端口必须小于结束端口，请重新输入"
+                    continue
+                fi
+
+                if [[ $start_port -lt 1024 || $end_port -gt 65535 ]]; then
+                    print_warning "端口范围应在 1024-65535 之间，请重新输入"
+                    continue
                 fi
             fi
 

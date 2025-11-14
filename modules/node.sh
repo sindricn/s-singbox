@@ -107,14 +107,14 @@ check_port_hopping_conflict() {
     # 检查所有现有的Hysteria2节点
     local existing_ranges=$(jq -r '.nodes[] | select(.protocol == "hysteria2") | select(.extra.port_hopping != null and .extra.port_hopping != "") | "\(.port)|\(.extra.port_hopping)"' "$NODES_FILE" 2>/dev/null)
 
-    while IFS='|' read -r port existing_range; do
+    while IFS='|' read -r existing_port existing_range; do
         # 跳过空行或无效数据
-        if [[ -z "$port" || -z "$existing_range" ]]; then
+        if [[ -z "$existing_port" || -z "$existing_range" ]]; then
             continue
         fi
 
         # 跳过当前节点自己
-        if [[ "$port" == "$current_port" ]]; then
+        if [[ "$existing_port" == "$current_port" ]]; then
             continue
         fi
 
@@ -129,7 +129,7 @@ check_port_hopping_conflict() {
 
         # 检查范围是否重叠
         if [[ $new_start -le $exist_end && $new_end -ge $exist_start ]]; then
-            echo "端口跳跃范围 $new_range 与节点端口 $port 的范围 $existing_range 冲突"
+            echo "端口跳跃范围 $new_range 与节点端口 $existing_port 的范围 $existing_range 冲突"
             return 0  # 有冲突
         fi
     done <<< "$existing_ranges"

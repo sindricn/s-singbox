@@ -16,15 +16,24 @@ get_warp_config() {
         return 1
     fi
 
-    # 读取Interface段的配置
-    local private_key=$(grep "^PrivateKey" "$wgcf_profile" | cut -d= -f2 | tr -d ' \t\r\n')
-    local address=$(grep "^Address" "$wgcf_profile" | grep -oP '\d+\.\d+\.\d+\.\d+/\d+' | head -1)
+    # 显示配置文件的前几行（用于调试）
+    echo "[DEBUG] WARP配置文件前10行:" >&2
+    head -10 "$wgcf_profile" | sed 's/^/  /' >&2
+
+    # 读取Interface段的配置（兼容多种格式）
+    local private_key=$(grep -i "^[[:space:]]*PrivateKey" "$wgcf_profile" | cut -d= -f2 | tr -d ' \t\r\n')
+    local address=$(grep -i "^[[:space:]]*Address" "$wgcf_profile" | grep -oP '\d+\.\d+\.\d+\.\d+/\d+' | head -1)
 
     # 读取Peer段的配置
-    local public_key=$(grep "^PublicKey" "$wgcf_profile" | cut -d= -f2 | tr -d ' \t\r\n')
-    local endpoint=$(grep "^Endpoint" "$wgcf_profile" | cut -d= -f2 | tr -d ' \t\r\n')
+    local public_key=$(grep -i "^[[:space:]]*PublicKey" "$wgcf_profile" | cut -d= -f2 | tr -d ' \t\r\n')
+    local endpoint=$(grep -i "^[[:space:]]*Endpoint" "$wgcf_profile" | cut -d= -f2 | tr -d ' \t\r\n')
 
-    # WARP配置读取（静默）
+    # 调试输出（临时）
+    echo "[DEBUG] WARP配置读取:" >&2
+    echo "  私钥长度: ${#private_key}" >&2
+    echo "  公钥长度: ${#public_key}" >&2
+    echo "  地址: $address" >&2
+    echo "  端点: $endpoint" >&2
 
     # 验证必需字段
     if [[ -z "$private_key" || -z "$public_key" || -z "$endpoint" ]]; then
@@ -234,7 +243,11 @@ generate_singbox_config() {
     if [[ "$has_warp" == "true" ]]; then
         warp_config=$(get_warp_config)
         if [[ "$warp_config" == "{}" ]]; then
-            print_warning "WARP配置不存在或无效，将使用默认配置"
+            print_error "WARP配置不存在或无效，无法生成WARP endpoint"
+            print_warning "请先运行 WARP 绑定功能以生成配置文件"
+            # 禁用 WARP，避免生成无效的 endpoint
+            has_warp="false"
+            warp_config="{}"
         fi
     fi
 

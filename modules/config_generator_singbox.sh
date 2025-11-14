@@ -11,7 +11,7 @@ get_warp_config() {
     local wgcf_profile="/etc/wireguard/wgcf-profile.conf"
 
     if [[ ! -f "$wgcf_profile" ]]; then
-        print_warning "WARP配置文件不存在: $wgcf_profile"
+        print_warning "WARP配置文件不存在: $wgcf_profile" >&2
         echo "{}"
         return 1
     fi
@@ -28,20 +28,20 @@ get_warp_config() {
 
     # 验证必需字段
     if [[ -z "$private_key" || -z "$public_key" || -z "$endpoint" ]]; then
-        print_error "WARP配置缺少必需字段"
+        print_error "WARP配置缺少必需字段" >&2
         echo "{}"
         return 1
     fi
 
     # 验证base64格式（WireGuard密钥应该是44字符的base64）
     if [[ ${#private_key} -ne 44 ]] || [[ ! "$private_key" =~ ^[A-Za-z0-9+/=]+$ ]]; then
-        print_error "WARP私钥格式无效 (长度: ${#private_key}, 应为44)"
+        print_error "WARP私钥格式无效 (长度: ${#private_key}, 应为44)" >&2
         echo "{}"
         return 1
     fi
 
     if [[ ${#public_key} -ne 44 ]] || [[ ! "$public_key" =~ ^[A-Za-z0-9+/=]+$ ]]; then
-        print_error "WARP公钥格式无效 (长度: ${#public_key}, 应为44)"
+        print_error "WARP公钥格式无效 (长度: ${#public_key}, 应为44)" >&2
         echo "{}"
         return 1
     fi

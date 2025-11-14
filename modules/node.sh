@@ -1083,9 +1083,9 @@ delete_node() {
                 port="$item"
             fi
 
-            # 验证端口存在
-            local node_exists=$(jq -r ".nodes[] | select(.port == \"$port\") | .port" "$NODES_FILE" 2>/dev/null)
-            if [[ -n "$node_exists" ]]; then
+            # 验证端口存在（兼容字符串和数字类型）
+            local node_exists=$(jq -r ".nodes[] | select(.port == \"$port\" or .port == $port) | .port" "$NODES_FILE" 2>/dev/null)
+            if [[ -n "$node_exists" && "$node_exists" != "null" ]]; then
                 ports_to_delete+=("$port")
             else
                 print_warning "节点端口 $port 不存在，已跳过"
@@ -1107,9 +1107,9 @@ delete_node() {
     fi
     
     for port in "${ports_to_delete[@]}"; do
-        local protocol=$(jq -r ".nodes[] | select(.port == \"$port\") | .protocol" "$NODES_FILE" 2>/dev/null)
-        local name=$(jq -r ".nodes[] | select(.port == \"$port\") | .name // \"未命名\"" "$NODES_FILE" 2>/dev/null)
-        local outbound_tag=$(jq -r ".nodes[] | select(.port == \"$port\") | .outbound_tag // empty" "$NODES_FILE" 2>/dev/null)
+        local protocol=$(jq -r ".nodes[] | select(.port == \"$port\" or .port == $port) | .protocol" "$NODES_FILE" 2>/dev/null)
+        local name=$(jq -r ".nodes[] | select(.port == \"$port\" or .port == $port) | .name // \"未命名\"" "$NODES_FILE" 2>/dev/null)
+        local outbound_tag=$(jq -r ".nodes[] | select(.port == \"$port\" or .port == $port) | .outbound_tag // empty" "$NODES_FILE" 2>/dev/null)
         
         echo -n "  • 端口 ${YELLOW}$port${NC} - $protocol ($name)"
         [[ -n "$outbound_tag" ]] && echo -n " [出站: $outbound_tag]"
@@ -1128,8 +1128,8 @@ delete_node() {
     local success_count=0
     for port in "${ports_to_delete[@]}"; do
         # 0. 获取节点信息，检查是否需要清理iptables规则
-        local protocol=$(jq -r ".nodes[] | select(.port == \"$port\") | .protocol" "$NODES_FILE" 2>/dev/null)
-        local port_hopping=$(jq -r ".nodes[] | select(.port == \"$port\") | .extra.port_hopping // \"\"" "$NODES_FILE" 2>/dev/null)
+        local protocol=$(jq -r ".nodes[] | select(.port == \"$port\" or .port == $port) | .protocol" "$NODES_FILE" 2>/dev/null)
+        local port_hopping=$(jq -r ".nodes[] | select(.port == \"$port\" or .port == $port) | .extra.port_hopping // \"\"" "$NODES_FILE" 2>/dev/null)
 
         # 如果是Hysteria2且有端口跳跃，清理iptables规则
         if [[ "$protocol" == "hysteria2" && -n "$port_hopping" && "$port_hopping" != "null" ]]; then
@@ -1575,7 +1575,7 @@ save_node_info() {
     local node_data=$(jq -n \
         --arg name "$name" \
         --arg protocol "$protocol" \
-        --arg port "$port" \
+        --argjson port "$port" \
         --arg transport "$transport" \
         --arg security "$security" \
         --argjson extra "$extra_config" \
@@ -1591,7 +1591,8 @@ save_node_info() {
 # 从数据库删除节点
 remove_node_info() {
     local port=$1
-    if ! update_json_file ".nodes = [.nodes[] | select(.port != \"$port\")]" "$NODES_FILE"; then
+    # 兼容字符串和数字类型的端口
+    if ! update_json_file ".nodes = [.nodes[] | select(.port != \"$port\" and .port != $port)]" "$NODES_FILE"; then
         print_error "删除节点信息失败"
         return 1
     fi

@@ -11,26 +11,50 @@ get_warp_config() {
     local wgcf_profile="/etc/wireguard/wgcf-profile.conf"
 
     if [[ ! -f "$wgcf_profile" ]]; then
+        print_warning "WARP配置文件不存在: $wgcf_profile"
         echo "{}"
         return 1
     fi
 
-    local private_key=$(grep "^PrivateKey" "$wgcf_profile" | cut -d= -f2 | tr -d ' ')
-    local public_key=$(grep "^PublicKey" "$wgcf_profile" | cut -d= -f2 | tr -d ' ')
-    local endpoint=$(grep "^Endpoint" "$wgcf_profile" | cut -d= -f2 | tr -d ' ')
+    # 读取Interface段的配置
+    local private_key=$(grep "^PrivateKey" "$wgcf_profile" | cut -d= -f2 | tr -d ' ' | tr -d '\r')
     local address=$(grep "^Address" "$wgcf_profile" | grep -oP '\d+\.\d+\.\d+\.\d+/\d+' | head -1)
+
+    # 读取Peer段的配置
+    local public_key=$(grep "^PublicKey" "$wgcf_profile" | cut -d= -f2 | tr -d ' ' | tr -d '\r')
+    local endpoint=$(grep "^Endpoint" "$wgcf_profile" | cut -d= -f2 | tr -d ' ' | tr -d '\r')
+
+    # 调试输出
+    print_info "读取WARP配置:"
+    echo "  Private Key: ${private_key:0:10}... (长度: ${#private_key})"
+    echo "  Public Key: ${public_key:0:10}... (长度: ${#public_key})"
+    echo "  Endpoint: $endpoint"
+    echo "  Address: $address"
+
+    # 验证必需字段
+    if [[ -z "$private_key" || -z "$public_key" || -z "$endpoint" ]]; then
+        print_error "WARP配置缺少必需字段"
+        echo "{}"
+        return 1
+    fi
+
+    # 分离服务器地址和端口
+    local server=$(echo "$endpoint" | cut -d: -f1)
+    local server_port=$(echo "$endpoint" | cut -d: -f2)
+    server_port=${server_port:-2408}
 
     # 输出JSON格式
     jq -n \
         --arg private_key "$private_key" \
         --arg public_key "$public_key" \
-        --arg endpoint "$endpoint" \
+        --arg server "$server" \
+        --argjson server_port "$server_port" \
         --arg address "$address" \
         '{
             private_key: $private_key,
             peer_public_key: $public_key,
-            server: ($endpoint | split(":")[0]),
-            server_port: (($endpoint | split(":")[1]) // "2408" | tonumber),
+            server: $server,
+            server_port: $server_port,
             local_address: [$address]
         }'
 }
@@ -80,8 +104,8 @@ generate_singbox_config() {
 
             print_info "  处理节点: $protocol/$port (security: $security, warp: $warp_outbound)"
 
-            # 获取该节点的用户列表
-            local user_uuids=$(jq -r ".bindings[] | select(.port == \"$port\") | .users[]" "$node_users_file" 2>/dev/null)
+            # 获取该节点的用户列表（兼容字符串和数字端口）
+            local user_uuids=$(jq -r ".bindings[] | select(.port == \"$port\" or .port == $port) | .users[]" "$node_users_file" 2>/dev/null)
 
             # 生成users列表（sing-box格式）
             local users="[]"

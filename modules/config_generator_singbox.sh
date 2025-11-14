@@ -274,29 +274,6 @@ generate_singbox_config() {
                 final: "dns-remote"
             },
             inbounds: $inbounds,
-            endpoints: (
-                if $has_warp then
-                    [{
-                        type: "wireguard",
-                        tag: "warp-ep",
-                        name: "wgcf",
-                        mtu: 1280,
-                        address: ($warp_cfg.local_address // ["172.16.0.2/32"]),
-                        private_key: ($warp_cfg.private_key // ""),
-                        peers: [
-                            {
-                                address: ($warp_cfg.server // "engage.cloudflareclient.com"),
-                                port: ($warp_cfg.server_port // 2408),
-                                public_key: ($warp_cfg.peer_public_key // "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="),
-                                allowed_ips: ["0.0.0.0/0", "::/0"],
-                                reserved: [0, 0, 0]
-                            }
-                        ]
-                    }]
-                else
-                    []
-                end
-            ),
             outbounds: (
                 [
                     {
@@ -310,9 +287,14 @@ generate_singbox_config() {
                 ] + (
                     if $has_warp then
                         [{
-                            type: "direct",
+                            type: "wireguard",
                             tag: "warp-out",
-                            detour: "warp-ep"
+                            server: ($warp_cfg.server // "engage.cloudflareclient.com"),
+                            server_port: ($warp_cfg.server_port // 2408),
+                            local_address: ($warp_cfg.local_address // ["172.16.0.2/32"]),
+                            private_key: ($warp_cfg.private_key // ""),
+                            peer_public_key: ($warp_cfg.peer_public_key // "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="),
+                            mtu: 1280
                         }]
                     else
                         []
@@ -355,17 +337,14 @@ generate_singbox_config() {
         local inbound_count=$(jq '.inbounds | length' "$config_file" 2>/dev/null || echo "0")
         local outbound_count=$(jq '.outbounds | length' "$config_file" 2>/dev/null || echo "0")
 
-        # 验证WARP配置（新格式：检查endpoints和路由规则）
+        # 验证WARP配置（检查wireguard outbound和路由规则）
         if [[ "$warp_check_count" -gt 0 ]]; then
-            local warp_ep_exists=$(jq -r '.endpoints[]? | select(.tag == "warp-ep") | .tag' "$config_file" 2>/dev/null)
-            local warp_out_exists=$(jq -r '.outbounds[]? | select(.tag == "warp-out") | .tag' "$config_file" 2>/dev/null)
-            if [[ -n "$warp_ep_exists" && -n "$warp_out_exists" ]]; then
+            local warp_out_exists=$(jq -r '.outbounds[]? | select(.tag == "warp-out" and .type == "wireguard") | .tag' "$config_file" 2>/dev/null)
+            if [[ -n "$warp_out_exists" ]]; then
                 local warp_route_count=$(jq -r '[.route.rules[] | select(.outbound == "warp-out")] | length' "$config_file" 2>/dev/null)
-                print_success "→ WARP配置成功 (endpoint + outbound + $warp_route_count 条路由规则)"
+                print_success "→ WARP配置成功 (wireguard outbound + $warp_route_count 条路由规则)"
             else
-                print_error "→ WARP配置失败！"
-                [[ -z "$warp_ep_exists" ]] && print_warning "   缺少 warp-ep endpoint"
-                [[ -z "$warp_out_exists" ]] && print_warning "   缺少 warp-out outbound"
+                print_error "→ WARP配置失败！缺少 wireguard outbound"
             fi
         fi
 

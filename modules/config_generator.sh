@@ -254,35 +254,29 @@ generate_singbox_config() {
                 final: "dns-remote"
             },
             inbounds: $inbounds,
-            endpoints: (
-                if $has_warp then
-                    [{
-                        type: "wireguard",
-                        tag: "warp-ep",
-                        name: "wgcf",
-                        mtu: 1280,
-                        address: ($warp_cfg.local_address // ["172.16.0.2/32"]),
-                        private_key: ($warp_cfg.private_key // ""),
-                        peers: [
-                            {
-                                address: ($warp_cfg.server // "engage.cloudflareclient.com"),
-                                port: ($warp_cfg.server_port // 2408),
-                                public_key: ($warp_cfg.peer_public_key // "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="),
-                                allowed_ips: ["0.0.0.0/0", "::/0"],
-                                reserved: [0, 0, 0]
-                            }
-                        ]
-                    }]
-                else
-                    []
-                end
+            outbounds: (
+                [
+                    {
+                        type: "direct",
+                        tag: "direct-out"
+                    }
+                ] + (
+                    if $has_warp then
+                        [{
+                            type: "wireguard",
+                            tag: "warp-out",
+                            server: ($warp_cfg.server // "engage.cloudflareclient.com"),
+                            server_port: ($warp_cfg.server_port // 2408),
+                            local_address: ($warp_cfg.local_address // ["172.16.0.2/32"]),
+                            private_key: ($warp_cfg.private_key // ""),
+                            peer_public_key: ($warp_cfg.peer_public_key // "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="),
+                            mtu: 1280
+                        }]
+                    else
+                        []
+                    end
+                )
             ),
-            outbounds: [
-                {
-                    type: "direct",
-                    tag: "direct-out"
-                }
-            ],
             route: {
                 rules: [
                     {

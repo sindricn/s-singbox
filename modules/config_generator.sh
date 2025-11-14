@@ -16,10 +16,6 @@ get_warp_config() {
         return 1
     fi
 
-    # 显示配置文件的前几行（用于调试）
-    echo "[DEBUG] WARP配置文件前10行:" >&2
-    head -10 "$wgcf_profile" | sed 's/^/  /' >&2
-
     # 读取Interface段的配置（兼容多种格式，保留密钥末尾的=填充）
     local private_key=$(grep -i "^[[:space:]]*PrivateKey" "$wgcf_profile" | cut -d= -f2- | tr -d ' \t\r\n')
     local address=$(grep -i "^[[:space:]]*Address" "$wgcf_profile" | grep -oP '\d+\.\d+\.\d+\.\d+/\d+' | head -1)
@@ -27,13 +23,6 @@ get_warp_config() {
     # 读取Peer段的配置
     local public_key=$(grep -i "^[[:space:]]*PublicKey" "$wgcf_profile" | cut -d= -f2- | tr -d ' \t\r\n')
     local endpoint=$(grep -i "^[[:space:]]*Endpoint" "$wgcf_profile" | cut -d= -f2- | tr -d ' \t\r\n')
-
-    # 调试输出（临时）
-    echo "[DEBUG] WARP配置读取:" >&2
-    echo "  私钥长度: ${#private_key}" >&2
-    echo "  公钥长度: ${#public_key}" >&2
-    echo "  地址: $address" >&2
-    echo "  端点: $endpoint" >&2
 
     # 验证必需字段
     if [[ -z "$private_key" || -z "$public_key" || -z "$endpoint" ]]; then

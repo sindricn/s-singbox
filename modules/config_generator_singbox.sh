@@ -16,10 +16,6 @@ get_warp_config() {
         return 1
     fi
 
-    # 显示配置文件的前几行（用于调试）
-    echo "[DEBUG] WARP配置文件前10行:" >&2
-    head -10 "$wgcf_profile" | sed 's/^/  /' >&2
-
     # 读取Interface段的配置（兼容多种格式，保留密钥末尾的=填充）
     local private_key=$(grep -i "^[[:space:]]*PrivateKey" "$wgcf_profile" | cut -d= -f2- | tr -d ' \t\r\n')
     local address=$(grep -i "^[[:space:]]*Address" "$wgcf_profile" | grep -oP '\d+\.\d+\.\d+\.\d+/\d+' | head -1)
@@ -27,13 +23,6 @@ get_warp_config() {
     # 读取Peer段的配置
     local public_key=$(grep -i "^[[:space:]]*PublicKey" "$wgcf_profile" | cut -d= -f2- | tr -d ' \t\r\n')
     local endpoint=$(grep -i "^[[:space:]]*Endpoint" "$wgcf_profile" | cut -d= -f2- | tr -d ' \t\r\n')
-
-    # 调试输出（临时）
-    echo "[DEBUG] WARP配置读取:" >&2
-    echo "  私钥长度: ${#private_key}" >&2
-    echo "  公钥长度: ${#public_key}" >&2
-    echo "  地址: $address" >&2
-    echo "  端点: $endpoint" >&2
 
     # 验证必需字段
     if [[ -z "$private_key" || -z "$public_key" || -z "$endpoint" ]]; then
@@ -109,6 +98,7 @@ generate_singbox_config() {
 
     # 生成inbounds配置
     local inbounds="[]"
+    local warp_inbound_tags="[]"
     local node_count=$(jq '.nodes | length' "$nodes_file")
 
     if [[ $node_count -eq 0 ]]; then
@@ -216,9 +206,11 @@ generate_singbox_config() {
                 return 1
             fi
 
-            # 如果节点启用了WARP出站，添加endpoint标签（新格式）
+            # 如果节点启用了WARP出站，记录tag（后续在路由规则中使用）
             if [[ "$warp_outbound" == "true" ]]; then
-                inbound=$(echo "$inbound" | jq '. + {detour: "warp-ep"}')
+                # 将该inbound的tag添加到WARP标签列表
+                local inbound_tag="${protocol}-${port}"
+                warp_inbound_tags=$(echo "$warp_inbound_tags" | jq ". += [\"$inbound_tag\"]")
             fi
 
             # 添加到inbounds列表
@@ -256,6 +248,7 @@ generate_singbox_config() {
         --argjson inbounds "$inbounds" \
         --argjson warp_cfg "$warp_config" \
         --argjson has_warp "$has_warp" \
+        --argjson warp_inbound_tags "$warp_inbound_tags" \
         '{
             log: {
                 disabled: false,
@@ -304,25 +297,49 @@ generate_singbox_config() {
                     []
                 end
             ),
-            outbounds: [
-                {
-                    type: "direct",
-                    tag: "direct-out"
-                },
-                {
-                    type: "block",
-                    tag: "block-out"
-                }
-            ],
+            outbounds: (
+                [
+                    {
+                        type: "direct",
+                        tag: "direct-out"
+                    },
+                    {
+                        type: "block",
+                        tag: "block-out"
+                    }
+                ] + (
+                    if $has_warp then
+                        [{
+                            type: "direct",
+                            tag: "warp-out",
+                            detour: "warp-ep"
+                        }]
+                    else
+                        []
+                    end
+                )
+            ),
             route: {
                 default_domain_resolver: "dns-local",
-                rules: [
-                    {
-                        protocol: "dns",
-                        action: "route",
-                        outbound: "direct-out"
-                    }
-                ],
+                rules: (
+                    [
+                        {
+                            protocol: "dns",
+                            action: "route",
+                            outbound: "direct-out"
+                        }
+                    ] + (
+                        if ($has_warp and ($warp_inbound_tags | length) > 0) then
+                            [$warp_inbound_tags | {
+                                inbound: .,
+                                action: "route",
+                                outbound: "warp-out"
+                            }]
+                        else
+                            []
+                        end
+                    )
+                ),
                 final: "direct-out",
                 auto_detect_interface: true
             }
@@ -338,15 +355,17 @@ generate_singbox_config() {
         local inbound_count=$(jq '.inbounds | length' "$config_file" 2>/dev/null || echo "0")
         local outbound_count=$(jq '.outbounds | length' "$config_file" 2>/dev/null || echo "0")
 
-        # 验证WARP配置（新格式：检查endpoints）
+        # 验证WARP配置（新格式：检查endpoints和路由规则）
         if [[ "$warp_check_count" -gt 0 ]]; then
             local warp_ep_exists=$(jq -r '.endpoints[]? | select(.tag == "warp-ep") | .tag' "$config_file" 2>/dev/null)
-            if [[ -n "$warp_ep_exists" ]]; then
-                local warp_detour_count=$(jq -r '[.inbounds[] | select(.detour == "warp-ep")] | length' "$config_file")
-                print_success "→ WARP endpoint配置成功 (配置了 $warp_detour_count 个节点)"
+            local warp_out_exists=$(jq -r '.outbounds[]? | select(.tag == "warp-out") | .tag' "$config_file" 2>/dev/null)
+            if [[ -n "$warp_ep_exists" && -n "$warp_out_exists" ]]; then
+                local warp_route_count=$(jq -r '[.route.rules[] | select(.outbound == "warp-out")] | length' "$config_file" 2>/dev/null)
+                print_success "→ WARP配置成功 (endpoint + outbound + $warp_route_count 条路由规则)"
             else
-                print_error "→ WARP endpoint配置失败！已启用WARP的节点未添加到配置文件"
-                print_warning "   请检查WARP配置文件: /etc/wireguard/wgcf-profile.conf"
+                print_error "→ WARP配置失败！"
+                [[ -z "$warp_ep_exists" ]] && print_warning "   缺少 warp-ep endpoint"
+                [[ -z "$warp_out_exists" ]] && print_warning "   缺少 warp-out outbound"
             fi
         fi
 

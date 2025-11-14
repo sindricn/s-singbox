@@ -1591,9 +1591,14 @@ bind_warp_to_node() {
     fi
 
     # 更新节点配置，启用WARP出站
+    echo "[调试 bind_warp] 准备更新节点 $selected_port 的WARP配置"
     jq --arg port "$selected_port" \
        '(.nodes[] | select(.port == $port)) |= (. + {warp_outbound: true})' \
        "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
+
+    # 验证更新结果
+    local warp_status=$(jq -r ".nodes[] | select(.port == \"$selected_port\") | .warp_outbound" "$nodes_file")
+    echo "[调试 bind_warp] 节点 $selected_port 的warp_outbound字段: $warp_status"
 
     print_success "✅ WARP已关联到节点 (端口: $selected_port)"
     echo ""
@@ -1603,11 +1608,13 @@ bind_warp_to_node() {
 
     # 询问是否立即重新生成配置
     read -p "是否立即重新生成sing-box配置以应用更改？[Y/n]: " regen_choice
+    echo "[调试 bind_warp] 用户选择: '$regen_choice'"
     if [[ "$regen_choice" != "n" && "$regen_choice" != "N" ]]; then
         print_info "正在重新生成配置..."
 
         # 检查配置生成函数是否可用
         if declare -f generate_singbox_config >/dev/null 2>&1; then
+            echo "[调试 bind_warp] 调用generate_singbox_config函数"
             generate_singbox_config
 
             # 询问是否重启服务
@@ -1668,19 +1675,26 @@ unbind_warp_from_node() {
     fi
 
     # 移除WARP配置
+    echo "[调试 unbind_warp] 准备解除节点 $selected_port 的WARP配置"
     jq --arg port "$selected_port" \
        '(.nodes[] | select(.port == $port)) |= del(.warp_outbound)' \
        "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
+
+    # 验证移除结果
+    local warp_status=$(jq -r ".nodes[] | select(.port == \"$selected_port\") | .warp_outbound // \"未设置\"" "$nodes_file")
+    echo "[调试 unbind_warp] 节点 $selected_port 的warp_outbound字段: $warp_status"
 
     print_success "已解除节点 $selected_port 的WARP关联"
     echo ""
 
     # 询问是否立即重新生成配置
     read -p "是否立即重新生成sing-box配置以应用更改？[Y/n]: " regen_choice
+    echo "[调试 unbind_warp] 用户选择: '$regen_choice'"
     if [[ "$regen_choice" != "n" && "$regen_choice" != "N" ]]; then
         print_info "正在重新生成配置..."
 
         if declare -f generate_singbox_config >/dev/null 2>&1; then
+            echo "[调试 unbind_warp] 调用generate_singbox_config函数"
             generate_singbox_config
 
             read -p "配置已更新，是否重启sing-box服务？[Y/n]: " restart_choice

@@ -186,9 +186,14 @@ generate_singbox_config() {
             local inbound=$(generate_singbox_inbound "$port" "$protocol" "$transport" "$security" "$extra" "$users")
 
             # 如果节点启用了WARP出站，添加出站标签
+            echo "[调试 config_gen] 节点 $port 的warp_outbound值: '$warp_outbound'"
             if [[ "$warp_outbound" == "true" ]]; then
+                echo "[调试 config_gen] 为节点 $port 添加WARP出站detour"
                 inbound=$(echo "$inbound" | jq '. + {detour: "warp-out"}')
+                echo "[调试 config_gen] detour添加后的inbound: $(echo "$inbound" | jq -c '.')"
                 print_info "    已设置WARP出站"
+            else
+                echo "[调试 config_gen] 节点 $port 未启用WARP，跳过"
             fi
 
             # 添加到inbounds列表
@@ -198,13 +203,25 @@ generate_singbox_config() {
     fi
 
     # 检查是否有节点启用WARP
+    echo "[调试 config_gen] ==================== WARP配置检查 ===================="
     print_info "检查WARP出站配置..."
+
+    # 列出所有节点的warp_outbound状态
+    echo "[调试 config_gen] 所有节点的WARP状态:"
+    jq -r '.nodes[] | "\(.port)|\(.protocol)|\(.warp_outbound // "未设置")"' "$nodes_file" 2>/dev/null | while IFS='|' read -r p prot w; do
+        echo "[调试 config_gen]   节点 $p ($prot): warp_outbound=$w"
+    done
+
     local warp_enabled_count=$(jq -r '[.nodes[] | select(.warp_outbound == true)] | length' "$nodes_file" 2>/dev/null)
+    echo "[调试 config_gen] jq查询结果: warp_enabled_count=$warp_enabled_count"
     print_info "  启用WARP的节点数: $warp_enabled_count"
 
     local has_warp="false"
     if [[ "$warp_enabled_count" -gt 0 ]]; then
         has_warp="true"
+        echo "[调试 config_gen] has_warp设置为true"
+    else
+        echo "[调试 config_gen] has_warp保持为false"
     fi
     print_info "  has_warp=$has_warp"
 
@@ -212,15 +229,19 @@ generate_singbox_config() {
     local warp_config="{}"
     if [[ "$has_warp" == "true" ]]; then
         print_info "检测到WARP出站需求，读取WARP配置..."
+        echo "[调试 config_gen] 调用get_warp_config函数"
         warp_config=$(get_warp_config)
+        echo "[调试 config_gen] warp_config返回值长度: ${#warp_config}"
         if [[ "$warp_config" == "{}" ]]; then
             print_warning "WARP配置不存在或无效，将使用默认配置"
         else
             print_success "WARP配置读取成功"
+            echo "[调试 config_gen] warp_config内容: $(echo "$warp_config" | jq -c '.')"
         fi
     else
         print_info "没有节点启用WARP，跳过WARP配置"
     fi
+    echo "[调试 config_gen] ======================================================"
 
     # 生成完整配置（sing-box 1.11.0+ 兼容格式）
     local full_config=$(jq -n \
@@ -299,13 +320,31 @@ generate_singbox_config() {
         print_info "  出站数量: $outbound_count"
 
         # 检查WARP出站
+        echo "[调试 config_gen] 验证WARP配置写入..."
         local warp_out_exists=$(jq -r '.outbounds[] | select(.tag == "warp-out") | .tag' "$config_file" 2>/dev/null)
+        echo "[调试 config_gen] warp_out_exists='$warp_out_exists'"
+
         if [[ -n "$warp_out_exists" ]]; then
             print_success "  ✓ WARP出站已添加到配置"
+
+            # 显示WARP出站详情
+            echo "[调试 config_gen] WARP出站配置:"
+            jq -r '.outbounds[] | select(.tag == "warp-out")' "$config_file" 2>/dev/null | jq -c '.'
+
             local warp_detour_count=$(jq -r '[.inbounds[] | select(.detour == "warp-out")] | length' "$config_file")
+            echo "[调试 config_gen] 绑定WARP的inbound数量: $warp_detour_count"
             print_info "  绑定WARP的节点数: $warp_detour_count"
+
+            # 列出绑定WARP的节点
+            if [[ "$warp_detour_count" -gt 0 ]]; then
+                echo "[调试 config_gen] 绑定WARP的节点端口:"
+                jq -r '.inbounds[] | select(.detour == "warp-out") | .listen_port' "$config_file" 2>/dev/null | while read -r port; do
+                    echo "[调试 config_gen]   - 端口 $port"
+                done
+            fi
         else
             print_info "  未添加WARP出站（无节点启用）"
+            echo "[调试 config_gen] 原因: has_warp=$has_warp"
         fi
 
         return 0

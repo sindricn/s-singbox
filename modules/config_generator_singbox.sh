@@ -205,9 +205,9 @@ generate_singbox_config() {
                 return 1
             fi
 
-            # 如果节点启用了WARP出站，添加 detour 引用 endpoint
+            # 如果节点启用了WARP出站，添加标记字段（用于路由规则过滤）
             if [[ "$warp_outbound" == "true" ]]; then
-                inbound=$(echo "$inbound" | jq '. + {detour: "warp-ep"}')
+                inbound=$(echo "$inbound" | jq '. + {warp_outbound: true}')
             fi
 
             # 添加到inbounds列表
@@ -305,20 +305,33 @@ generate_singbox_config() {
             ],
             route: {
                 default_domain_resolver: "dns-local",
-                rules: [
-                    {
-                        protocol: "dns",
-                        action: "route",
-                        outbound: "direct-out"
-                    }
-                ],
+                rules: (
+                    [
+                        {
+                            protocol: "dns",
+                            action: "route",
+                            outbound: "direct-out"
+                        }
+                    ] + (
+                        if $has_warp then
+                            # 为启用 WARP 的 inbound 添加路由规则，直接路由到 endpoint
+                            ($inbounds | map(select(.warp_outbound == true)) | map({
+                                inbound: [.tag],
+                                action: "route",
+                                outbound: "warp-ep"
+                            }))
+                        else
+                            []
+                        end
+                    )
+                ),
                 final: "direct-out",
                 auto_detect_interface: true
             }
         }')
 
-    # 写入配置文件
-    echo "$full_config" | jq '.' > "$config_file"
+    # 写入配置文件（移除临时的 warp_outbound 标记字段）
+    echo "$full_config" | jq 'del(.inbounds[].warp_outbound)' > "$config_file"
 
     if [[ $? -eq 0 ]]; then
         print_success "配置文件生成成功: $config_file"
@@ -327,12 +340,12 @@ generate_singbox_config() {
         local inbound_count=$(jq '.inbounds | length' "$config_file" 2>/dev/null || echo "0")
         local outbound_count=$(jq '.outbounds | length' "$config_file" 2>/dev/null || echo "0")
 
-        # 验证WARP配置（检查wireguard endpoint和inbound detour）
+        # 验证WARP配置（检查wireguard endpoint和路由规则）
         if [[ "$warp_check_count" -gt 0 ]]; then
             local warp_ep_exists=$(jq -r '.endpoints[]? | select(.tag == "warp-ep" and .type == "wireguard") | .tag' "$config_file" 2>/dev/null)
             if [[ -n "$warp_ep_exists" ]]; then
-                local warp_detour_count=$(jq -r '[.inbounds[] | select(.detour == "warp-ep")] | length' "$config_file" 2>/dev/null)
-                print_success "→ WARP配置成功 (wireguard endpoint + $warp_detour_count 个inbound绑定)"
+                local warp_route_count=$(jq -r '[.route.rules[] | select(.outbound == "warp-ep")] | length' "$config_file" 2>/dev/null)
+                print_success "→ WARP配置成功 (wireguard endpoint + $warp_route_count 条路由规则)"
             else
                 print_error "→ WARP配置失败！缺少 wireguard endpoint"
             fi

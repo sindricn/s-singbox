@@ -258,8 +258,8 @@ get_enabled_users_count() {
 # 获取在线用户数量
 get_online_users_count() {
     local online=0
-    # TODO: 实现实际的在线用户统计逻辑
-    # 暂时返回0
+    # 注: 在线用户统计需要实际运行环境和数据支持
+    # 开发环境暂时返回0
     echo "$online"
 }
 
@@ -274,49 +274,44 @@ show_main_menu() {
     local status_info=$(get_singbox_status)
     local version=$(echo "$status_info" | cut -d'|' -f1)
     local status=$(echo "$status_info" | cut -d'|' -f2)
-
-    # 获取节点数量
     local node_count=$(get_nodes_count 2>/dev/null || echo "0")
-
-    # 获取用户数量
     local user_count=$(get_users_count 2>/dev/null || echo "0")
-
-    # 获取在线用户数量
     local online_count=$(get_online_users_count 2>/dev/null || echo "0")
 
-    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${NC}   sing-box 一键管理脚本 V2.0.0"
-    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    # 使用统一的UI函数
+    print_header "sing-box 一键管理脚本 V2.0.0"
     echo ""
-    echo -e "${CYAN}┌─────────────────────────────────────┐${NC}"
-    echo -e "${CYAN}│${NC}  ${YELLOW}系统状态${NC}"
-    echo -e "${CYAN}├─────────────────────────────────────┤${NC}"
-    echo -e "${CYAN}│${NC}  内核版本: ${YELLOW}${version}${NC}"
-    echo -e "${CYAN}│${NC}  运行状态: ${status}"
-    echo -e "${CYAN}│${NC}  用户数量: ${BLUE}${user_count}${NC}"
-    echo -e "${CYAN}│${NC}  节点总数: ${BLUE}${node_count}${NC}"
-    echo -e "${CYAN}│${NC}  在线用户: ${GREEN}${online_count}${NC}/${BLUE}${user_count}${NC}"
-    echo -e "${CYAN}└─────────────────────────────────────┘${NC}"
+
+    print_section_start
+    print_menu_info "  ${YELLOW}系统状态${NC}" ""
+    print_divider
+    print_menu_info "  内核版本" "${YELLOW}${version}${NC}"
+    print_menu_info "  运行状态" "${status}"
+    print_menu_info "  用户数量" "${BLUE}${user_count}${NC}"
+    print_menu_info "  节点总数" "${BLUE}${node_count}${NC}"
+    print_menu_info "  在线用户" "${GREEN}${online_count}${NC}/${BLUE}${user_count}${NC}"
+    print_section_end
     echo ""
-    echo -e "${CYAN}┌─────────────────────────────────────┐${NC}"
-    echo -e "${CYAN}│${NC}  ${YELLOW}功能菜单${NC}"
-    echo -e "${CYAN}├─────────────────────────────────────┤${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}1.${NC}  sing-box 管理"
-    echo -e "${CYAN}│${NC}  ${GREEN}2.${NC}  用户管理"
-    echo -e "${CYAN}│${NC}  ${GREEN}3.${NC}  节点管理"
-    echo -e "${CYAN}│${NC}  ${GREEN}4.${NC}  订阅管理"
-    echo -e "${CYAN}│${NC}  ${GREEN}5.${NC}  域名管理"
-    echo -e "${CYAN}│${NC}  ${GREEN}6.${NC}  证书管理"
-    echo -e "${CYAN}│${NC}  ${GREEN}7.${NC}  出站规则"
-    echo -e "${CYAN}│${NC}  ${GREEN}8.${NC}  防火墙管理"
-    echo -e "${CYAN}├─────────────────────────────────────┤${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}9.${NC}  CF 隧道管理 ${YELLOW}[NEW]${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}10.${NC} BBR 加速管理 ${YELLOW}[NEW]${NC}"
-    echo -e "${CYAN}├─────────────────────────────────────┤${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}11.${NC} 脚本管理"
-    echo -e "${CYAN}│${NC}  ${GREEN}12.${NC} 关于脚本"
-    echo -e "${CYAN}│${NC}  ${GREEN}0.${NC}  退出脚本"
-    echo -e "${CYAN}└─────────────────────────────────────┘${NC}"
+
+    print_section_start
+    print_menu_info "  ${YELLOW}功能菜单${NC}" ""
+    print_divider
+    print_menu_item "1" "sing-box 管理"
+    print_menu_item "2" "用户管理"
+    print_menu_item "3" "节点管理"
+    print_menu_item "4" "订阅管理"
+    print_menu_item "5" "域名管理"
+    print_menu_item "6" "证书管理"
+    print_menu_item "7" "出站规则"
+    print_menu_item "8" "防火墙管理"
+    print_divider
+    print_menu_item "9" "CF 隧道管理" " ${YELLOW}[NEW]${NC}"
+    print_menu_item "10" "BBR 加速管理" " ${YELLOW}[NEW]${NC}"
+    print_divider
+    print_menu_item "11" "脚本管理"
+    print_menu_item "12" "关于脚本"
+    print_menu_item "0" "退出脚本"
+    print_section_end
     echo ""
 }
 
@@ -324,133 +319,94 @@ show_main_menu() {
 menu_core() {
     while true; do
         clear
-        echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║${NC}          sing-box 管理"
-        echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+        print_header "sing-box 管理"
         echo ""
-        echo -e "${GREEN}1.${NC} 安装 sing-box"
-        echo -e "${GREEN}2.${NC} 启动 sing-box"
-        echo -e "${GREEN}3.${NC} 停止 sing-box"
-        echo -e "${GREEN}4.${NC} 重启 sing-box"
-        echo -e "${GREEN}5.${NC} 卸载 sing-box"
-        echo -e "${GREEN}6.${NC} 更新 sing-box"
-        echo -e "${GREEN}7.${NC} 查看日志"
-        echo -e "${GREEN}8.${NC} 查看版本"
+
+        print_section_start
+        print_menu_item "1" "安装 sing-box"
+        print_menu_item "2" "启动 sing-box"
+        print_menu_item "3" "停止 sing-box"
+        print_menu_item "4" "重启 sing-box"
+        print_menu_item "5" "卸载 sing-box"
+        print_menu_item "6" "更新 sing-box"
+        print_menu_item "7" "查看日志"
+        print_menu_item "8" "查看版本"
         echo ""
-        echo -e "${YELLOW}数据管理：${NC}"
-        echo -e "${GREEN}9.${NC} 重置用户数据 ${GRAY}(保留节点)${NC}"
-        echo -e "${GREEN}10.${NC} 重置节点数据 ${GRAY}(保留用户)${NC}"
-        echo -e "${GREEN}11.${NC} 重置所有数据 ${RED}(删除所有)${NC}"
+        print_menu_info "  ${YELLOW}数据管理${NC}" ""
+        print_menu_item "9" "重置用户数据" " ${GRAY}(保留节点)${NC}"
+        print_menu_item "10" "重置节点数据" " ${GRAY}(保留用户)${NC}"
+        print_menu_item "11" "重置所有数据" " ${RED}(删除所有)${NC}"
         echo ""
-        echo -e "${YELLOW}配置查看：${NC}"
-        echo -e "${GREEN}12.${NC} 查看配置信息"
-        echo -e "${GREEN}0.${NC} 返回主菜单"
-        echo ""
-        read -p "请选择操作 [0-12]: " choice
+        print_menu_info "  ${YELLOW}配置查看${NC}" ""
+        print_menu_item "12" "查看配置信息"
+        print_menu_item "0" "返回主菜单"
+        print_section_end
+
+        print_nav_options "false" "true"
+        choice=$(read_menu_choice "请选择操作 [0-12]")
+        local ret=$?
+
+        # 处理导航
+        [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case $choice in
-            1)
-                install_sing-box
-                read -p "按回车键继续..."
-                ;;
-            2)
-                start_sing-box
-                read -p "按回车键继续..."
-                ;;
-            3)
-                stop_sing-box
-                read -p "按回车键继续..."
-                ;;
-            4)
-                restart_sing-box
-                read -p "按回车键继续..."
-                ;;
-            5)
-                uninstall_sing-box
-                read -p "按回车键继续..."
-                ;;
-            6)
-                update_sing-box
-                read -p "按回车键继续..."
-                ;;
+            1) install_sing-box; wait_for_input ;;
+            2) start_sing-box; wait_for_input ;;
+            3) stop_sing-box; wait_for_input ;;
+            4) restart_sing-box; wait_for_input ;;
+            5) uninstall_sing-box; wait_for_input ;;
+            6) update_sing-box; wait_for_input ;;
             7)
                 # 查看日志
                 clear
-                echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-                echo -e "${CYAN}║${NC}          sing-box 日志"
-                echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+                print_header "sing-box 日志"
                 echo ""
-                echo -e "${GREEN}1.${NC} 实时日志（最新50行）"
-                echo -e "${GREEN}2.${NC} 完整日志"
-                echo -e "${GREEN}3.${NC} 错误日志"
-                echo -e "${GREEN}0.${NC} 返回"
+                print_menu_item "1" "实时日志(最新50行)"
+                print_menu_item "2" "完整日志"
+                print_menu_item "3" "错误日志"
+                print_menu_item "0" "返回"
                 echo ""
-                read -p "请选择 [0-3]: " log_choice
 
+                log_choice=$(read_menu_choice "请选择 [0-3]")
                 case $log_choice in
-                    1)
-                        echo ""
-                        echo -e "${CYAN}实时日志（Ctrl+C退出）:${NC}"
-                        echo ""
-                        journalctl -u sing-box -f -n 50
-                        ;;
-                    2)
-                        echo ""
-                        echo -e "${CYAN}完整日志:${NC}"
-                        echo ""
-                        journalctl -u sing-box --no-pager | less
-                        ;;
-                    3)
-                        echo ""
-                        echo -e "${CYAN}错误日志:${NC}"
-                        echo ""
-                        journalctl -u sing-box -p err --no-pager | less
-                        ;;
+                    1) echo ""; echo -e "${CYAN}实时日志(Ctrl+C退出):${NC}"; echo ""; journalctl -u sing-box -f -n 50 ;;
+                    2) echo ""; echo -e "${CYAN}完整日志:${NC}"; echo ""; journalctl -u sing-box --no-pager | less ;;
+                    3) echo ""; echo -e "${CYAN}错误日志:${NC}"; echo ""; journalctl -u sing-box -p err --no-pager | less ;;
                     0) ;;
                     *) print_error "无效选择" ;;
                 esac
-                read -p "按回车键继续..."
+                wait_for_input
                 ;;
-            8)
-                # 查看版本
-                show_version
-                read -p "按回车键继续..."
-                ;;
+            8) show_version; wait_for_input ;;
             9)
-                # 重置用户数据
                 if declare -f reset_users &>/dev/null; then
                     reset_users
                 else
                     print_error "reset_users 函数未加载"
                 fi
-                read -p "按回车键继续..."
+                wait_for_input
                 ;;
             10)
-                # 重置节点数据
                 if declare -f reset_nodes &>/dev/null; then
                     reset_nodes
                 else
                     print_error "reset_nodes 函数未加载"
                 fi
-                read -p "按回车键继续..."
+                wait_for_input
                 ;;
             11)
-                # 重置所有数据
                 if declare -f reset_all_data &>/dev/null; then
                     reset_all_data
                 else
                     print_error "reset_all_data 函数未加载"
                 fi
-                read -p "按回车键继续..."
+                wait_for_input
                 ;;
             12)
                 # 查看配置信息
                 clear
-                echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-                echo -e "${CYAN}║${NC}          sing-box 配置信息"
-                echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+                print_header "sing-box 配置信息"
                 echo ""
-
                 if [[ -f "$SINGBOX_CONFIG" ]]; then
                     echo -e "${YELLOW}配置文件路径:${NC} $SINGBOX_CONFIG"
                     echo ""
@@ -460,12 +416,9 @@ menu_core() {
                 else
                     print_error "配置文件不存在: $SINGBOX_CONFIG"
                 fi
-                echo ""
-                read -p "按回车键继续..."
+                wait_for_input
                 ;;
-            0)
-                return
-                ;;
+            0) return ;;
             *)
                 print_error "无效选择"
                 sleep 1
@@ -477,43 +430,41 @@ menu_core() {
 # 节点管理菜单
 show_node_menu() {
     clear
-
     local nodes_count=$(get_nodes_count 2>/dev/null || echo "0")
 
-    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${NC}          节点管理"
-    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    print_header "节点管理"
     echo ""
-    echo -e "${CYAN}当前节点数:${NC} ${YELLOW}${nodes_count}${NC} 个"
-    echo ""
-    echo -e "${GREEN}1.${NC} 添加节点"
-    echo -e "${GREEN}2.${NC} 删除节点"
-    echo -e "${GREEN}3.${NC} 列出节点"
-    echo -e "${GREEN}4.${NC} 查看节点详情"
-    echo -e "${GREEN}5.${NC} 修改节点配置"
-    echo -e "${GREEN}0.${NC} 返回主菜单"
-    echo ""
+    print_section_start
+    print_menu_info "  当前节点数" "${YELLOW}${nodes_count}${NC} 个"
+    print_divider
+    print_menu_item "1" "添加节点"
+    print_menu_item "2" "删除节点"
+    print_menu_item "3" "列出节点"
+    print_menu_item "4" "查看节点详情"
+    print_menu_item "5" "修改节点配置"
+    print_menu_item "0" "返回主菜单"
+    print_section_end
+    print_nav_options "false" "true"
 }
 
 # 用户管理菜单
 show_user_menu() {
     clear
-
     local users_count=$(get_users_count 2>/dev/null || echo "0")
     local enabled_count=$(get_enabled_users_count 2>/dev/null || echo "0")
 
-    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${NC}          用户管理"
-    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    print_header "用户管理"
     echo ""
-    echo -e "${CYAN}当前用户数:${NC} ${YELLOW}${users_count}${NC} 个 ${CYAN}(启用:${NC} ${GREEN}${enabled_count}${NC}${CYAN})${NC}"
-    echo ""
-    echo -e "${GREEN}1.${NC} 查看用户"
-    echo -e "${GREEN}2.${NC} 添加用户"
-    echo -e "${GREEN}3.${NC} 修改用户"
-    echo -e "${GREEN}4.${NC} 删除用户"
-    echo -e "${GREEN}0.${NC} 返回主菜单"
-    echo ""
+    print_section_start
+    print_menu_info "  当前用户数" "${YELLOW}${users_count}${NC} 个 ${CYAN}(启用: ${GREEN}${enabled_count}${NC}${CYAN})${NC}"
+    print_divider
+    print_menu_item "1" "查看用户"
+    print_menu_item "2" "添加用户"
+    print_menu_item "3" "修改用户"
+    print_menu_item "4" "删除用户"
+    print_menu_item "0" "返回主菜单"
+    print_section_end
+    print_nav_options "false" "true"
 }
 
 # 获取绑定数量
@@ -531,25 +482,24 @@ get_bindings_count() {
 # 绑定管理菜单
 show_binding_menu() {
     clear
-
     local bindings_count=$(get_bindings_count 2>/dev/null || echo "0")
 
-    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${NC}          绑定管理"
-    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    print_header "绑定管理"
     echo ""
-    echo -e "${CYAN}当前绑定数:${NC} ${YELLOW}${bindings_count}${NC} 个"
-    echo ""
-    echo -e "${GREEN}1.${NC} 绑定用户到节点"
-    echo -e "${GREEN}2.${NC} 解绑用户与节点"
-    echo -e "${GREEN}3.${NC} 批量绑定用户"
-    echo -e "${GREEN}4.${NC} 列出所有绑定"
-    echo -e "${GREEN}5.${NC} 列出用户的绑定"
-    echo -e "${GREEN}6.${NC} 列出节点的用户"
-    echo -e "${GREEN}7.${NC} 清理空绑定"
-    echo -e "${GREEN}8.${NC} 验证绑定完整性"
-    echo -e "${GREEN}0.${NC} 返回主菜单"
-    echo ""
+    print_section_start
+    print_menu_info "  当前绑定数" "${YELLOW}${bindings_count}${NC} 个"
+    print_divider
+    print_menu_item "1" "绑定用户到节点"
+    print_menu_item "2" "解绑用户与节点"
+    print_menu_item "3" "批量绑定用户"
+    print_menu_item "4" "列出所有绑定"
+    print_menu_item "5" "列出用户的绑定"
+    print_menu_item "6" "列出节点的用户"
+    print_menu_item "7" "清理空绑定"
+    print_menu_item "8" "验证绑定完整性"
+    print_menu_item "0" "返回主菜单"
+    print_section_end
+    print_nav_options "false" "true"
 }
 
 # 配置管理菜单（已废弃，功能移至singbox管理）
@@ -606,26 +556,18 @@ show_service_menu() {
 handle_node_menu() {
     while true; do
         show_node_menu
-        read -p "请选择: " choice
+        choice=$(read_menu_choice "请选择")
+        local ret=$?
+
+        # 处理导航
+        [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case "$choice" in
-            1)
-                # 添加节点（显示协议选择菜单）
-                menu_node_add
-                ;;
-            2)
-                # 删除节点
-                delete_node
-                read -p "按回车键继续..."
-                ;;
-            3)
-                # 列出节点
-                list_nodes
-                read -p "按回车键继续..."
-                ;;
+            1) menu_node_add ;;
+            2) delete_node; wait_for_input ;;
+            3) list_nodes; wait_for_input ;;
             4)
-                # 查看节点详情
-                list_nodes true  # 不清屏
+                list_nodes true
                 echo ""
                 read -p "请输入要查看的节点序号 (0返回): " node_idx
                 if [[ "$node_idx" != "0" && -n "$node_idx" ]]; then
@@ -636,16 +578,10 @@ handle_node_menu() {
                         print_error "无效的节点序号"
                     fi
                 fi
-                read -p "按回车键继续..."
+                wait_for_input
                 ;;
-            5)
-                # 修改节点配置
-                modify_node_config
-                read -p "按回车键继续..."
-                ;;
-            0)
-                return
-                ;;
+            5) modify_node_config; wait_for_input ;;
+            0) return ;;
             *)
                 print_error "无效选择"
                 sleep 1
@@ -710,30 +646,18 @@ menu_node_add() {
 handle_user_menu() {
     while true; do
         show_user_menu
-        read -p "请选择: " choice
+        choice=$(read_menu_choice "请选择")
+        local ret=$?
+
+        # 处理导航
+        [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case "$choice" in
-            1)
-                # 查看用户
-                view_users_menu
-                ;;
-            2)
-                # 添加用户
-                add_global_user
-                read -p "按回车键继续..."
-                ;;
-            3)
-                # 修改用户
-                modify_user_menu
-                ;;
-            4)
-                # 删除用户
-                delete_users_batch
-                read -p "按回车键继续..."
-                ;;
-            0)
-                return
-                ;;
+            1) view_users_menu ;;
+            2) add_global_user; wait_for_input ;;
+            3) modify_user_menu ;;
+            4) delete_users_batch; wait_for_input ;;
+            0) return ;;
             *)
                 print_error "无效选择"
                 sleep 1
@@ -745,52 +669,20 @@ handle_user_menu() {
 handle_binding_menu() {
     while true; do
         show_binding_menu
-        read -p "请选择: " choice
+        choice=$(read_menu_choice "请选择")
+        local ret=$?
+
+        # 处理导航
+        [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case "$choice" in
-            1)
-                # 绑定用户到节点
-                bind_users_to_node_smart
-                read -p "按回车键继续..."
-                ;;
-            2)
-                # 解绑用户与节点
-                unbind_user_from_node
-                read -p "按回车键继续..."
-                ;;
-            3)
-                # 批量绑定用户
-                batch_bind_users_to_node
-                read -p "按回车键继续..."
-                ;;
-            4)
-                # 列出所有绑定
-                show_user_node_bindings
-                read -p "按回车键继续..."
-                ;;
-            5)
-                # 列出用户的绑定
-                show_user_node_bindings
-                read -p "按回车键继续..."
-                ;;
-            6)
-                # 列出节点的用户
-                show_user_node_bindings
-                read -p "按回车键继续..."
-                ;;
-            7)
-                # 清理空绑定
-                log_info "清理空绑定功能待实现"
-                read -p "按回车键继续..."
-                ;;
-            8)
-                # 验证绑定完整性
-                log_info "验证绑定功能待实现"
-                read -p "按回车键继续..."
-                ;;
-            0)
-                return
-                ;;
+            1) bind_users_to_node_smart; wait_for_input ;;
+            2) unbind_user_from_node; wait_for_input ;;
+            3) batch_bind_users_to_node; wait_for_input ;;
+            4|5|6) show_user_node_bindings; wait_for_input ;;
+            7) log_info "清理空绑定功能待实现"; wait_for_input ;;
+            8) log_info "验证绑定功能待实现"; wait_for_input ;;
+            0) return ;;
             *)
                 print_error "无效选择"
                 sleep 1
@@ -802,21 +694,16 @@ handle_binding_menu() {
 handle_config_menu() {
     while true; do
         show_config_menu
-        read -p "请选择: " choice
+        choice=$(read_menu_choice "请选择")
+        local ret=$?
+
+        # 处理导航
+        [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case "$choice" in
-            1)
-                # 生成配置
-                generate_singbox_config
-                read -p "按回车键继续..."
-                ;;
-            2)
-                # 查看配置
-                show_config
-                read -p "按回车键继续..."
-                ;;
+            1) generate_singbox_config; wait_for_input ;;
+            2) show_config; wait_for_input ;;
             3)
-                # 验证配置
                 if [[ -f "$SINGBOX_CONFIG" ]] && command -v sing-box &>/dev/null; then
                     print_info "验证配置文件..."
                     if sing-box check -c "$SINGBOX_CONFIG"; then
@@ -827,16 +714,10 @@ handle_config_menu() {
                 else
                     print_error "配置文件不存在或 sing-box 未安装"
                 fi
-                read -p "按回车键继续..."
+                wait_for_input
                 ;;
-            4)
-                # 恢复备份
-                restore_config
-                read -p "按回车键继续..."
-                ;;
-            0)
-                return
-                ;;
+            4) restore_config; wait_for_input ;;
+            0) return ;;
             *)
                 print_error "无效选择"
                 sleep 1
@@ -848,28 +729,18 @@ handle_config_menu() {
 handle_service_menu() {
     while true; do
         show_service_menu
-        read -p "请选择: " choice
+        choice=$(read_menu_choice "请选择")
+        local ret=$?
+
+        # 处理导航
+        [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case "$choice" in
-            1)
-                start_singbox
-                read -p "按回车键继续..."
-                ;;
-            2)
-                stop_singbox
-                read -p "按回车键继续..."
-                ;;
-            3)
-                restart_singbox
-                read -p "按回车键继续..."
-                ;;
-            4)
-                reload_singbox
-                read -p "按回车键继续..."
-                ;;
-            0)
-                return
-                ;;
+            1) start_singbox; wait_for_input ;;
+            2) stop_singbox; wait_for_input ;;
+            3) restart_singbox; wait_for_input ;;
+            4) reload_singbox; wait_for_input ;;
+            0) return ;;
             *)
                 print_error "无效选择"
                 sleep 1
@@ -913,15 +784,20 @@ show_about() {
 menu_script() {
     while true; do
         clear
-        echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║${NC}          脚本管理"
-        echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+        print_header "脚本管理"
         echo ""
-        echo -e "${GREEN}1.${NC} 更新脚本"
-        echo -e "${GREEN}2.${NC} 卸载管理"
-        echo -e "${GREEN}0.${NC} 返回主菜单"
-        echo ""
-        read -p "请选择操作 [0-2]: " choice
+        print_section_start
+        print_menu_item "1" "更新脚本"
+        print_menu_item "2" "卸载管理"
+        print_menu_item "0" "返回主菜单"
+        print_section_end
+        print_nav_options "false" "true"
+
+        choice=$(read_menu_choice "请选择操作 [0-2]")
+        local ret=$?
+
+        # 处理导航
+        [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case $choice in
             1)
@@ -937,7 +813,7 @@ menu_script() {
 
                 cd "$script_dir" || {
                     log_error "无法进入脚本目录"
-                    read -p "按 Enter 键继续..."
+                    wait_for_input
                     continue
                 }
 
@@ -945,44 +821,32 @@ menu_script() {
                     git pull || log_error "更新失败"
                     log_info "脚本更新完成"
                 else
-                    log_warn "当前不是Git仓库，无法自动更新"
+                    log_warn "当前不是Git仓库,无法自动更新"
                     echo -e "${YELLOW}请手动下载最新版本${NC}"
                 fi
-                read -p "按 Enter 键继续..."
+                wait_for_input
                 ;;
             2)
                 # 卸载管理
                 clear
-                echo -e "${RED}╔═══════════════════════════════════════╗${NC}"
-                echo -e "${RED}║${NC}          卸载管理"
-                echo -e "${RED}╚═══════════════════════════════════════╝${NC}"
+                print_header "卸载管理"
                 echo ""
-                echo -e "${YELLOW}卸载选项：${NC}"
-                echo -e "  ${CYAN}1.${NC} 仅卸载管理脚本（保留 sing-box 核心与配置）"
-                echo -e "  ${CYAN}2.${NC} 仅卸载 sing-box 核心与配置文件（保留管理脚本）"
-                echo -e "  ${CYAN}3.${NC} 完全卸载（同时卸载脚本和 sing-box）"
+                echo -e "${YELLOW}卸载选项:${NC}"
+                echo -e "  ${CYAN}1.${NC} 仅卸载管理脚本(保留 sing-box 核心与配置)"
+                echo -e "  ${CYAN}2.${NC} 仅卸载 sing-box 核心与配置文件(保留管理脚本)"
+                echo -e "  ${CYAN}3.${NC} 完全卸载(同时卸载脚本和 sing-box)"
                 echo ""
                 read -p "请选择卸载方式 [1-3] (0 取消): " uninstall_choice
 
                 case $uninstall_choice in
-                    1)
-                        log_warn "仅卸载管理脚本功能尚未实现"
-                        ;;
-                    2)
-                        log_warn "仅卸载 sing-box 核心功能尚未实现"
-                        ;;
-                    3)
-                        log_warn "完全卸载功能尚未实现"
-                        ;;
-                    0|*)
-                        log_info "已取消卸载"
-                        ;;
+                    1) log_warn "仅卸载管理脚本功能尚未实现" ;;
+                    2) log_warn "仅卸载 sing-box 核心功能尚未实现" ;;
+                    3) log_warn "完全卸载功能尚未实现" ;;
+                    0|*) log_info "已取消卸载" ;;
                 esac
-                read -p "按 Enter 键继续..."
+                wait_for_input
                 ;;
-            0)
-                break
-                ;;
+            0) break ;;
             *)
                 log_error "无效选择"
                 sleep 1

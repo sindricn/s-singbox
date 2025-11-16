@@ -200,6 +200,81 @@ confirm() {
     [[ "$response" =~ ^[Yy]$ ]]
 }
 
+#================================================================
+# UI 辅助函数 - UI Helper Functions
+#================================================================
+
+# 统一的边框样式
+print_header() {
+    local title="$1"
+    local width=39
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    printf "${CYAN}║${NC}  %-${width}s\n" "$title"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+}
+
+print_section_start() {
+    echo -e "${CYAN}┌─────────────────────────────────────┐${NC}"
+}
+
+print_section_end() {
+    echo -e "${CYAN}└─────────────────────────────────────┘${NC}"
+}
+
+print_divider() {
+    echo -e "${CYAN}├─────────────────────────────────────┤${NC}"
+}
+
+# 统一的菜单项显示
+print_menu_item() {
+    local number="$1"
+    local text="$2"
+    local extra="${3:-}"
+    echo -e "${CYAN}│${NC}  ${GREEN}${number}.${NC} ${text}${extra}"
+}
+
+print_menu_info() {
+    local label="$1"
+    local value="$2"
+    echo -e "${CYAN}│${NC}  ${label}: ${value}"
+}
+
+# 统一的等待函数
+wait_for_input() {
+    local prompt="${1:-按回车键继续...}"
+    read -p "$prompt"
+}
+
+# 统一的菜单导航提示
+print_nav_options() {
+    local show_back="${1:-true}"
+    local show_main="${2:-true}"
+
+    echo ""
+    if [[ "$show_back" == "true" && "$show_main" == "true" ]]; then
+        echo -e "${GRAY}提示: 输入 'b' 返回上级, 'm' 返回主菜单${NC}"
+    elif [[ "$show_back" == "true" ]]; then
+        echo -e "${GRAY}提示: 输入 'b' 返回上级${NC}"
+    elif [[ "$show_main" == "true" ]]; then
+        echo -e "${GRAY}提示: 输入 'm' 返回主菜单${NC}"
+    fi
+}
+
+# 增强的菜单输入处理
+read_menu_choice() {
+    local prompt="${1:-请选择}"
+    local choice
+
+    read -p "$prompt: " choice
+
+    # 处理导航快捷键
+    case "$choice" in
+        b|B) return 99 ;;  # 返回上级
+        m|M) return 98 ;;  # 返回主菜单
+        *) echo "$choice"; return 0 ;;
+    esac
+}
+
 # 确保 JSON 数据文件存在
 ensure_json_file() {
     local target_file="$1"

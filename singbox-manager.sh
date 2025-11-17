@@ -781,6 +781,159 @@ show_about() {
 }
 
 # 脚本管理菜单
+#================================================================
+# 卸载功能
+#================================================================
+
+# 仅卸载管理脚本
+uninstall_script_only() {
+    clear
+    print_warning "仅卸载管理脚本"
+    echo ""
+    print_info "此操作将："
+    echo "  • 删除管理脚本及相关模块"
+    echo "  • 保留 sing-box 核心程序"
+    echo "  • 保留所有配置和数据"
+    echo ""
+
+    read -p "确认卸载管理脚本？[y/N]: " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        log_info "已取消卸载"
+        return 0
+    fi
+
+    echo ""
+    # 获取脚本目录
+    local script_path="${BASH_SOURCE[0]}"
+    if [[ -L "$script_path" ]]; then
+        script_path="$(readlink -f "$script_path")"
+    fi
+    local script_dir="$(cd "$(dirname "$script_path")" && pwd)"
+    local script_name="$(basename "$script_path")"
+
+    # 删除脚本目录
+    print_info "删除脚本目录: $script_dir"
+
+    # 如果在脚本目录中，先退出到上级目录
+    cd /tmp || cd /
+
+    rm -rf "$script_dir"
+    print_success "管理脚本已卸载"
+
+    echo ""
+    print_info "sing-box 核心和配置已保留"
+    print_info "您仍可使用 systemctl 管理 sing-box 服务"
+    echo ""
+
+    exit 0
+}
+
+# 仅卸载 sing-box 核心
+uninstall_singbox_only() {
+    clear
+    print_warning "仅卸载 sing-box 核心"
+    echo ""
+    print_info "此操作将："
+    echo "  • 卸载 sing-box 核心程序"
+    echo "  • 可选择是否删除配置和数据"
+    echo "  • 保留管理脚本"
+    echo ""
+
+    # 调用 core.sh 中的卸载函数
+    if declare -f uninstall_sing-box &>/dev/null; then
+        uninstall_sing-box
+    else
+        print_error "未找到卸载函数，请确保 modules/core.sh 已加载"
+        return 1
+    fi
+}
+
+# 完全卸载
+uninstall_complete() {
+    clear
+    print_warning "完全卸载 sing-box 和管理脚本"
+    echo ""
+    print_info "此操作将："
+    echo "  • 卸载 sing-box 核心程序"
+    echo "  • 删除所有配置和数据"
+    echo "  • 删除管理脚本"
+    echo ""
+
+    read -p "确认完全卸载？[y/N]: " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        log_info "已取消卸载"
+        return 0
+    fi
+
+    echo ""
+
+    # 1. 停止服务
+    if systemctl is-active --quiet sing-box 2>/dev/null; then
+        print_info "停止 sing-box 服务..."
+        systemctl stop sing-box
+    fi
+
+    # 2. 禁用服务
+    if systemctl is-enabled --quiet sing-box 2>/dev/null; then
+        print_info "禁用 sing-box 服务..."
+        systemctl disable sing-box 2>/dev/null
+    fi
+
+    # 3. 卸载 sing-box
+    print_info "卸载 sing-box 核心..."
+    local uninstall_success=false
+
+    if command -v apt-get &>/dev/null; then
+        apt-get remove -y sing-box 2>/dev/null
+        apt-get purge -y sing-box 2>/dev/null
+        apt-get autoremove -y 2>/dev/null
+        uninstall_success=true
+    elif command -v dnf &>/dev/null; then
+        dnf remove -y sing-box 2>/dev/null
+        uninstall_success=true
+    elif command -v yum &>/dev/null; then
+        yum remove -y sing-box 2>/dev/null
+        uninstall_success=true
+    elif command -v pacman &>/dev/null; then
+        pacman -R --noconfirm sing-box 2>/dev/null
+        uninstall_success=true
+    fi
+
+    # 手动删除
+    if command -v sing-box &>/dev/null; then
+        local singbox_path=$(which sing-box)
+        rm -f "$singbox_path" 2>/dev/null
+    fi
+
+    # 4. 删除配置和数据
+    print_info "删除配置和数据..."
+    rm -rf /etc/sing-box 2>/dev/null
+    rm -rf /var/lib/sing-box 2>/dev/null
+    rm -rf /etc/systemd/system/sing-box.service 2>/dev/null
+    rm -rf /lib/systemd/system/sing-box.service 2>/dev/null
+
+    systemctl daemon-reload
+
+    print_success "sing-box 核心已卸载"
+
+    # 5. 删除管理脚本
+    print_info "删除管理脚本..."
+
+    local script_path="${BASH_SOURCE[0]}"
+    if [[ -L "$script_path" ]]; then
+        script_path="$(readlink -f "$script_path")"
+    fi
+    local script_dir="$(cd "$(dirname "$script_path")" && pwd)"
+
+    cd /tmp || cd /
+    rm -rf "$script_dir"
+
+    print_success "完全卸载完成"
+    echo ""
+
+    exit 0
+}
+
 menu_script() {
     while true; do
         clear
@@ -839,9 +992,9 @@ menu_script() {
                 read -p "请选择卸载方式 [1-3] (0 取消): " uninstall_choice
 
                 case $uninstall_choice in
-                    1) log_warn "仅卸载管理脚本功能尚未实现" ;;
-                    2) log_warn "仅卸载 sing-box 核心功能尚未实现" ;;
-                    3) log_warn "完全卸载功能尚未实现" ;;
+                    1) uninstall_script_only ;;
+                    2) uninstall_singbox_only ;;
+                    3) uninstall_complete ;;
                     0|*) log_info "已取消卸载" ;;
                 esac
                 wait_for_input

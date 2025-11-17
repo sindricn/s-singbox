@@ -1519,9 +1519,7 @@ outbound_management_menu() {
 
     while true; do
         clear
-        echo -e "${OUTBOUND_CYAN}╔═══════════════════════════════════════╗${OUTBOUND_NC}"
-        echo -e "${OUTBOUND_CYAN}║          出站规则管理                ║${OUTBOUND_NC}"
-        echo -e "${OUTBOUND_CYAN}╚═══════════════════════════════════════╝${OUTBOUND_NC}"
+        print_header "出站规则管理"
         echo ""
 
         # 首次进入时运行检测
@@ -1529,8 +1527,8 @@ outbound_management_menu() {
             first_run=false
             if ! check_outbound_consistency; then
                 echo ""
-                print_error "一致性检测未通过，请处理后再继续"
-                read -p "按 Enter 键返回..."
+                print_error "一致性检测未通过,请处理后再继续"
+                wait_for_input
                 return 1
             fi
             echo ""
@@ -1539,36 +1537,43 @@ outbound_management_menu() {
         # 显示状态信息
         show_outbound_status
 
-        echo -e "${OUTBOUND_GREEN}1.${OUTBOUND_NC} 查看出站规则"
-        echo -e "${OUTBOUND_GREEN}2.${OUTBOUND_NC} 添加出站规则"
-        echo -e "${OUTBOUND_GREEN}3.${OUTBOUND_NC} 应用出站规则"
-        echo -e "${OUTBOUND_GREEN}4.${OUTBOUND_NC} 禁用出站规则"
-        echo -e "${OUTBOUND_GREEN}5.${OUTBOUND_NC} 修改出站规则"
-        echo -e "${OUTBOUND_GREEN}6.${OUTBOUND_NC} 删除出站规则"
-        echo -e "${OUTBOUND_GREEN}7.${OUTBOUND_NC} 重新检测一致性"
-        echo -e "${OUTBOUND_GREEN}0.${OUTBOUND_NC} 返回主菜单"
-        echo ""
-        read -p "请选择操作 [0-7]: " choice
+        print_section_start
+        print_menu_item "1" "查看出站规则"
+        print_menu_item "2" "添加出站规则"
+        print_menu_item "3" "应用出站规则"
+        print_menu_item "4" "禁用出站规则"
+        print_menu_item "5" "修改出站规则"
+        print_menu_item "6" "删除出站规则"
+        print_menu_item "7" "重新检测一致性"
+        print_menu_item "0" "返回主菜单"
+        print_section_end
+
+        print_nav_options "false" "true"
+        choice=$(read_menu_choice "请选择操作 [0-7]")
+        local ret=$?
+
+        # 处理导航
+        [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case $choice in
-            1) list_outbounds ;;
+            1) list_outbounds; wait_for_input ;;
             2)
                 # 添加出站规则子菜单
                 clear
-                echo -e "${OUTBOUND_CYAN}╔═══════════════════════════════════════╗${OUTBOUND_NC}"
-                echo -e "${OUTBOUND_CYAN}║      添加出站规则                    ║${OUTBOUND_NC}"
-                echo -e "${OUTBOUND_CYAN}╚═══════════════════════════════════════╝${OUTBOUND_NC}"
+                print_header "添加出站规则"
                 echo ""
-                echo -e "${OUTBOUND_GREEN}1.${OUTBOUND_NC} HTTP 代理"
-                echo -e "${OUTBOUND_GREEN}2.${OUTBOUND_NC} SOCKS 代理"
-                echo -e "${OUTBOUND_GREEN}3.${OUTBOUND_NC} VLESS 协议"
-                echo -e "${OUTBOUND_GREEN}4.${OUTBOUND_NC} VMess 协议"
-                echo -e "${OUTBOUND_GREEN}5.${OUTBOUND_NC} Trojan 协议"
-                echo -e "${OUTBOUND_GREEN}6.${OUTBOUND_NC} Shadowsocks 协议"
-                echo -e "${OUTBOUND_GREEN}0.${OUTBOUND_NC} 返回"
+                print_section_start
+                print_menu_item "1" "HTTP 代理"
+                print_menu_item "2" "SOCKS 代理"
+                print_menu_item "3" "VLESS 协议"
+                print_menu_item "4" "VMess 协议"
+                print_menu_item "5" "Trojan 协议"
+                print_menu_item "6" "Shadowsocks 协议"
+                print_menu_item "0" "返回"
+                print_section_end
                 echo ""
-                read -p "请选择协议 [0-6]: " protocol_choice
 
+                read -p "请选择协议 [0-6]: " protocol_choice
                 case $protocol_choice in
                     1) add_http_outbound ;;
                     2) add_socks_outbound ;;
@@ -1579,20 +1584,20 @@ outbound_management_menu() {
                     0) ;;
                     *) print_error "无效选择" ;;
                 esac
+                wait_for_input
                 ;;
-            3) apply_outbound_to_node ;;
-            4) disable_outbound_from_node ;;
-            5) modify_outbound ;;
-            6) delete_outbound ;;
+            3) apply_outbound_to_node; wait_for_input ;;
+            4) disable_outbound_from_node; wait_for_input ;;
+            5) modify_outbound; wait_for_input ;;
+            6) delete_outbound; wait_for_input ;;
             7)
                 clear
                 check_outbound_consistency
+                wait_for_input
                 ;;
             0) break ;;
-            *) print_error "无效选择" ;;
+            *) print_error "无效选择"; sleep 1 ;;
         esac
-
-        read -p "按 Enter 键继续..."
     done
 }
 

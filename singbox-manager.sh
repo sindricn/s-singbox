@@ -906,13 +906,21 @@ main() {
                 ;;
             7)
                 # 出站规则
-                print_warning "出站规则功能开发中..."
-                read -p "按回车键继续..."
+                if declare -f outbound_management_menu &>/dev/null; then
+                    outbound_management_menu
+                else
+                    print_error "出站规则模块未加载"
+                    wait_for_input
+                fi
                 ;;
             8)
                 # 防火墙管理
-                print_warning "防火墙管理功能开发中..."
-                read -p "按回车键继续..."
+                if declare -f firewall_management_menu &>/dev/null; then
+                    firewall_management_menu
+                else
+                    print_error "防火墙管理模块未加载"
+                    wait_for_input
+                fi
                 ;;
             9)
                 # CF 隧道管理

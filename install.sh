@@ -174,6 +174,10 @@ if [[ ! -f "${SCRIPT_DIR}/singbox-manager.sh" || ! -d "${SCRIPT_DIR}/modules" ]]
     mkdir -p "$INSTALL_DIR"
     rm -rf "$INSTALL_DIR/"* 2>/dev/null || true
     cp -r "$TEMP_DIR/"* "$INSTALL_DIR/"
+    # 复制隐藏文件（包括 .git）
+    cp -r "$TEMP_DIR/".git "$INSTALL_DIR/" 2>/dev/null || true
+    cp -r "$TEMP_DIR/".gitignore "$INSTALL_DIR/" 2>/dev/null || true
+    print_success ".git 目录已保留，支持后续在线更新"
 
     # 恢复用户数据
     if [[ -n "$BACKUP_DIR" && -d "$BACKUP_DIR/data" ]]; then

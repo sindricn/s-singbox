@@ -957,6 +957,7 @@ menu_script() {
                 # 更新脚本
                 clear
                 echo -e "${CYAN}正在更新脚本...${NC}"
+                echo ""
 
                 local script_path="${BASH_SOURCE[0]}"
                 if [[ -L "$script_path" ]]; then
@@ -964,18 +965,64 @@ menu_script() {
                 fi
                 local script_dir="$(cd "$(dirname "$script_path")" && pwd)"
 
-                cd "$script_dir" || {
-                    log_error "无法进入脚本目录"
-                    wait_for_input
-                    continue
-                }
+                # 查找 Git 仓库目录（向上查找）
+                local git_dir=""
+                local current_dir="$script_dir"
+                while [[ "$current_dir" != "/" ]]; do
+                    if [[ -d "$current_dir/.git" ]]; then
+                        git_dir="$current_dir"
+                        break
+                    fi
+                    current_dir="$(dirname "$current_dir")"
+                done
 
-                if [[ -d ".git" ]]; then
-                    git pull || log_error "更新失败"
-                    log_info "脚本更新完成"
+                if [[ -n "$git_dir" ]]; then
+                    cd "$git_dir" || {
+                        log_error "无法进入 Git 目录"
+                        wait_for_input
+                        continue
+                    }
+
+                    print_info "Git 仓库目录: $git_dir"
+                    echo ""
+
+                    # 检查是否有未提交的更改
+                    if ! git diff-index --quiet HEAD 2>/dev/null; then
+                        print_warning "检测到本地修改的文件"
+                        echo ""
+                        read -p "是否暂存本地修改并继续更新? [y/N]: " stash_confirm
+                        if [[ "$stash_confirm" == "y" || "$stash_confirm" == "Y" ]]; then
+                            git stash
+                            print_info "已暂存本地修改"
+                        else
+                            print_info "已取消更新"
+                            wait_for_input
+                            continue
+                        fi
+                    fi
+
+                    # 执行更新
+                    print_info "正在从远程仓库拉取更新..."
+                    if git pull; then
+                        print_success "脚本更新完成"
+                        echo ""
+                        print_info "如果之前暂存了修改，可使用 'git stash pop' 恢复"
+                    else
+                        log_error "更新失败，请检查网络连接或手动更新"
+                    fi
                 else
-                    log_warn "当前不是Git仓库,无法自动更新"
-                    echo -e "${YELLOW}请手动下载最新版本${NC}"
+                    log_warn "未检测到 Git 仓库"
+                    echo ""
+                    print_info "可能的原因："
+                    echo "  1. 使用了在线安装但未保留 .git 目录"
+                    echo "  2. 手动下载了脚本文件"
+                    echo ""
+                    print_info "解决方案："
+                    echo "  方案1 (推荐): 重新使用在线安装"
+                    echo -e "    ${YELLOW}bash <(curl -fsSL https://raw.githubusercontent.com/sindricn/s-singbox/main/install.sh)${NC}"
+                    echo ""
+                    echo "  方案2: 手动下载最新版本"
+                    echo -e "    ${YELLOW}https://github.com/sindricn/s-singbox${NC}"
                 fi
                 wait_for_input
                 ;;

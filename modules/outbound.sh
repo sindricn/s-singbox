@@ -2,9 +2,15 @@
 
 #================================================================
 # 出站规则管理模块 - 重构版
-# 功能：管理常用出站协议（HTTP、SOCKS）、代理链
-# 移除：Freedom、Blackhole、默认出站等无用功能
-# 优化：出站规则统一修改、绑定到节点的逻辑
+# 功能：管理常用出站协议（HTTP、SOCKS、VLESS、VMess等）
+#
+# Sing-box 内核默认出站：
+#   - direct：直连出站，直接发送请求
+#   - block：阻止出站，关闭所有传入请求
+#
+# 支持的出站协议：
+#   已实现：HTTP、SOCKS、VLESS、VMess、Trojan、Shadowsocks、Hysteria2、TUIC
+#   待添加：ShadowTLS等
 #================================================================
 
 # 避免重复加载导致只读变量冲突
@@ -231,13 +237,27 @@ remove_orphan_outbounds_from_config() {
 #================================================================
 get_outbound_type_name() {
     case $1 in
+        # 内核默认出站
+        direct) echo "直连出站 (内核默认)" ;;
+        block) echo "阻止出站 (内核默认)" ;;
+        dns) echo "DNS 出站 (已废弃)" ;;
+        # 代理协议
         vless) echo "VLESS 代理" ;;
         vmess) echo "VMess 代理" ;;
         trojan) echo "Trojan 代理" ;;
         shadowsocks) echo "Shadowsocks 代理" ;;
         socks) echo "Socks 代理" ;;
         http) echo "HTTP 代理" ;;
-        wireguard) echo "WireGuard 代理" ;;
+        wireguard) echo "WireGuard 代理 (已弃用)" ;;
+        hysteria) echo "Hysteria 代理" ;;
+        hysteria2) echo "Hysteria2 代理" ;;
+        tuic) echo "TUIC 代理" ;;
+        shadowtls) echo "ShadowTLS 代理" ;;
+        ssh) echo "SSH 隧道" ;;
+        tor) echo "Tor 代理" ;;
+        # 特殊类型
+        selector) echo "选择器" ;;
+        urltest) echo "自动选择" ;;
         *) echo "未知类型" ;;
     esac
 }
@@ -829,6 +849,222 @@ add_shadowsocks_outbound() {
     echo -e "  服务器: $server:$port"
     echo -e "  加密: $method"
     echo -e "  密码: ${password:0:4}***${password: -4}"
+
+    # 提示是否绑定到节点
+    prompt_bind_outbound_to_node "$tag"
+}
+
+#================================================================
+# 添加 Hysteria2 出站
+#================================================================
+add_hysteria2_outbound() {
+    clear
+    echo -e "${OUTBOUND_CYAN}╔═══════════════════════════════════════╗${OUTBOUND_NC}"
+    echo -e "${OUTBOUND_CYAN}║      添加 Hysteria2 出站             ║${OUTBOUND_NC}"
+    echo -e "${OUTBOUND_CYAN}╚═══════════════════════════════════════╝${OUTBOUND_NC}"
+    echo ""
+
+    echo -e "${OUTBOUND_YELLOW}Hysteria2 出站说明：${OUTBOUND_NC}"
+    echo -e "  • 基于 QUIC 协议的现代高性能代理"
+    echo -e "  • 支持拥塞控制和连接迁移"
+    echo -e "  • 需要配合 TLS 使用"
+    echo ""
+
+    # 输入标签
+    read -p "请输入出站标签 (例如: hy2-proxy): " tag
+    if [[ -z "$tag" ]]; then
+        print_error "标签不能为空"
+        return 1
+    fi
+
+    # 检查标签是否已存在
+    if jq -e --arg tag "$tag" '.outbounds[] | select(.tag == $tag)' "$OUTBOUND_FILE" >/dev/null 2>&1; then
+        print_error "标签 '$tag' 已存在"
+        return 1
+    fi
+
+    # 服务器地址和端口
+    echo ""
+    read -p "请输入服务器地址: " server
+    if [[ -z "$server" ]]; then
+        print_error "服务器地址不能为空"
+        return 1
+    fi
+
+    read -p "请输入端口: " port
+    if [[ -z "$port" ]]; then
+        print_error "端口不能为空"
+        return 1
+    fi
+
+    # 密码
+    read -p "请输入密码: " password
+    if [[ -z "$password" ]]; then
+        print_error "密码不能为空"
+        return 1
+    fi
+
+    # TLS 配置
+    echo ""
+    read -p "请输入 SNI (默认为服务器地址): " sni
+    sni=${sni:-$server}
+
+    read -p "是否允许不安全连接? [y/N]: " insecure
+    local insecure_flag=false
+    [[ "$insecure" == "y" || "$insecure" == "Y" ]] && insecure_flag=true
+
+    # 构建 server 配置
+    local server_config=$(jq -n \
+        --arg address "$server" \
+        --argjson port "$port" \
+        --arg password "$password" \
+        --arg sni "$sni" \
+        --argjson insecure "$insecure_flag" \
+        '{address: $address, port: $port, password: $password, sni: $sni, insecure: $insecure}')
+
+    # 构建完整出站配置
+    local outbound_config=$(jq -n \
+        --arg tag "$tag" \
+        --argjson server "$server_config" \
+        '{
+            protocol: "hysteria2",
+            tag: $tag,
+            settings: {
+                servers: [$server]
+            }
+        }')
+
+    # 添加到文件
+    init_outbound_file
+    jq --argjson outbound "$outbound_config" '.outbounds += [$outbound]' "$OUTBOUND_FILE" > "${OUTBOUND_FILE}.tmp"
+    mv "${OUTBOUND_FILE}.tmp" "$OUTBOUND_FILE"
+
+    print_success "Hysteria2 出站添加成功！"
+    echo ""
+    echo -e "${OUTBOUND_CYAN}出站信息：${OUTBOUND_NC}"
+    echo -e "  标签: $tag"
+    echo -e "  服务器: $server:$port"
+    echo -e "  SNI: $sni"
+
+    # 提示是否绑定到节点
+    prompt_bind_outbound_to_node "$tag"
+}
+
+#================================================================
+# 添加 TUIC 出站
+#================================================================
+add_tuic_outbound() {
+    clear
+    echo -e "${OUTBOUND_CYAN}╔═══════════════════════════════════════╗${OUTBOUND_NC}"
+    echo -e "${OUTBOUND_CYAN}║      添加 TUIC 出站                  ║${OUTBOUND_NC}"
+    echo -e "${OUTBOUND_CYAN}╚═══════════════════════════════════════╝${OUTBOUND_NC}"
+    echo ""
+
+    echo -e "${OUTBOUND_YELLOW}TUIC 出站说明：${OUTBOUND_NC}"
+    echo -e "  • 基于 QUIC 协议的现代代理"
+    echo -e "  • 提供低延迟高性能连接"
+    echo -e "  • 支持 UDP 转发"
+    echo ""
+
+    # 输入标签
+    read -p "请输入出站标签 (例如: tuic-proxy): " tag
+    if [[ -z "$tag" ]]; then
+        print_error "标签不能为空"
+        return 1
+    fi
+
+    # 检查标签是否已存在
+    if jq -e --arg tag "$tag" '.outbounds[] | select(.tag == $tag)' "$OUTBOUND_FILE" >/dev/null 2>&1; then
+        print_error "标签 '$tag' 已存在"
+        return 1
+    fi
+
+    # 服务器地址和端口
+    echo ""
+    read -p "请输入服务器地址: " server
+    if [[ -z "$server" ]]; then
+        print_error "服务器地址不能为空"
+        return 1
+    fi
+
+    read -p "请输入端口: " port
+    if [[ -z "$port" ]]; then
+        print_error "端口不能为空"
+        return 1
+    fi
+
+    # UUID 和密码
+    read -p "请输入 UUID: " uuid
+    if [[ -z "$uuid" ]]; then
+        print_error "UUID 不能为空"
+        return 1
+    fi
+
+    read -p "请输入密码: " password
+    if [[ -z "$password" ]]; then
+        print_error "密码不能为空"
+        return 1
+    fi
+
+    # 拥塞控制
+    echo ""
+    echo -e "${OUTBOUND_YELLOW}拥塞控制算法：${OUTBOUND_NC}"
+    echo -e "  1. cubic (默认)"
+    echo -e "  2. new_reno"
+    echo -e "  3. bbr"
+    read -p "请选择 [1-3，默认1]: " cc_choice
+
+    local congestion_control="cubic"
+    case $cc_choice in
+        2) congestion_control="new_reno" ;;
+        3) congestion_control="bbr" ;;
+        *) congestion_control="cubic" ;;
+    esac
+
+    # TLS 配置
+    echo ""
+    read -p "请输入 SNI (默认为服务器地址): " sni
+    sni=${sni:-$server}
+
+    read -p "是否允许不安全连接? [y/N]: " insecure
+    local insecure_flag=false
+    [[ "$insecure" == "y" || "$insecure" == "Y" ]] && insecure_flag=true
+
+    # 构建 server 配置
+    local server_config=$(jq -n \
+        --arg address "$server" \
+        --argjson port "$port" \
+        --arg uuid "$uuid" \
+        --arg password "$password" \
+        --arg sni "$sni" \
+        --arg congestion_control "$congestion_control" \
+        --argjson insecure "$insecure_flag" \
+        '{address: $address, port: $port, uuid: $uuid, password: $password, sni: $sni, congestion_control: $congestion_control, insecure: $insecure}')
+
+    # 构建完整出站配置
+    local outbound_config=$(jq -n \
+        --arg tag "$tag" \
+        --argjson server "$server_config" \
+        '{
+            protocol: "tuic",
+            tag: $tag,
+            settings: {
+                servers: [$server]
+            }
+        }')
+
+    # 添加到文件
+    init_outbound_file
+    jq --argjson outbound "$outbound_config" '.outbounds += [$outbound]' "$OUTBOUND_FILE" > "${OUTBOUND_FILE}.tmp"
+    mv "${OUTBOUND_FILE}.tmp" "$OUTBOUND_FILE"
+
+    print_success "TUIC 出站添加成功！"
+    echo ""
+    echo -e "${OUTBOUND_CYAN}出站信息：${OUTBOUND_NC}"
+    echo -e "  标签: $tag"
+    echo -e "  服务器: $server:$port"
+    echo -e "  拥塞控制: $congestion_control"
+    echo -e "  SNI: $sni"
 
     # 提示是否绑定到节点
     prompt_bind_outbound_to_node "$tag"
@@ -1556,11 +1792,13 @@ outbound_management_menu() {
                 print_menu_item "4" "VMess 协议"
                 print_menu_item "5" "Trojan 协议"
                 print_menu_item "6" "Shadowsocks 协议"
+                print_menu_item "7" "Hysteria2 协议"
+                print_menu_item "8" "TUIC 协议"
                 print_menu_item "0" "返回"
                 print_section_end
                 echo ""
 
-                read -p "请选择协议 [0-6]: " protocol_choice
+                read -p "请选择协议 [0-8]: " protocol_choice
                 case $protocol_choice in
                     1) add_http_outbound ;;
                     2) add_socks_outbound ;;
@@ -1568,6 +1806,8 @@ outbound_management_menu() {
                     4) add_vmess_outbound ;;
                     5) add_trojan_outbound ;;
                     6) add_shadowsocks_outbound ;;
+                    7) add_hysteria2_outbound ;;
+                    8) add_tuic_outbound ;;
                     0) ;;
                     *) print_error "无效选择" ;;
                 esac

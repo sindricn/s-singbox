@@ -392,6 +392,36 @@ batch_open_ports() {
 # 跳跃端口管理功能
 #================================================================
 
+# 获取网络接口列表
+get_network_interfaces() {
+    ip -o link show | awk -F': ' '{print $2}' | grep -v "lo" | head -10
+}
+
+# 检测 iptables 中的端口跳跃规则
+detect_port_hopping_rules() {
+    local rules=()
+
+    # 检测 IPv4 规则
+    if command -v iptables &>/dev/null; then
+        while IFS= read -r line; do
+            if [[ "$line" =~ REDIRECT.*--to-ports ]]; then
+                rules+=("ipv4|$line")
+            fi
+        done < <(iptables -t nat -L PREROUTING -n --line-numbers 2>/dev/null)
+    fi
+
+    # 检测 IPv6 规则
+    if command -v ip6tables &>/dev/null; then
+        while IFS= read -r line; do
+            if [[ "$line" =~ REDIRECT.*--to-ports ]]; then
+                rules+=("ipv6|$line")
+            fi
+        done < <(ip6tables -t nat -L PREROUTING -n --line-numbers 2>/dev/null)
+    fi
+
+    printf '%s\n' "${rules[@]}"
+}
+
 # 查看跳跃端口配置
 list_port_hopping() {
     clear
@@ -400,39 +430,67 @@ list_port_hopping() {
 
     init_port_hopping_file
 
+    # 显示配置文件中的规则
     local count=$(jq '.configs | length' "$PORT_HOPPING_FILE" 2>/dev/null || echo "0")
-    if [[ "$count" -eq 0 ]]; then
-        print_warning "暂无跳跃端口配置"
-        return 0
-    fi
 
-    echo -e "${YELLOW}跳跃配置总数:${NC} $count"
+    echo -e "${CYAN}=== 配置文件中的规则 ===${NC}"
     echo ""
 
-    printf "${CYAN}%-4s %-20s %-10s %-30s %-10s %-10s${NC}\n" "序号" "配置名称" "原端口" "跳跃端口列表" "间隔(秒)" "状态"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    if [[ "$count" -eq 0 ]]; then
+        print_warning "配置文件中暂无跳跃端口配置"
+    else
+        printf "${CYAN}%-4s %-15s %-12s %-15s %-15s %-10s${NC}\n" "序号" "名称" "网络接口" "源端口范围" "目标端口" "IP版本"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-    local index=1
-    while read -r config; do
-        local name=$(echo "$config" | jq -r '.name')
-        local node_port=$(echo "$config" | jq -r '.node_port')
-        local hop_ports=$(echo "$config" | jq -r '.hop_ports | join(",")')
-        local interval=$(echo "$config" | jq -r '.interval')
-        local enabled=$(echo "$config" | jq -r '.enabled')
-        local current_hop=$(echo "$config" | jq -r '.current_hop_port // "N/A"')
+        local index=1
+        while read -r config; do
+            local name=$(echo "$config" | jq -r '.name')
+            local interface=$(echo "$config" | jq -r '.interface')
+            local port_range=$(echo "$config" | jq -r '.port_range')
+            local target_port=$(echo "$config" | jq -r '.target_port')
+            local ip_version=$(echo "$config" | jq -r '.ip_version')
 
-        # 截断过长的端口列表
-        if [[ ${#hop_ports} -gt 28 ]]; then
-            hop_ports="${hop_ports:0:25}..."
+            printf "%-4s %-15s %-12s %-15s %-15s %-10s\n" "$index" "$name" "$interface" "$port_range" "$target_port" "$ip_version"
+            ((index++))
+        done < <(jq -c '.configs[]' "$PORT_HOPPING_FILE" 2>/dev/null)
+    fi
+
+    echo ""
+    echo -e "${CYAN}=== 实际 iptables 规则 ===${NC}"
+    echo ""
+
+    # 显示实际的 iptables 规则
+    local has_rules=false
+
+    # IPv4 规则
+    if command -v iptables &>/dev/null; then
+        echo -e "${YELLOW}IPv4 NAT PREROUTING 规则:${NC}"
+        local ipv4_rules=$(iptables -t nat -L PREROUTING -n --line-numbers 2>/dev/null | grep -E "REDIRECT.*--to-ports")
+        if [[ -n "$ipv4_rules" ]]; then
+            echo "$ipv4_rules"
+            has_rules=true
+        else
+            echo "  无端口跳跃规则"
         fi
+        echo ""
+    fi
 
-        local status="${RED}禁用${NC}"
-        [[ "$enabled" == "true" ]] && status="${GREEN}启用${NC}"
+    # IPv6 规则
+    if command -v ip6tables &>/dev/null; then
+        echo -e "${YELLOW}IPv6 NAT PREROUTING 规则:${NC}"
+        local ipv6_rules=$(ip6tables -t nat -L PREROUTING -n --line-numbers 2>/dev/null | grep -E "REDIRECT.*--to-ports")
+        if [[ -n "$ipv6_rules" ]]; then
+            echo "$ipv6_rules"
+            has_rules=true
+        else
+            echo "  无端口跳跃规则"
+        fi
+        echo ""
+    fi
 
-        printf "%-4s %-20s %-10s %-30s %-10s %-10b\n" "$index" "$name" "$node_port" "$hop_ports" "$interval" "$status"
-        echo -e "  ${GRAY}当前跳跃端口: $current_hop${NC}"
-        ((index++))
-    done < <(jq -c '.configs[]' "$PORT_HOPPING_FILE" 2>/dev/null)
+    if [[ "$has_rules" == false ]] && [[ "$count" -eq 0 ]]; then
+        echo -e "${YELLOW}提示: 系统中暂无端口跳跃规则${NC}"
+    fi
 
     echo ""
 }
@@ -452,98 +510,193 @@ add_port_hopping() {
         return 1
     fi
 
-    # 选择节点
-    if [[ ! -f "$NODES_FILE" ]]; then
-        print_error "暂无节点"
+    # 选择网络接口
+    echo ""
+    echo -e "${CYAN}可用网络接口:${NC}"
+    local interfaces=($(get_network_interfaces))
+    if [[ ${#interfaces[@]} -eq 0 ]]; then
+        print_error "未找到可用的网络接口"
         return 1
     fi
 
-    local node_count=$(jq '.nodes | length' "$NODES_FILE" 2>/dev/null || echo "0")
-    if [[ "$node_count" -eq 0 ]]; then
-        print_error "暂无节点"
-        return 1
-    fi
-
-    echo -e "${CYAN}现有节点列表:${NC}"
-    echo ""
-    local index=1
-    while read -r node; do
-        local node_name=$(echo "$node" | jq -r '.name')
-        local protocol=$(echo "$node" | jq -r '.protocol')
-        local port=$(echo "$node" | jq -r '.port')
-        echo -e "${GREEN}[$index]${NC} $node_name ($protocol) - 端口: $port"
-        ((index++))
-    done < <(jq -c '.nodes[]' "$NODES_FILE" 2>/dev/null)
+    local idx=1
+    for iface in "${interfaces[@]}"; do
+        echo -e "${GREEN}[$idx]${NC} $iface"
+        ((idx++))
+    done
 
     echo ""
-    read -p "请选择节点序号: " node_idx
-    if [[ ! "$node_idx" =~ ^[0-9]+$ ]] || [[ "$node_idx" -lt 1 ]] || [[ "$node_idx" -gt "$node_count" ]]; then
+    read -p "请选择网络接口序号 [默认: 1]: " iface_idx
+    iface_idx=${iface_idx:-1}
+
+    if [[ ! "$iface_idx" =~ ^[0-9]+$ ]] || [[ "$iface_idx" -lt 1 ]] || [[ "$iface_idx" -gt ${#interfaces[@]} ]]; then
         print_error "无效的序号"
         return 1
     fi
 
-    local node_port=$(jq -r ".nodes[$((node_idx-1))].port" "$NODES_FILE" 2>/dev/null)
+    local interface="${interfaces[$((iface_idx-1))]}"
 
-    # 输入跳跃端口列表
+    # 输入源端口范围
     echo ""
-    echo -e "${YELLOW}提示: 请输入跳跃端口列表,用逗号分隔,例如: 8443,8444,8445,8446${NC}"
-    read -p "跳跃端口列表: " hop_ports_input
+    echo -e "${YELLOW}提示: 请输入源端口范围,格式如: 20000:50000${NC}"
+    read -p "源端口范围: " port_range
 
-    if [[ -z "$hop_ports_input" ]]; then
-        print_error "跳跃端口列表不能为空"
+    if [[ -z "$port_range" ]]; then
+        print_error "源端口范围不能为空"
         return 1
     fi
 
-    # 验证端口格式并转换为数组
-    IFS=',' read -ra hop_ports_array <<< "$hop_ports_input"
-    local valid_ports=()
-    for port in "${hop_ports_array[@]}"; do
-        port=$(echo "$port" | xargs)  # 去除空格
-        if [[ "$port" =~ ^[0-9]+$ ]] && [[ "$port" -ge 1 ]] && [[ "$port" -le 65535 ]]; then
-            valid_ports+=("$port")
-        else
-            print_warning "跳过无效端口: $port"
+    # 验证端口范围格式
+    if [[ ! "$port_range" =~ ^[0-9]+:[0-9]+$ ]]; then
+        print_error "无效的端口范围格式,正确格式如: 20000:50000"
+        return 1
+    fi
+
+    local start_port=$(echo "$port_range" | cut -d':' -f1)
+    local end_port=$(echo "$port_range" | cut -d':' -f2)
+
+    if [[ "$start_port" -ge "$end_port" ]]; then
+        print_error "起始端口必须小于结束端口"
+        return 1
+    fi
+
+    # 输入目标端口
+    echo ""
+    read -p "请输入目标端口(流量将重定向到此端口): " target_port
+
+    if [[ -z "$target_port" ]] || ! [[ "$target_port" =~ ^[0-9]+$ ]] || [[ "$target_port" -lt 1 ]] || [[ "$target_port" -gt 65535 ]]; then
+        print_error "无效的目标端口"
+        return 1
+    fi
+
+    # 选择协议
+    echo ""
+    echo -e "${CYAN}选择协议:${NC}"
+    echo -e "${GREEN}[1]${NC} UDP (推荐用于 QUIC/Hysteria2)"
+    echo -e "${GREEN}[2]${NC} TCP"
+    echo -e "${GREEN}[3]${NC} BOTH (TCP + UDP)"
+    echo ""
+    read -p "请选择协议 [默认: 1-UDP]: " proto_choice
+    proto_choice=${proto_choice:-1}
+
+    local protocol
+    case $proto_choice in
+        1) protocol="udp" ;;
+        2) protocol="tcp" ;;
+        3) protocol="both" ;;
+        *)
+            print_error "无效选择"
+            return 1
+            ;;
+    esac
+
+    # 选择 IP 版本
+    echo ""
+    echo -e "${CYAN}选择 IP 版本:${NC}"
+    echo -e "${GREEN}[1]${NC} IPv4"
+    echo -e "${GREEN}[2]${NC} IPv6"
+    echo -e "${GREEN}[3]${NC} BOTH (IPv4 + IPv6)"
+    echo ""
+    read -p "请选择 IP 版本 [默认: 1-IPv4]: " ip_choice
+    ip_choice=${ip_choice:-1}
+
+    local ip_version
+    case $ip_choice in
+        1) ip_version="ipv4" ;;
+        2) ip_version="ipv6" ;;
+        3) ip_version="both" ;;
+        *)
+            print_error "无效选择"
+            return 1
+            ;;
+    esac
+
+    # 显示配置摘要
+    echo ""
+    echo -e "${CYAN}配置摘要:${NC}"
+    echo -e "  名称: $name"
+    echo -e "  网络接口: $interface"
+    echo -e "  源端口范围: $port_range"
+    echo -e "  目标端口: $target_port"
+    echo -e "  协议: $protocol"
+    echo -e "  IP版本: $ip_version"
+    echo ""
+
+    read -p "确认添加此配置? [y/N]: " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        print_info "已取消添加"
+        return 0
+    fi
+
+    # 添加 iptables 规则
+    print_info "正在添加 iptables 规则..."
+
+    local success=true
+
+    # IPv4 规则
+    if [[ "$ip_version" == "ipv4" ]] || [[ "$ip_version" == "both" ]]; then
+        if [[ "$protocol" == "udp" ]] || [[ "$protocol" == "both" ]]; then
+            if ! iptables -t nat -A PREROUTING -i "$interface" -p udp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null; then
+                print_error "添加 IPv4 UDP 规则失败"
+                success=false
+            fi
         fi
-    done
+        if [[ "$protocol" == "tcp" ]] || [[ "$protocol" == "both" ]]; then
+            if ! iptables -t nat -A PREROUTING -i "$interface" -p tcp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null; then
+                print_error "添加 IPv4 TCP 规则失败"
+                success=false
+            fi
+        fi
+    fi
 
-    if [[ ${#valid_ports[@]} -eq 0 ]]; then
-        print_error "没有有效的跳跃端口"
+    # IPv6 规则
+    if [[ "$ip_version" == "ipv6" ]] || [[ "$ip_version" == "both" ]]; then
+        if [[ "$protocol" == "udp" ]] || [[ "$protocol" == "both" ]]; then
+            if ! ip6tables -t nat -A PREROUTING -i "$interface" -p udp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null; then
+                print_warning "添加 IPv6 UDP 规则失败(可能系统不支持IPv6)"
+            fi
+        fi
+        if [[ "$protocol" == "tcp" ]] || [[ "$protocol" == "both" ]]; then
+            if ! ip6tables -t nat -A PREROUTING -i "$interface" -p tcp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null; then
+                print_warning "添加 IPv6 TCP 规则失败(可能系统不支持IPv6)"
+            fi
+        fi
+    fi
+
+    if [[ "$success" == false ]]; then
+        print_error "添加规则失败"
         return 1
     fi
 
-    # 输入切换间隔
-    echo ""
-    read -p "端口切换间隔(秒, 默认3600): " interval
-    interval=${interval:-3600}
-
-    if ! [[ "$interval" =~ ^[0-9]+$ ]] || [[ "$interval" -lt 60 ]]; then
-        print_error "间隔必须至少60秒"
-        return 1
+    # 保存 iptables 规则
+    if command -v netfilter-persistent &>/dev/null; then
+        netfilter-persistent save >/dev/null 2>&1
+    elif command -v service &>/dev/null; then
+        service iptables save 2>/dev/null
+        service ip6tables save 2>/dev/null
     fi
 
     # 生成唯一ID
     local id="hop_$(date +%s)"
-    local current_time=$(date +%s)
 
-    # 构建配置
-    local hop_ports_json=$(printf '%s\n' "${valid_ports[@]}" | jq -R . | jq -s .)
+    # 构建配置并保存到JSON
     local config=$(jq -n \
         --arg id "$id" \
         --arg name "$name" \
-        --argjson node_port "$node_port" \
-        --argjson hop_ports "$hop_ports_json" \
-        --argjson interval "$interval" \
-        --argjson last_switch "$current_time" \
-        --argjson current_hop "${valid_ports[0]}" \
+        --arg interface "$interface" \
+        --arg port_range "$port_range" \
+        --argjson target_port "$target_port" \
+        --arg protocol "$protocol" \
+        --arg ip_version "$ip_version" \
         '{
             id: $id,
             name: $name,
-            node_port: $node_port,
-            hop_ports: $hop_ports,
-            interval: $interval,
-            enabled: false,
-            last_switch: $last_switch,
-            current_hop_port: $current_hop
+            interface: $interface,
+            port_range: $port_range,
+            target_port: $target_port,
+            protocol: $protocol,
+            ip_version: $ip_version,
+            created_at: (now | tostring)
         }')
 
     # 添加到配置文件
@@ -552,12 +705,12 @@ add_port_hopping() {
 
     print_success "跳跃端口配置已添加"
     echo ""
-    echo -e "${CYAN}配置信息:${NC}"
-    echo -e "  配置名称: $name"
-    echo -e "  原节点端口: $node_port"
-    echo -e "  跳跃端口: ${valid_ports[*]}"
-    echo -e "  切换间隔: ${interval}秒"
-    echo -e "  ${YELLOW}提示: 请在菜单中启用此配置${NC}"
+    echo -e "${CYAN}已添加 iptables 规则:${NC}"
+    echo -e "  接口: $interface"
+    echo -e "  源端口: $port_range → 目标端口: $target_port"
+    echo -e "  协议: $protocol | IP版本: $ip_version"
+    echo ""
+    echo -e "${YELLOW}提示: 客户端可以使用 $start_port-$end_port 范围内的任意端口连接${NC}"
 }
 
 # 删除跳跃端口配置
@@ -576,14 +729,61 @@ delete_port_hopping() {
         return 1
     fi
 
-    local config_name=$(jq -r ".configs[$((index-1))].name" "$PORT_HOPPING_FILE" 2>/dev/null)
+    # 读取配置信息
+    local config=$(jq ".configs[$((index-1))]" "$PORT_HOPPING_FILE" 2>/dev/null)
+    local config_name=$(echo "$config" | jq -r '.name')
+    local interface=$(echo "$config" | jq -r '.interface')
+    local port_range=$(echo "$config" | jq -r '.port_range')
+    local target_port=$(echo "$config" | jq -r '.target_port')
+    local protocol=$(echo "$config" | jq -r '.protocol')
+    local ip_version=$(echo "$config" | jq -r '.ip_version')
 
-    read -p "确认删除配置 '$config_name'? [y/N]: " confirm
+    echo ""
+    echo -e "${YELLOW}将删除以下配置:${NC}"
+    echo -e "  名称: $config_name"
+    echo -e "  接口: $interface"
+    echo -e "  端口范围: $port_range → $target_port"
+    echo -e "  协议: $protocol | IP版本: $ip_version"
+    echo ""
+
+    read -p "确认删除配置及其 iptables 规则? [y/N]: " confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
         print_info "已取消删除"
         return 0
     fi
 
+    # 删除 iptables 规则
+    print_info "正在删除 iptables 规则..."
+
+    # IPv4 规则
+    if [[ "$ip_version" == "ipv4" ]] || [[ "$ip_version" == "both" ]]; then
+        if [[ "$protocol" == "udp" ]] || [[ "$protocol" == "both" ]]; then
+            iptables -t nat -D PREROUTING -i "$interface" -p udp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null || print_warning "IPv4 UDP 规则不存在或已删除"
+        fi
+        if [[ "$protocol" == "tcp" ]] || [[ "$protocol" == "both" ]]; then
+            iptables -t nat -D PREROUTING -i "$interface" -p tcp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null || print_warning "IPv4 TCP 规则不存在或已删除"
+        fi
+    fi
+
+    # IPv6 规则
+    if [[ "$ip_version" == "ipv6" ]] || [[ "$ip_version" == "both" ]]; then
+        if [[ "$protocol" == "udp" ]] || [[ "$protocol" == "both" ]]; then
+            ip6tables -t nat -D PREROUTING -i "$interface" -p udp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null || print_warning "IPv6 UDP 规则不存在或已删除"
+        fi
+        if [[ "$protocol" == "tcp" ]] || [[ "$protocol" == "both" ]]; then
+            ip6tables -t nat -D PREROUTING -i "$interface" -p tcp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null || print_warning "IPv6 TCP 规则不存在或已删除"
+        fi
+    fi
+
+    # 保存 iptables 规则
+    if command -v netfilter-persistent &>/dev/null; then
+        netfilter-persistent save >/dev/null 2>&1
+    elif command -v service &>/dev/null; then
+        service iptables save 2>/dev/null
+        service ip6tables save 2>/dev/null
+    fi
+
+    # 从配置文件中删除
     jq "del(.configs[$((index-1))])" "$PORT_HOPPING_FILE" > "${PORT_HOPPING_FILE}.tmp"
     mv "${PORT_HOPPING_FILE}.tmp" "$PORT_HOPPING_FILE"
 
@@ -606,10 +806,14 @@ modify_port_hopping() {
         return 1
     fi
 
+    # 读取当前配置
     local config=$(jq ".configs[$((index-1))]" "$PORT_HOPPING_FILE" 2>/dev/null)
     local current_name=$(echo "$config" | jq -r '.name')
-    local current_interval=$(echo "$config" | jq -r '.interval')
-    local current_hop_ports=$(echo "$config" | jq -r '.hop_ports | join(",")')
+    local current_interface=$(echo "$config" | jq -r '.interface')
+    local current_port_range=$(echo "$config" | jq -r '.port_range')
+    local current_target_port=$(echo "$config" | jq -r '.target_port')
+    local current_protocol=$(echo "$config" | jq -r '.protocol')
+    local current_ip_version=$(echo "$config" | jq -r '.ip_version')
 
     clear
     print_header "修改跳跃端口配置: $current_name"
@@ -617,17 +821,22 @@ modify_port_hopping() {
 
     echo -e "${CYAN}当前配置:${NC}"
     echo -e "  配置名称: $current_name"
-    echo -e "  跳跃端口: $current_hop_ports"
-    echo -e "  切换间隔: ${current_interval}秒"
+    echo -e "  网络接口: $current_interface"
+    echo -e "  源端口范围: $current_port_range"
+    echo -e "  目标端口: $current_target_port"
+    echo -e "  协议: $current_protocol"
+    echo -e "  IP版本: $current_ip_version"
     echo ""
 
     echo -e "${GREEN}1.${NC} 修改配置名称"
-    echo -e "${GREEN}2.${NC} 修改跳跃端口列表"
-    echo -e "${GREEN}3.${NC} 修改切换间隔"
+    echo -e "${GREEN}2.${NC} 修改源端口范围"
+    echo -e "${GREEN}3.${NC} 修改目标端口"
+    echo -e "${GREEN}4.${NC} 修改协议"
+    echo -e "${GREEN}5.${NC} 修改IP版本"
     echo -e "${GREEN}0.${NC} 返回"
     echo ""
 
-    read -p "请选择操作 [0-3]: " choice
+    read -p "请选择操作 [0-5]: " choice
 
     case $choice in
         1)
@@ -639,36 +848,78 @@ modify_port_hopping() {
             fi
             ;;
         2)
-            read -p "请输入新的跳跃端口列表(逗号分隔): " new_ports
-            if [[ -n "$new_ports" ]]; then
-                IFS=',' read -ra ports_array <<< "$new_ports"
-                local valid_ports=()
-                for port in "${ports_array[@]}"; do
-                    port=$(echo "$port" | xargs)
-                    if [[ "$port" =~ ^[0-9]+$ ]] && [[ "$port" -ge 1 ]] && [[ "$port" -le 65535 ]]; then
-                        valid_ports+=("$port")
-                    fi
-                done
-
-                if [[ ${#valid_ports[@]} -gt 0 ]]; then
-                    local ports_json=$(printf '%s\n' "${valid_ports[@]}" | jq -R . | jq -s .)
-                    jq --argjson ports "$ports_json" "(.configs[$((index-1))].hop_ports) = \$ports" "$PORT_HOPPING_FILE" > "${PORT_HOPPING_FILE}.tmp"
-                    mv "${PORT_HOPPING_FILE}.tmp" "$PORT_HOPPING_FILE"
-                    print_success "跳跃端口列表已更新"
-                else
-                    print_error "没有有效的端口"
-                fi
+            echo ""
+            echo -e "${YELLOW}提示: 修改端口范围将删除并重新创建 iptables 规则${NC}"
+            read -p "请输入新的源端口范围(如: 20000:50000): " new_port_range
+            if [[ -z "$new_port_range" ]] || [[ ! "$new_port_range" =~ ^[0-9]+:[0-9]+$ ]]; then
+                print_error "无效的端口范围格式"
+                return 1
             fi
+
+            # 删除旧规则
+            if [[ "$current_ip_version" == "ipv4" ]] || [[ "$current_ip_version" == "both" ]]; then
+                [[ "$current_protocol" == "udp" || "$current_protocol" == "both" ]] && iptables -t nat -D PREROUTING -i "$current_interface" -p udp --dport "$current_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
+                [[ "$current_protocol" == "tcp" || "$current_protocol" == "both" ]] && iptables -t nat -D PREROUTING -i "$current_interface" -p tcp --dport "$current_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
+            fi
+            if [[ "$current_ip_version" == "ipv6" ]] || [[ "$current_ip_version" == "both" ]]; then
+                [[ "$current_protocol" == "udp" || "$current_protocol" == "both" ]] && ip6tables -t nat -D PREROUTING -i "$current_interface" -p udp --dport "$current_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
+                [[ "$current_protocol" == "tcp" || "$current_protocol" == "both" ]] && ip6tables -t nat -D PREROUTING -i "$current_interface" -p tcp --dport "$current_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
+            fi
+
+            # 添加新规则
+            if [[ "$current_ip_version" == "ipv4" ]] || [[ "$current_ip_version" == "both" ]]; then
+                [[ "$current_protocol" == "udp" || "$current_protocol" == "both" ]] && iptables -t nat -A PREROUTING -i "$current_interface" -p udp --dport "$new_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
+                [[ "$current_protocol" == "tcp" || "$current_protocol" == "both" ]] && iptables -t nat -A PREROUTING -i "$current_interface" -p tcp --dport "$new_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
+            fi
+            if [[ "$current_ip_version" == "ipv6" ]] || [[ "$current_ip_version" == "both" ]]; then
+                [[ "$current_protocol" == "udp" || "$current_protocol" == "both" ]] && ip6tables -t nat -A PREROUTING -i "$current_interface" -p udp --dport "$new_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
+                [[ "$current_protocol" == "tcp" || "$current_protocol" == "both" ]] && ip6tables -t nat -A PREROUTING -i "$current_interface" -p tcp --dport "$new_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
+            fi
+
+            # 保存规则
+            if command -v netfilter-persistent &>/dev/null; then
+                netfilter-persistent save >/dev/null 2>&1
+            fi
+
+            # 更新配置文件
+            jq "(.configs[$((index-1))].port_range) = \"$new_port_range\"" "$PORT_HOPPING_FILE" > "${PORT_HOPPING_FILE}.tmp"
+            mv "${PORT_HOPPING_FILE}.tmp" "$PORT_HOPPING_FILE"
+            print_success "源端口范围已更新"
             ;;
         3)
-            read -p "请输入新的切换间隔(秒): " new_interval
-            if [[ "$new_interval" =~ ^[0-9]+$ ]] && [[ "$new_interval" -ge 60 ]]; then
-                jq "(.configs[$((index-1))].interval) = $new_interval" "$PORT_HOPPING_FILE" > "${PORT_HOPPING_FILE}.tmp"
-                mv "${PORT_HOPPING_FILE}.tmp" "$PORT_HOPPING_FILE"
-                print_success "切换间隔已更新"
-            else
-                print_error "间隔必须至少60秒"
+            echo ""
+            echo -e "${YELLOW}提示: 修改目标端口将删除并重新创建 iptables 规则${NC}"
+            read -p "请输入新的目标端口: " new_target_port
+            if [[ -z "$new_target_port" ]] || ! [[ "$new_target_port" =~ ^[0-9]+$ ]]; then
+                print_error "无效的端口"
+                return 1
             fi
+
+            # 删除旧规则并添加新规则(同上)
+            if [[ "$current_ip_version" == "ipv4" ]] || [[ "$current_ip_version" == "both" ]]; then
+                [[ "$current_protocol" == "udp" || "$current_protocol" == "both" ]] && iptables -t nat -D PREROUTING -i "$current_interface" -p udp --dport "$current_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
+                [[ "$current_protocol" == "tcp" || "$current_protocol" == "both" ]] && iptables -t nat -D PREROUTING -i "$current_interface" -p tcp --dport "$current_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
+                [[ "$current_protocol" == "udp" || "$current_protocol" == "both" ]] && iptables -t nat -A PREROUTING -i "$current_interface" -p udp --dport "$current_port_range" -j REDIRECT --to-ports "$new_target_port" 2>/dev/null
+                [[ "$current_protocol" == "tcp" || "$current_protocol" == "both" ]] && iptables -t nat -A PREROUTING -i "$current_interface" -p tcp --dport "$current_port_range" -j REDIRECT --to-ports "$new_target_port" 2>/dev/null
+            fi
+            if [[ "$current_ip_version" == "ipv6" ]] || [[ "$current_ip_version" == "both" ]]; then
+                [[ "$current_protocol" == "udp" || "$current_protocol" == "both" ]] && ip6tables -t nat -D PREROUTING -i "$current_interface" -p udp --dport "$current_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
+                [[ "$current_protocol" == "tcp" || "$current_protocol" == "both" ]] && ip6tables -t nat -D PREROUTING -i "$current_interface" -p tcp --dport "$current_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
+                [[ "$current_protocol" == "udp" || "$current_protocol" == "both" ]] && ip6tables -t nat -A PREROUTING -i "$current_interface" -p udp --dport "$current_port_range" -j REDIRECT --to-ports "$new_target_port" 2>/dev/null
+                [[ "$current_protocol" == "tcp" || "$current_protocol" == "both" ]] && ip6tables -t nat -A PREROUTING -i "$current_interface" -p tcp --dport "$current_port_range" -j REDIRECT --to-ports "$new_target_port" 2>/dev/null
+            fi
+
+            if command -v netfilter-persistent &>/dev/null; then
+                netfilter-persistent save >/dev/null 2>&1
+            fi
+
+            jq "(.configs[$((index-1))].target_port) = $new_target_port" "$PORT_HOPPING_FILE" > "${PORT_HOPPING_FILE}.tmp"
+            mv "${PORT_HOPPING_FILE}.tmp" "$PORT_HOPPING_FILE"
+            print_success "目标端口已更新"
+            ;;
+        4|5)
+            print_warning "修改协议或IP版本需要删除并重新创建配置"
+            print_info "建议删除现有配置后重新添加"
             ;;
         0)
             return 0
@@ -677,143 +928,6 @@ modify_port_hopping() {
             print_error "无效选择"
             ;;
     esac
-}
-
-# 启用/禁用跳跃端口配置
-toggle_port_hopping() {
-    list_port_hopping
-
-    local count=$(jq '.configs | length' "$PORT_HOPPING_FILE" 2>/dev/null || echo "0")
-    if [[ "$count" -eq 0 ]]; then
-        return 0
-    fi
-
-    echo ""
-    read -p "请输入配置序号: " index
-    if [[ ! "$index" =~ ^[0-9]+$ ]] || [[ "$index" -lt 1 ]] || [[ "$index" -gt "$count" ]]; then
-        print_error "无效的序号"
-        return 1
-    fi
-
-    local current_status=$(jq -r ".configs[$((index-1))].enabled" "$PORT_HOPPING_FILE" 2>/dev/null)
-    local new_status="false"
-    [[ "$current_status" == "false" ]] && new_status="true"
-
-    jq "(.configs[$((index-1))].enabled) = $new_status" "$PORT_HOPPING_FILE" > "${PORT_HOPPING_FILE}.tmp"
-    mv "${PORT_HOPPING_FILE}.tmp" "$PORT_HOPPING_FILE"
-
-    if [[ "$new_status" == "true" ]]; then
-        print_success "跳跃端口配置已启用"
-        echo -e "${YELLOW}提示: 请使用'手动切换端口'功能激活跳跃${NC}"
-    else
-        print_success "跳跃端口配置已禁用"
-    fi
-}
-
-# 手动切换端口
-manual_switch_port() {
-    list_port_hopping
-
-    local count=$(jq '.configs | length' "$PORT_HOPPING_FILE" 2>/dev/null || echo "0")
-    if [[ "$count" -eq 0 ]]; then
-        return 0
-    fi
-
-    echo ""
-    read -p "请输入配置序号: " index
-    if [[ ! "$index" =~ ^[0-9]+$ ]] || [[ "$index" -lt 1 ]] || [[ "$index" -gt "$count" ]]; then
-        print_error "无效的序号"
-        return 1
-    fi
-
-    local config=$(jq ".configs[$((index-1))]" "$PORT_HOPPING_FILE" 2>/dev/null)
-    local enabled=$(echo "$config" | jq -r '.enabled')
-
-    if [[ "$enabled" != "true" ]]; then
-        print_error "此配置未启用,请先启用"
-        return 1
-    fi
-
-    local node_port=$(echo "$config" | jq -r '.node_port')
-    local current_hop=$(echo "$config" | jq -r '.current_hop_port')
-    local hop_ports=($(echo "$config" | jq -r '.hop_ports[]'))
-
-    # 找到当前端口的索引
-    local current_index=0
-    for i in "${!hop_ports[@]}"; do
-        if [[ "${hop_ports[$i]}" == "$current_hop" ]]; then
-            current_index=$i
-            break
-        fi
-    done
-
-    # 切换到下一个端口
-    local next_index=$(( (current_index + 1) % ${#hop_ports[@]} ))
-    local next_port="${hop_ports[$next_index]}"
-
-    echo ""
-    echo -e "${CYAN}准备切换端口:${NC}"
-    echo -e "  原节点端口: $node_port"
-    echo -e "  当前跳跃端口: $current_hop"
-    echo -e "  新跳跃端口: $next_port"
-    echo ""
-
-    read -p "确认切换? [y/N]: " confirm
-    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-        print_info "已取消切换"
-        return 0
-    fi
-
-    # 执行切换
-    print_info "正在切换端口..."
-
-    # 1. 更新节点配置中的端口
-    jq --argjson old_port "$node_port" --argjson new_port "$next_port" '
-        (.nodes[] | select(.port == $old_port) | .port) = $new_port
-    ' "$NODES_FILE" > "${NODES_FILE}.tmp"
-    mv "${NODES_FILE}.tmp" "$NODES_FILE"
-
-    # 2. 更新防火墙规则
-    local fw_type=$(detect_firewall)
-    case $fw_type in
-        ufw)
-            ufw allow "$next_port/tcp" >/dev/null 2>&1
-            ufw delete allow "$current_hop/tcp" >/dev/null 2>&1
-            ;;
-        firewalld)
-            firewall-cmd --permanent --add-port="${next_port}/tcp" >/dev/null 2>&1
-            firewall-cmd --permanent --remove-port="${current_hop}/tcp" >/dev/null 2>&1
-            firewall-cmd --reload >/dev/null 2>&1
-            ;;
-        iptables)
-            iptables -I INPUT -p tcp --dport "$next_port" -j ACCEPT
-            iptables -D INPUT -p tcp --dport "$current_hop" -j ACCEPT 2>/dev/null
-            if command -v netfilter-persistent &>/dev/null; then
-                netfilter-persistent save
-            fi
-            ;;
-    esac
-
-    # 3. 更新跳跃配置
-    local current_time=$(date +%s)
-    jq --argjson idx "$((index-1))" --argjson new_port "$next_port" --argjson time "$current_time" '
-        (.configs[$idx].current_hop_port) = $new_port |
-        (.configs[$idx].last_switch) = $time |
-        (.configs[$idx].node_port) = $new_port
-    ' "$PORT_HOPPING_FILE" > "${PORT_HOPPING_FILE}.tmp"
-    mv "${PORT_HOPPING_FILE}.tmp" "$PORT_HOPPING_FILE"
-
-    # 4. 重新生成配置并重启
-    if declare -f generate_singbox_config &>/dev/null; then
-        generate_singbox_config
-    fi
-
-    if declare -f restart_singbox &>/dev/null; then
-        restart_singbox
-    fi
-
-    print_success "端口切换完成"
-    echo -e "  旧端口: $current_hop → 新端口: $next_port"
 }
 
 # 跳跃端口管理子菜单
@@ -825,19 +939,19 @@ port_hopping_menu() {
 
         init_port_hopping_file
 
+        echo -e "${YELLOW}说明: 端口跳跃通过 iptables NAT 规则实现,将端口范围的流量重定向到目标端口${NC}"
+        echo ""
+
         print_section_start
         print_menu_item "1" "查看跳跃配置"
         print_menu_item "2" "添加跳跃配置"
         print_menu_item "3" "修改跳跃配置"
         print_menu_item "4" "删除跳跃配置"
-        print_divider
-        print_menu_item "5" "启用/禁用配置"
-        print_menu_item "6" "手动切换端口"
         print_menu_item "0" "返回上级菜单"
         print_section_end
 
         print_nav_options "true" "true"
-        choice=$(read_menu_choice "请选择操作 [0-6]")
+        choice=$(read_menu_choice "请选择操作 [0-4]")
         local ret=$?
 
         # 处理导航
@@ -849,8 +963,6 @@ port_hopping_menu() {
             2) add_port_hopping; wait_for_input ;;
             3) modify_port_hopping; wait_for_input ;;
             4) delete_port_hopping; wait_for_input ;;
-            5) toggle_port_hopping; wait_for_input ;;
-            6) manual_switch_port; wait_for_input ;;
             0) return ;;
             *)
                 print_error "无效选择"

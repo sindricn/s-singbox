@@ -121,7 +121,6 @@ cleanup_old_backups() {
 
         for file in "${to_delete[@]}"; do
             rm -f "$file"
-            log_debug "删除: $(basename "$file")"
         done
 
         log_info "已删除 ${#to_delete[@]} 个旧备份"

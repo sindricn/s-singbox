@@ -1345,7 +1345,6 @@ port_hopping_menu() {
             2) add_port_hopping; wait_for_input ;;
             3) modify_port_hopping; wait_for_input ;;
             4) delete_port_hopping; wait_for_input ;;
-            0) return ;;
             *)
                 print_error "无效选择"
                 sleep 1
@@ -1404,7 +1403,6 @@ firewall_management_menu() {
             6) enable_firewall; wait_for_input ;;
             7) disable_firewall; wait_for_input ;;
             8) reset_firewall; wait_for_input ;;
-            0) return ;;
             *)
                 print_error "无效选择"
                 sleep 1

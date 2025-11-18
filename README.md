@@ -3,6 +3,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Shell](https://img.shields.io/badge/shell-bash-green.svg)](https://www.gnu.org/software/bash/)
 [![sing-box](https://img.shields.io/badge/sing--box-compatible-orange.svg)](https://sing-box.sagernet.org/)
+[![Version](https://img.shields.io/badge/version-V1.0.0-brightgreen.svg)](https://github.com/sindricn/s-singbox)
 
 基于 sing-box 的代理服务管理工具 - 命令行界面，简单易用
 
@@ -30,9 +31,16 @@
 - 🌍 **域名管理** - 域名配置和证书关联
 - 📡 **订阅管理** - 从订阅链接导入节点
 - 📊 **流量监控** - 实时流量统计和用户监控
-- 🔥 **防火墙管理** - 自动配置防火墙规则
+- 🔥 **防火墙管理** - 自动配置防火墙规则，支持端口跳跃
 - ⚙️ **出站规则** - 路由规则和分流管理
 - 🔧 **配置管理** - 自动生成和验证配置文件
+
+### 用户界面特性
+
+- 🎯 **统一的菜单格式** - 所有子菜单采用一致的显示格式
+- 🧭 **智能导航系统** - 使用 'b' 返回上级菜单，'m' 返回主菜单
+- ⌨️ **快捷键支持** - 高效的键盘操作体验
+- 📋 **清晰的选项布局** - 分组显示功能选项，易于查找
 
 ## 🚀 快速开始
 

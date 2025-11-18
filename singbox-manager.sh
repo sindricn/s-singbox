@@ -3,8 +3,8 @@
 #================================================================
 # sing-box Manager - 主入口脚本
 # 功能：sing-box 服务管理工具
-# 版本：V2.0.0 (重构版)
-# 项目地址：https://github.com/yourusername/s-singbox
+# 版本：V1.0.0
+# 项目地址：https://github.com/sindricn/s-singbox
 #================================================================
 
 # 严格模式
@@ -91,7 +91,6 @@ source_modules() {
            [[ "$module" != */input-validation.sh ]] && \
            [[ "$module" != */safe_json.sh ]]; then
             source "$module"
-            log_debug "已加载模块: $(basename "$module")"
         fi
     done
 
@@ -279,7 +278,7 @@ show_main_menu() {
     local online_count=$(get_online_users_count 2>/dev/null || echo "0")
 
     # 使用统一的UI函数
-    print_header "sing-box 一键管理脚本 V2.0.0"
+    print_header "sing-box 一键管理脚本 V1.0.0"
     echo ""
 
     print_section_start
@@ -310,8 +309,9 @@ show_main_menu() {
     print_divider
     print_menu_item "11" "脚本管理"
     print_menu_item "12" "关于脚本"
-    print_menu_item "0" "退出脚本"
     print_section_end
+
+    print_nav_options "false" "false"
     echo ""
 }
 
@@ -339,10 +339,9 @@ menu_core() {
         echo ""
         print_menu_info "  ${YELLOW}配置查看${NC}" ""
         print_menu_item "12" "查看配置信息"
-        print_menu_item "0" "返回主菜单"
         print_section_end
 
-        print_nav_options "false" "true"
+        print_nav_options "true" "true"
         choice=$(read_menu_choice "请选择操作 [0-12]")
         local ret=$?
 
@@ -364,8 +363,8 @@ menu_core() {
                 print_menu_item "1" "实时日志(最新50行)"
                 print_menu_item "2" "完整日志"
                 print_menu_item "3" "错误日志"
-                print_menu_item "0" "返回"
                 echo ""
+                print_nav_options "true" "true"
 
                 log_choice=$(read_menu_choice "请选择 [0-3]")
                 case $log_choice in
@@ -418,7 +417,6 @@ menu_core() {
                 fi
                 wait_for_input
                 ;;
-            0) return ;;
             *)
                 print_error "无效选择"
                 sleep 1
@@ -442,9 +440,8 @@ show_node_menu() {
     print_menu_item "3" "列出节点"
     print_menu_item "4" "查看节点详情"
     print_menu_item "5" "修改节点配置"
-    print_menu_item "0" "返回主菜单"
     print_section_end
-    print_nav_options "false" "true"
+    print_nav_options "true" "true"
 }
 
 # 用户管理菜单
@@ -462,9 +459,8 @@ show_user_menu() {
     print_menu_item "2" "添加用户"
     print_menu_item "3" "修改用户"
     print_menu_item "4" "删除用户"
-    print_menu_item "0" "返回主菜单"
     print_section_end
-    print_nav_options "false" "true"
+    print_nav_options "true" "true"
 }
 
 # 获取绑定数量
@@ -497,9 +493,8 @@ show_binding_menu() {
     print_menu_item "6" "列出节点的用户"
     print_menu_item "7" "清理空绑定"
     print_menu_item "8" "验证绑定完整性"
-    print_menu_item "0" "返回主菜单"
     print_section_end
-    print_nav_options "false" "true"
+    print_nav_options "true" "true"
 }
 
 # 配置管理菜单（已废弃，功能移至singbox管理）
@@ -581,7 +576,6 @@ handle_node_menu() {
                 wait_for_input
                 ;;
             5) modify_node_config; wait_for_input ;;
-            0) return ;;
             *)
                 print_error "无效选择"
                 sleep 1
@@ -657,7 +651,6 @@ handle_user_menu() {
             2) add_global_user; wait_for_input ;;
             3) modify_user_menu ;;
             4) delete_users_batch; wait_for_input ;;
-            0) return ;;
             *)
                 print_error "无效选择"
                 sleep 1
@@ -682,7 +675,6 @@ handle_binding_menu() {
             4|5|6) show_user_node_bindings; wait_for_input ;;
             7) log_info "清理空绑定功能待实现"; wait_for_input ;;
             8) log_info "验证绑定功能待实现"; wait_for_input ;;
-            0) return ;;
             *)
                 print_error "无效选择"
                 sleep 1
@@ -717,7 +709,6 @@ handle_config_menu() {
                 wait_for_input
                 ;;
             4) restore_config; wait_for_input ;;
-            0) return ;;
             *)
                 print_error "无效选择"
                 sleep 1
@@ -740,7 +731,6 @@ handle_service_menu() {
             2) stop_singbox; wait_for_input ;;
             3) restart_singbox; wait_for_input ;;
             4) reload_singbox; wait_for_input ;;
-            0) return ;;
             *)
                 print_error "无效选择"
                 sleep 1
@@ -761,7 +751,7 @@ show_about() {
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
     echo -e "${YELLOW}脚本名称：${NC}sing-box 一键管理脚本"
-    echo -e "${YELLOW}脚本版本：${NC}V2.0.0"
+    echo -e "${YELLOW}脚本版本：${NC}V1.0.0"
     echo ""
     echo -e "${YELLOW}功能简介：${NC}"
     echo -e "  • sing-box 内核安装、更新、卸载"
@@ -942,9 +932,8 @@ menu_script() {
         print_section_start
         print_menu_item "1" "更新脚本"
         print_menu_item "2" "卸载管理"
-        print_menu_item "0" "返回主菜单"
         print_section_end
-        print_nav_options "false" "true"
+        print_nav_options "true" "true"
 
         choice=$(read_menu_choice "请选择操作 [0-2]")
         local ret=$?

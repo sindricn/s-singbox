@@ -302,7 +302,6 @@ ensure_json_file() {
 
     # 写入默认内容
     if printf '%s\n' "$default_payload" > "$target_file"; then
-        log_debug "已初始化数据文件: $target_file"
         return 0
     fi
 
@@ -655,5 +654,3 @@ setup_signal_handlers
 
 # 注册清理函数
 trap cleanup EXIT
-
-log_debug "公共库加载完成"

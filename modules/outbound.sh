@@ -1580,16 +1580,20 @@ modify_outbound() {
     echo -e "${OUTBOUND_GREEN}2.${OUTBOUND_NC} 修改 Mux 配置"
     echo -e "${OUTBOUND_GREEN}3.${OUTBOUND_NC} 修改服务器地址/端口 (HTTP/SOCKS)"
     echo -e "${OUTBOUND_GREEN}4.${OUTBOUND_NC} 修改认证信息 (HTTP/SOCKS)"
-    echo -e "${OUTBOUND_GREEN}0.${OUTBOUND_NC} 返回"
     echo ""
-    read -p "请选择操作 [0-4]: " choice
+    print_nav_options "true" "true"
+
+    choice=$(read_menu_choice "请选择操作")
+    local ret=$?
+
+    # 处理导航
+    [[ $ret -eq 98 ]] && return 0  # 返回主菜单
 
     case $choice in
         1) modify_outbound_tag "$index" "$tag" ;;
         2) modify_outbound_mux_config "$index" "$tag" ;;
         3) modify_outbound_server "$index" "$tag" "$protocol" ;;
         4) modify_outbound_auth "$index" "$tag" "$protocol" ;;
-        0) return 0 ;;
         *) print_error "无效选择" ;;
     esac
 }

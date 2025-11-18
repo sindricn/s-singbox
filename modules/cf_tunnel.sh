@@ -1971,7 +1971,6 @@ menu_argo_tunnel() {
             7) manage_tunnel_node_binding; read -p "按 Enter 继续..." ;;
             8) install_cloudflared; read -p "按 Enter 继续..." ;;
             9) uninstall_cloudflared; read -p "按 Enter 继续..." ;;
-            0) return ;;
             *) print_error "无效选择"; sleep 1 ;;
         esac
     done
@@ -2018,7 +2017,6 @@ menu_warp_tunnel() {
             8) bind_warp_to_node; read -p "按 Enter 继续..." ;;
             9) unbind_warp_from_node; read -p "按 Enter 继续..." ;;
             10) uninstall_wgcf; read -p "按 Enter 继续..." ;;
-            0) return ;;
             *) print_error "无效选择"; sleep 1 ;;
         esac
     done
@@ -2035,14 +2033,17 @@ menu_cf_tunnel() {
         echo -e "${GREEN}1.${NC}  Argo 隧道管理"
         echo -e "${GREEN}2.${NC}  WARP 隧道管理"
         echo ""
-        echo -e "${GREEN}0.${NC}  返回主菜单"
-        echo ""
-        read -p "请选择 [0-2]: " choice
+        print_nav_options "true" "true"
+
+        choice=$(read_menu_choice "请选择")
+        local ret=$?
+
+        # 处理导航
+        [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case $choice in
             1) menu_argo_tunnel ;;
             2) menu_warp_tunnel ;;
-            0) return ;;
             *) print_error "无效选择"; sleep 1 ;;
         esac
     done

@@ -420,8 +420,6 @@ check_config_optimization() {
 run_all_checks() {
     clear_tips
 
-    log_debug "开始智能提示系统检查..."
-
     # 系统健康
     check_binary
     check_service_health
@@ -445,8 +443,6 @@ run_all_checks() {
 
     # 优化
     check_config_optimization
-
-    log_debug "智能提示系统检查完成"
 }
 
 # =============================================================================

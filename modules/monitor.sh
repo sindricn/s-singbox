@@ -145,9 +145,14 @@ show_logs() {
     echo "2. 查看访问日志"
     echo "3. 查看错误日志"
     echo "4. 查看 systemd 日志"
-    echo "0. 返回"
     echo ""
-    read -p "请选择 [0-4]: " choice
+    print_nav_options "true" "true"
+
+    choice=$(read_menu_choice "请选择")
+    local ret=$?
+
+    # 处理导航
+    [[ $ret -eq 98 ]] && return 0  # 返回主菜单
 
     case $choice in
         1)
@@ -171,9 +176,6 @@ show_logs() {
             ;;
         4)
             journalctl -u sing-box --no-pager -n 100
-            ;;
-        0)
-            return 0
             ;;
         *)
             print_error "无效选择"

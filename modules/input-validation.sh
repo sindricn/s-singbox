@@ -577,5 +577,3 @@ protect_production() {
 
     return 0
 }
-
-log_debug "输入验证模块加载完成"

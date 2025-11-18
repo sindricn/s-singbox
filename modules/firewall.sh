@@ -397,6 +397,46 @@ get_network_interfaces() {
     ip -o link show | awk -F': ' '{print $2}' | grep -v "lo" | head -10
 }
 
+# 解析 iptables 规则行
+parse_iptables_rule() {
+    local line="$1"
+    local ip_version="$2"
+
+    # 跳过表头和空行
+    if [[ "$line" =~ ^(num|Chain|target|$) ]]; then
+        return 1
+    fi
+
+    # 只处理 REDIRECT 规则
+    if [[ ! "$line" =~ REDIRECT ]]; then
+        return 1
+    fi
+
+    # 提取规则信息
+    local rule_num=$(echo "$line" | awk '{print $1}')
+    local target=$(echo "$line" | awk '{print $2}')
+    local protocol=$(echo "$line" | awk '{print $3}')
+    local in_interface=$(echo "$line" | awk '{print $6}')
+
+    # 提取端口范围和目标端口
+    local port_range=""
+    local target_port=""
+
+    if [[ "$line" =~ dpts:([0-9]+):([0-9]+) ]]; then
+        port_range="${BASH_REMATCH[1]}:${BASH_REMATCH[2]}"
+    elif [[ "$line" =~ dpt:([0-9]+) ]]; then
+        port_range="${BASH_REMATCH[1]}"
+    fi
+
+    if [[ "$line" =~ redir\ ports\ ([0-9]+) ]]; then
+        target_port="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ to:([0-9]+) ]]; then
+        target_port="${BASH_REMATCH[1]}"
+    fi
+
+    echo "$rule_num|$ip_version|$protocol|$in_interface|$port_range|$target_port"
+}
+
 # 检测 iptables 中的端口跳跃规则
 detect_port_hopping_rules() {
     local rules=()
@@ -404,19 +444,21 @@ detect_port_hopping_rules() {
     # 检测 IPv4 规则
     if command -v iptables &>/dev/null; then
         while IFS= read -r line; do
-            if [[ "$line" =~ REDIRECT.*--to-ports ]]; then
-                rules+=("ipv4|$line")
+            local parsed=$(parse_iptables_rule "$line" "ipv4")
+            if [[ -n "$parsed" ]]; then
+                rules+=("$parsed")
             fi
-        done < <(iptables -t nat -L PREROUTING -n --line-numbers 2>/dev/null)
+        done < <(iptables -t nat -L PREROUTING -n -v --line-numbers 2>/dev/null)
     fi
 
     # 检测 IPv6 规则
     if command -v ip6tables &>/dev/null; then
         while IFS= read -r line; do
-            if [[ "$line" =~ REDIRECT.*--to-ports ]]; then
-                rules+=("ipv6|$line")
+            local parsed=$(parse_iptables_rule "$line" "ipv6")
+            if [[ -n "$parsed" ]]; then
+                rules+=("$parsed")
             fi
-        done < <(ip6tables -t nat -L PREROUTING -n --line-numbers 2>/dev/null)
+        done < <(ip6tables -t nat -L PREROUTING -n -v --line-numbers 2>/dev/null)
     fi
 
     printf '%s\n' "${rules[@]}"
@@ -433,14 +475,14 @@ list_port_hopping() {
     # 显示配置文件中的规则
     local count=$(jq '.configs | length' "$PORT_HOPPING_FILE" 2>/dev/null || echo "0")
 
-    echo -e "${CYAN}=== 配置文件中的规则 ===${NC}"
+    echo -e "${CYAN}═══ 配置文件中的规则 ═══${NC}"
     echo ""
 
     if [[ "$count" -eq 0 ]]; then
         print_warning "配置文件中暂无跳跃端口配置"
     else
-        printf "${CYAN}%-4s %-15s %-12s %-15s %-15s %-10s${NC}\n" "序号" "名称" "网络接口" "源端口范围" "目标端口" "IP版本"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        printf "${CYAN}%-4s %-15s %-12s %-15s %-12s %-10s %-10s${NC}\n" "序号" "名称" "网络接口" "源端口范围" "目标端口" "协议" "IP版本"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
         local index=1
         while read -r config; do
@@ -448,50 +490,43 @@ list_port_hopping() {
             local interface=$(echo "$config" | jq -r '.interface')
             local port_range=$(echo "$config" | jq -r '.port_range')
             local target_port=$(echo "$config" | jq -r '.target_port')
+            local protocol=$(echo "$config" | jq -r '.protocol')
             local ip_version=$(echo "$config" | jq -r '.ip_version')
 
-            printf "%-4s %-15s %-12s %-15s %-15s %-10s\n" "$index" "$name" "$interface" "$port_range" "$target_port" "$ip_version"
+            printf "%-4s %-15s %-12s %-15s %-12s %-10s %-10s\n" "$index" "$name" "$interface" "$port_range" "$target_port" "$protocol" "$ip_version"
             ((index++))
         done < <(jq -c '.configs[]' "$PORT_HOPPING_FILE" 2>/dev/null)
     fi
 
     echo ""
-    echo -e "${CYAN}=== 实际 iptables 规则 ===${NC}"
+    echo -e "${CYAN}═══ 实际 iptables 规则 ═══${NC}"
     echo ""
 
-    # 显示实际的 iptables 规则
-    local has_rules=false
+    # 获取并解析实际规则
+    local rules=($(detect_port_hopping_rules))
 
-    # IPv4 规则
-    if command -v iptables &>/dev/null; then
-        echo -e "${YELLOW}IPv4 NAT PREROUTING 规则:${NC}"
-        local ipv4_rules=$(iptables -t nat -L PREROUTING -n --line-numbers 2>/dev/null | grep -E "REDIRECT.*--to-ports")
-        if [[ -n "$ipv4_rules" ]]; then
-            echo "$ipv4_rules"
-            has_rules=true
-        else
-            echo "  无端口跳跃规则"
-        fi
-        echo ""
+    if [[ ${#rules[@]} -eq 0 ]]; then
+        print_warning "系统中暂无端口跳跃规则"
+    else
+        printf "${CYAN}%-4s %-8s %-10s %-12s %-15s %-12s${NC}\n" "行号" "IP版本" "协议" "接口" "源端口范围" "目标端口"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+        for rule in "${rules[@]}"; do
+            IFS='|' read -r rule_num ip_version protocol interface port_range target_port <<< "$rule"
+
+            # 处理可能的空值
+            [[ -z "$interface" || "$interface" == "*" ]] && interface="all"
+            [[ -z "$port_range" ]] && port_range="N/A"
+            [[ -z "$target_port" ]] && target_port="N/A"
+
+            printf "%-4s %-8s %-10s %-12s %-15s %-12s\n" "$rule_num" "$ip_version" "$protocol" "$interface" "$port_range" "$target_port"
+        done
     fi
 
-    # IPv6 规则
-    if command -v ip6tables &>/dev/null; then
-        echo -e "${YELLOW}IPv6 NAT PREROUTING 规则:${NC}"
-        local ipv6_rules=$(ip6tables -t nat -L PREROUTING -n --line-numbers 2>/dev/null | grep -E "REDIRECT.*--to-ports")
-        if [[ -n "$ipv6_rules" ]]; then
-            echo "$ipv6_rules"
-            has_rules=true
-        else
-            echo "  无端口跳跃规则"
-        fi
-        echo ""
-    fi
-
-    if [[ "$has_rules" == false ]] && [[ "$count" -eq 0 ]]; then
-        echo -e "${YELLOW}提示: 系统中暂无端口跳跃规则${NC}"
-    fi
-
+    echo ""
+    echo -e "${YELLOW}提示: 使用以下命令查看完整规则详情${NC}"
+    echo -e "  IPv4: ${CYAN}iptables -t nat -L PREROUTING -n -v${NC}"
+    echo -e "  IPv6: ${CYAN}ip6tables -t nat -L PREROUTING -n -v${NC}"
     echo ""
 }
 
@@ -717,77 +752,153 @@ add_port_hopping() {
 delete_port_hopping() {
     list_port_hopping
 
-    local count=$(jq '.configs | length' "$PORT_HOPPING_FILE" 2>/dev/null || echo "0")
-    if [[ "$count" -eq 0 ]]; then
-        return 0
-    fi
-
     echo ""
-    read -p "请输入要删除的配置序号: " index
-    if [[ ! "$index" =~ ^[0-9]+$ ]] || [[ "$index" -lt 1 ]] || [[ "$index" -gt "$count" ]]; then
-        print_error "无效的序号"
-        return 1
-    fi
-
-    # 读取配置信息
-    local config=$(jq ".configs[$((index-1))]" "$PORT_HOPPING_FILE" 2>/dev/null)
-    local config_name=$(echo "$config" | jq -r '.name')
-    local interface=$(echo "$config" | jq -r '.interface')
-    local port_range=$(echo "$config" | jq -r '.port_range')
-    local target_port=$(echo "$config" | jq -r '.target_port')
-    local protocol=$(echo "$config" | jq -r '.protocol')
-    local ip_version=$(echo "$config" | jq -r '.ip_version')
-
-    echo ""
-    echo -e "${YELLOW}将删除以下配置:${NC}"
-    echo -e "  名称: $config_name"
-    echo -e "  接口: $interface"
-    echo -e "  端口范围: $port_range → $target_port"
-    echo -e "  协议: $protocol | IP版本: $ip_version"
+    echo -e "${CYAN}删除选项:${NC}"
+    echo -e "${GREEN}1.${NC} 从配置文件删除(同时删除对应的 iptables 规则)"
+    echo -e "${GREEN}2.${NC} 直接删除 iptables 规则(通过行号)"
+    echo -e "${GREEN}0.${NC} 返回"
     echo ""
 
-    read -p "确认删除配置及其 iptables 规则? [y/N]: " confirm
-    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-        print_info "已取消删除"
-        return 0
-    fi
+    read -p "请选择删除方式 [0-2]: " delete_type
 
-    # 删除 iptables 规则
-    print_info "正在删除 iptables 规则..."
+    case $delete_type in
+        1)
+            # 从配置文件删除
+            local count=$(jq '.configs | length' "$PORT_HOPPING_FILE" 2>/dev/null || echo "0")
+            if [[ "$count" -eq 0 ]]; then
+                print_warning "配置文件中暂无配置"
+                return 0
+            fi
 
-    # IPv4 规则
-    if [[ "$ip_version" == "ipv4" ]] || [[ "$ip_version" == "both" ]]; then
-        if [[ "$protocol" == "udp" ]] || [[ "$protocol" == "both" ]]; then
-            iptables -t nat -D PREROUTING -i "$interface" -p udp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null || print_warning "IPv4 UDP 规则不存在或已删除"
-        fi
-        if [[ "$protocol" == "tcp" ]] || [[ "$protocol" == "both" ]]; then
-            iptables -t nat -D PREROUTING -i "$interface" -p tcp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null || print_warning "IPv4 TCP 规则不存在或已删除"
-        fi
-    fi
+            echo ""
+            read -p "请输入要删除的配置序号: " index
+            if [[ ! "$index" =~ ^[0-9]+$ ]] || [[ "$index" -lt 1 ]] || [[ "$index" -gt "$count" ]]; then
+                print_error "无效的序号"
+                return 1
+            fi
 
-    # IPv6 规则
-    if [[ "$ip_version" == "ipv6" ]] || [[ "$ip_version" == "both" ]]; then
-        if [[ "$protocol" == "udp" ]] || [[ "$protocol" == "both" ]]; then
-            ip6tables -t nat -D PREROUTING -i "$interface" -p udp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null || print_warning "IPv6 UDP 规则不存在或已删除"
-        fi
-        if [[ "$protocol" == "tcp" ]] || [[ "$protocol" == "both" ]]; then
-            ip6tables -t nat -D PREROUTING -i "$interface" -p tcp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null || print_warning "IPv6 TCP 规则不存在或已删除"
-        fi
-    fi
+            # 读取配置信息
+            local config=$(jq ".configs[$((index-1))]" "$PORT_HOPPING_FILE" 2>/dev/null)
+            local config_name=$(echo "$config" | jq -r '.name')
+            local interface=$(echo "$config" | jq -r '.interface')
+            local port_range=$(echo "$config" | jq -r '.port_range')
+            local target_port=$(echo "$config" | jq -r '.target_port')
+            local protocol=$(echo "$config" | jq -r '.protocol')
+            local ip_version=$(echo "$config" | jq -r '.ip_version')
 
-    # 保存 iptables 规则
-    if command -v netfilter-persistent &>/dev/null; then
-        netfilter-persistent save >/dev/null 2>&1
-    elif command -v service &>/dev/null; then
-        service iptables save 2>/dev/null
-        service ip6tables save 2>/dev/null
-    fi
+            echo ""
+            echo -e "${YELLOW}将删除以下配置:${NC}"
+            echo -e "  名称: $config_name"
+            echo -e "  接口: $interface"
+            echo -e "  端口范围: $port_range → $target_port"
+            echo -e "  协议: $protocol | IP版本: $ip_version"
+            echo ""
 
-    # 从配置文件中删除
-    jq "del(.configs[$((index-1))])" "$PORT_HOPPING_FILE" > "${PORT_HOPPING_FILE}.tmp"
-    mv "${PORT_HOPPING_FILE}.tmp" "$PORT_HOPPING_FILE"
+            read -p "确认删除配置及其 iptables 规则? [y/N]: " confirm
+            if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+                print_info "已取消删除"
+                return 0
+            fi
 
-    print_success "跳跃端口配置已删除: $config_name"
+            # 删除 iptables 规则
+            print_info "正在删除 iptables 规则..."
+
+            # IPv4 规则
+            if [[ "$ip_version" == "ipv4" ]] || [[ "$ip_version" == "both" ]]; then
+                if [[ "$protocol" == "udp" ]] || [[ "$protocol" == "both" ]]; then
+                    iptables -t nat -D PREROUTING -i "$interface" -p udp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null || print_warning "IPv4 UDP 规则不存在或已删除"
+                fi
+                if [[ "$protocol" == "tcp" ]] || [[ "$protocol" == "both" ]]; then
+                    iptables -t nat -D PREROUTING -i "$interface" -p tcp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null || print_warning "IPv4 TCP 规则不存在或已删除"
+                fi
+            fi
+
+            # IPv6 规则
+            if [[ "$ip_version" == "ipv6" ]] || [[ "$ip_version" == "both" ]]; then
+                if [[ "$protocol" == "udp" ]] || [[ "$protocol" == "both" ]]; then
+                    ip6tables -t nat -D PREROUTING -i "$interface" -p udp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null || print_warning "IPv6 UDP 规则不存在或已删除"
+                fi
+                if [[ "$protocol" == "tcp" ]] || [[ "$protocol" == "both" ]]; then
+                    ip6tables -t nat -D PREROUTING -i "$interface" -p tcp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null || print_warning "IPv6 TCP 规则不存在或已删除"
+                fi
+            fi
+
+            # 保存 iptables 规则
+            if command -v netfilter-persistent &>/dev/null; then
+                netfilter-persistent save >/dev/null 2>&1
+            elif command -v service &>/dev/null; then
+                service iptables save 2>/dev/null
+                service ip6tables save 2>/dev/null
+            fi
+
+            # 从配置文件中删除
+            jq "del(.configs[$((index-1))])" "$PORT_HOPPING_FILE" > "${PORT_HOPPING_FILE}.tmp"
+            mv "${PORT_HOPPING_FILE}.tmp" "$PORT_HOPPING_FILE"
+
+            print_success "跳跃端口配置已删除: $config_name"
+            ;;
+
+        2)
+            # 直接删除 iptables 规则
+            echo ""
+            echo -e "${CYAN}选择 IP 版本:${NC}"
+            echo -e "${GREEN}1.${NC} IPv4"
+            echo -e "${GREEN}2.${NC} IPv6"
+            echo ""
+            read -p "请选择 [1-2]: " ip_choice
+
+            local cmd=""
+            case $ip_choice in
+                1) cmd="iptables" ;;
+                2) cmd="ip6tables" ;;
+                *)
+                    print_error "无效选择"
+                    return 1
+                    ;;
+            esac
+
+            echo ""
+            echo -e "${YELLOW}当前 $cmd NAT PREROUTING 规则:${NC}"
+            $cmd -t nat -L PREROUTING -n -v --line-numbers
+            echo ""
+
+            read -p "请输入要删除的规则行号: " rule_num
+            if [[ ! "$rule_num" =~ ^[0-9]+$ ]]; then
+                print_error "无效的行号"
+                return 1
+            fi
+
+            read -p "确认删除第 $rule_num 行规则? [y/N]: " confirm
+            if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+                print_info "已取消删除"
+                return 0
+            fi
+
+            # 删除规则
+            if $cmd -t nat -D PREROUTING "$rule_num" 2>/dev/null; then
+                # 保存规则
+                if command -v netfilter-persistent &>/dev/null; then
+                    netfilter-persistent save >/dev/null 2>&1
+                elif command -v service &>/dev/null; then
+                    service iptables save 2>/dev/null
+                    service ip6tables save 2>/dev/null
+                fi
+
+                print_success "规则已删除"
+                echo -e "${YELLOW}提示: 此规则未从配置文件中删除,如需完全删除请手动清理配置文件${NC}"
+            else
+                print_error "删除失败"
+            fi
+            ;;
+
+        0)
+            return 0
+            ;;
+
+        *)
+            print_error "无效选择"
+            ;;
+    esac
 }
 
 # 修改跳跃端口配置

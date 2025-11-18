@@ -748,134 +748,163 @@ add_port_hopping() {
     echo -e "${YELLOW}提示: 客户端可以使用 $start_port-$end_port 范围内的任意端口连接${NC}"
 }
 
+# 删除指定的 iptables 规则（按行号）
+delete_iptables_rule_by_number() {
+    local ip_version="$1"
+    local rule_num="$2"
+
+    local cmd=""
+    [[ "$ip_version" == "ipv4" ]] && cmd="iptables"
+    [[ "$ip_version" == "ipv6" ]] && cmd="ip6tables"
+
+    if [[ -z "$cmd" ]]; then
+        return 1
+    fi
+
+    if $cmd -t nat -D PREROUTING "$rule_num" 2>/dev/null; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# 解析序号范围输入（支持 1,3,5 或 1-5 或混合）
+parse_number_range() {
+    local input="$1"
+    local max="$2"
+    local numbers=()
+
+    # 分割逗号
+    IFS=',' read -ra parts <<< "$input"
+
+    for part in "${parts[@]}"; do
+        part=$(echo "$part" | xargs)  # 去除空格
+
+        if [[ "$part" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+            # 范围格式 1-5
+            local start="${BASH_REMATCH[1]}"
+            local end="${BASH_REMATCH[2]}"
+
+            if [[ "$start" -gt "$end" ]]; then
+                local temp=$start
+                start=$end
+                end=$temp
+            fi
+
+            for ((i=start; i<=end; i++)); do
+                if [[ "$i" -ge 1 ]] && [[ "$i" -le "$max" ]]; then
+                    numbers+=("$i")
+                fi
+            done
+        elif [[ "$part" =~ ^[0-9]+$ ]]; then
+            # 单个数字
+            if [[ "$part" -ge 1 ]] && [[ "$part" -le "$max" ]]; then
+                numbers+=("$part")
+            fi
+        fi
+    done
+
+    # 去重并排序
+    printf '%s\n' "${numbers[@]}" | sort -nu | tr '\n' ' '
+}
+
 # 删除跳跃端口配置
 delete_port_hopping() {
-    list_port_hopping
+    while true; do
+        clear
+        print_header "删除跳跃端口规则"
+        echo ""
 
-    echo ""
-    echo -e "${CYAN}删除选项:${NC}"
-    echo -e "${GREEN}1.${NC} 从配置文件删除(同时删除对应的 iptables 规则)"
-    echo -e "${GREEN}2.${NC} 直接删除 iptables 规则(通过行号)"
-    echo -e "${GREEN}0.${NC} 返回"
-    echo ""
+        # 获取所有规则
+        local all_rules=($(detect_port_hopping_rules))
 
-    read -p "请选择删除方式 [0-2]: " delete_type
-
-    case $delete_type in
-        1)
-            # 从配置文件删除
-            local count=$(jq '.configs | length' "$PORT_HOPPING_FILE" 2>/dev/null || echo "0")
-            if [[ "$count" -eq 0 ]]; then
-                print_warning "配置文件中暂无配置"
-                return 0
-            fi
-
+        if [[ ${#all_rules[@]} -eq 0 ]]; then
+            print_warning "系统中暂无端口跳跃规则"
             echo ""
-            read -p "请输入要删除的配置序号: " index
-            if [[ ! "$index" =~ ^[0-9]+$ ]] || [[ "$index" -lt 1 ]] || [[ "$index" -gt "$count" ]]; then
-                print_error "无效的序号"
-                return 1
-            fi
+            read -p "按回车键返回..."
+            return 0
+        fi
 
-            # 读取配置信息
-            local config=$(jq ".configs[$((index-1))]" "$PORT_HOPPING_FILE" 2>/dev/null)
-            local config_name=$(echo "$config" | jq -r '.name')
-            local interface=$(echo "$config" | jq -r '.interface')
-            local port_range=$(echo "$config" | jq -r '.port_range')
-            local target_port=$(echo "$config" | jq -r '.target_port')
-            local protocol=$(echo "$config" | jq -r '.protocol')
-            local ip_version=$(echo "$config" | jq -r '.ip_version')
+        # 显示规则列表
+        echo -e "${CYAN}当前端口跳跃规则:${NC}"
+        echo ""
+        printf "${CYAN}%-4s %-8s %-10s %-12s %-15s %-12s${NC}\n" "序号" "IP版本" "协议" "接口" "源端口范围" "目标端口"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-            echo ""
-            echo -e "${YELLOW}将删除以下配置:${NC}"
-            echo -e "  名称: $config_name"
-            echo -e "  接口: $interface"
-            echo -e "  端口范围: $port_range → $target_port"
-            echo -e "  协议: $protocol | IP版本: $ip_version"
-            echo ""
+        local index=1
+        local -A rule_map
+        for rule in "${all_rules[@]}"; do
+            IFS='|' read -r rule_num ip_version protocol interface port_range target_port <<< "$rule"
 
-            read -p "确认删除配置及其 iptables 规则? [y/N]: " confirm
-            if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-                print_info "已取消删除"
-                return 0
-            fi
+            [[ -z "$interface" || "$interface" == "*" ]] && interface="all"
+            [[ -z "$port_range" ]] && port_range="N/A"
+            [[ -z "$target_port" ]] && target_port="N/A"
 
-            # 删除 iptables 规则
-            print_info "正在删除 iptables 规则..."
+            printf "%-4s %-8s %-10s %-12s %-15s %-12s\n" "$index" "$ip_version" "$protocol" "$interface" "$port_range" "$target_port"
 
-            # IPv4 规则
-            if [[ "$ip_version" == "ipv4" ]] || [[ "$ip_version" == "both" ]]; then
-                if [[ "$protocol" == "udp" ]] || [[ "$protocol" == "both" ]]; then
-                    iptables -t nat -D PREROUTING -i "$interface" -p udp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null || print_warning "IPv4 UDP 规则不存在或已删除"
+            # 保存规则映射
+            rule_map[$index]="$rule"
+            ((index++))
+        done
+
+        echo ""
+        echo -e "${CYAN}删除选项:${NC}"
+        echo -e "${GREEN}1.${NC} 按序号删除（单个或多个，如: 1 或 1,3,5 或 1-5）"
+        echo -e "${GREEN}2.${NC} 按端口范围删除"
+        echo -e "${GREEN}3.${NC} 按目标端口删除"
+        echo -e "${GREEN}4.${NC} 删除所有规则"
+        echo -e "${GREEN}0.${NC} 返回"
+        echo ""
+
+        read -p "请选择操作 [0-4]: " choice
+
+        case $choice in
+            1)
+                # 按序号删除
+                echo ""
+                read -p "请输入要删除的序号（支持: 1 或 1,3,5 或 1-5 或混合）: " input
+
+                local numbers=($(parse_number_range "$input" "${#all_rules[@]}"))
+
+                if [[ ${#numbers[@]} -eq 0 ]]; then
+                    print_error "无效的序号输入"
+                    sleep 2
+                    continue
                 fi
-                if [[ "$protocol" == "tcp" ]] || [[ "$protocol" == "both" ]]; then
-                    iptables -t nat -D PREROUTING -i "$interface" -p tcp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null || print_warning "IPv4 TCP 规则不存在或已删除"
+
+                echo ""
+                echo -e "${YELLOW}将删除以下规则:${NC}"
+                for num in "${numbers[@]}"; do
+                    local rule="${rule_map[$num]}"
+                    IFS='|' read -r rule_num ip_version protocol interface port_range target_port <<< "$rule"
+                    echo "  [$num] $ip_version | $protocol | $interface | $port_range → $target_port"
+                done
+
+                echo ""
+                read -p "确认删除这 ${#numbers[@]} 条规则? [y/N]: " confirm
+                if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+                    print_info "已取消删除"
+                    sleep 1
+                    continue
                 fi
-            fi
 
-            # IPv6 规则
-            if [[ "$ip_version" == "ipv6" ]] || [[ "$ip_version" == "both" ]]; then
-                if [[ "$protocol" == "udp" ]] || [[ "$protocol" == "both" ]]; then
-                    ip6tables -t nat -D PREROUTING -i "$interface" -p udp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null || print_warning "IPv6 UDP 规则不存在或已删除"
-                fi
-                if [[ "$protocol" == "tcp" ]] || [[ "$protocol" == "both" ]]; then
-                    ip6tables -t nat -D PREROUTING -i "$interface" -p tcp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null || print_warning "IPv6 TCP 规则不存在或已删除"
-                fi
-            fi
+                print_info "正在删除规则..."
 
-            # 保存 iptables 规则
-            if command -v netfilter-persistent &>/dev/null; then
-                netfilter-persistent save >/dev/null 2>&1
-            elif command -v service &>/dev/null; then
-                service iptables save 2>/dev/null
-                service ip6tables save 2>/dev/null
-            fi
+                local success=0
+                local failed=0
 
-            # 从配置文件中删除
-            jq "del(.configs[$((index-1))])" "$PORT_HOPPING_FILE" > "${PORT_HOPPING_FILE}.tmp"
-            mv "${PORT_HOPPING_FILE}.tmp" "$PORT_HOPPING_FILE"
+                # 从大到小删除，避免序号变化
+                for num in $(printf '%s\n' "${numbers[@]}" | sort -rn); do
+                    local rule="${rule_map[$num]}"
+                    IFS='|' read -r rule_num ip_version protocol interface port_range target_port <<< "$rule"
 
-            print_success "跳跃端口配置已删除: $config_name"
-            ;;
+                    if delete_iptables_rule_by_number "$ip_version" "$rule_num"; then
+                        ((success++))
+                    else
+                        ((failed++))
+                    fi
+                done
 
-        2)
-            # 直接删除 iptables 规则
-            echo ""
-            echo -e "${CYAN}选择 IP 版本:${NC}"
-            echo -e "${GREEN}1.${NC} IPv4"
-            echo -e "${GREEN}2.${NC} IPv6"
-            echo ""
-            read -p "请选择 [1-2]: " ip_choice
-
-            local cmd=""
-            case $ip_choice in
-                1) cmd="iptables" ;;
-                2) cmd="ip6tables" ;;
-                *)
-                    print_error "无效选择"
-                    return 1
-                    ;;
-            esac
-
-            echo ""
-            echo -e "${YELLOW}当前 $cmd NAT PREROUTING 规则:${NC}"
-            $cmd -t nat -L PREROUTING -n -v --line-numbers
-            echo ""
-
-            read -p "请输入要删除的规则行号: " rule_num
-            if [[ ! "$rule_num" =~ ^[0-9]+$ ]]; then
-                print_error "无效的行号"
-                return 1
-            fi
-
-            read -p "确认删除第 $rule_num 行规则? [y/N]: " confirm
-            if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-                print_info "已取消删除"
-                return 0
-            fi
-
-            # 删除规则
-            if $cmd -t nat -D PREROUTING "$rule_num" 2>/dev/null; then
                 # 保存规则
                 if command -v netfilter-persistent &>/dev/null; then
                     netfilter-persistent save >/dev/null 2>&1
@@ -884,159 +913,401 @@ delete_port_hopping() {
                     service ip6tables save 2>/dev/null
                 fi
 
-                print_success "规则已删除"
-                echo -e "${YELLOW}提示: 此规则未从配置文件中删除,如需完全删除请手动清理配置文件${NC}"
-            else
-                print_error "删除失败"
-            fi
-            ;;
+                print_success "成功删除 $success 条规则, 失败 $failed 条"
+                sleep 2
+                ;;
 
-        0)
-            return 0
-            ;;
+            2)
+                # 按端口范围删除
+                echo ""
+                read -p "请输入要删除的源端口范围（如: 20000:50000）: " search_range
 
-        *)
-            print_error "无效选择"
-            ;;
-    esac
+                if [[ -z "$search_range" ]]; then
+                    print_error "端口范围不能为空"
+                    sleep 2
+                    continue
+                fi
+
+                # 筛选匹配的规则
+                local matched_rules=()
+                for idx in "${!rule_map[@]}"; do
+                    local rule="${rule_map[$idx]}"
+                    IFS='|' read -r rule_num ip_version protocol interface port_range target_port <<< "$rule"
+
+                    if [[ "$port_range" == "$search_range" ]]; then
+                        matched_rules+=("$idx")
+                    fi
+                done
+
+                if [[ ${#matched_rules[@]} -eq 0 ]]; then
+                    print_warning "未找到匹配的规则"
+                    sleep 2
+                    continue
+                fi
+
+                echo ""
+                echo -e "${YELLOW}找到 ${#matched_rules[@]} 条匹配规则:${NC}"
+                for idx in "${matched_rules[@]}"; do
+                    local rule="${rule_map[$idx]}"
+                    IFS='|' read -r rule_num ip_version protocol interface port_range target_port <<< "$rule"
+                    echo "  [$idx] $ip_version | $protocol | $interface | $port_range → $target_port"
+                done
+
+                echo ""
+                read -p "确认删除这 ${#matched_rules[@]} 条规则? [y/N]: " confirm
+                if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+                    print_info "已取消删除"
+                    sleep 1
+                    continue
+                fi
+
+                print_info "正在删除规则..."
+
+                local success=0
+                local failed=0
+
+                for idx in $(printf '%s\n' "${matched_rules[@]}" | sort -rn); do
+                    local rule="${rule_map[$idx]}"
+                    IFS='|' read -r rule_num ip_version protocol interface port_range target_port <<< "$rule"
+
+                    if delete_iptables_rule_by_number "$ip_version" "$rule_num"; then
+                        ((success++))
+                    else
+                        ((failed++))
+                    fi
+                done
+
+                if command -v netfilter-persistent &>/dev/null; then
+                    netfilter-persistent save >/dev/null 2>&1
+                elif command -v service &>/dev/null; then
+                    service iptables save 2>/dev/null
+                    service ip6tables save 2>/dev/null
+                fi
+
+                print_success "成功删除 $success 条规则, 失败 $failed 条"
+                sleep 2
+                ;;
+
+            3)
+                # 按目标端口删除
+                echo ""
+                read -p "请输入要删除的目标端口（如: 443）: " search_port
+
+                if [[ -z "$search_port" ]] || ! [[ "$search_port" =~ ^[0-9]+$ ]]; then
+                    print_error "无效的端口号"
+                    sleep 2
+                    continue
+                fi
+
+                # 筛选匹配的规则
+                local matched_rules=()
+                for idx in "${!rule_map[@]}"; do
+                    local rule="${rule_map[$idx]}"
+                    IFS='|' read -r rule_num ip_version protocol interface port_range target_port <<< "$rule"
+
+                    if [[ "$target_port" == "$search_port" ]]; then
+                        matched_rules+=("$idx")
+                    fi
+                done
+
+                if [[ ${#matched_rules[@]} -eq 0 ]]; then
+                    print_warning "未找到匹配的规则"
+                    sleep 2
+                    continue
+                fi
+
+                echo ""
+                echo -e "${YELLOW}找到 ${#matched_rules[@]} 条匹配规则:${NC}"
+                for idx in "${matched_rules[@]}"; do
+                    local rule="${rule_map[$idx]}"
+                    IFS='|' read -r rule_num ip_version protocol interface port_range target_port <<< "$rule"
+                    echo "  [$idx] $ip_version | $protocol | $interface | $port_range → $target_port"
+                done
+
+                echo ""
+                read -p "确认删除这 ${#matched_rules[@]} 条规则? [y/N]: " confirm
+                if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+                    print_info "已取消删除"
+                    sleep 1
+                    continue
+                fi
+
+                print_info "正在删除规则..."
+
+                local success=0
+                local failed=0
+
+                for idx in $(printf '%s\n' "${matched_rules[@]}" | sort -rn); do
+                    local rule="${rule_map[$idx]}"
+                    IFS='|' read -r rule_num ip_version protocol interface port_range target_port <<< "$rule"
+
+                    if delete_iptables_rule_by_number "$ip_version" "$rule_num"; then
+                        ((success++))
+                    else
+                        ((failed++))
+                    fi
+                done
+
+                if command -v netfilter-persistent &>/dev/null; then
+                    netfilter-persistent save >/dev/null 2>&1
+                elif command -v service &>/dev/null; then
+                    service iptables save 2>/dev/null
+                    service ip6tables save 2>/dev/null
+                fi
+
+                print_success "成功删除 $success 条规则, 失败 $failed 条"
+                sleep 2
+                ;;
+
+            4)
+                # 删除所有规则
+                echo ""
+                echo -e "${RED}警告: 即将删除所有端口跳跃规则（共 ${#all_rules[@]} 条）${NC}"
+                echo ""
+                read -p "确认删除所有规则? [y/N]: " confirm
+                if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+                    print_info "已取消删除"
+                    sleep 1
+                    continue
+                fi
+
+                echo ""
+                read -p "再次确认删除? 输入 YES 继续: " confirm2
+                if [[ "$confirm2" != "YES" ]]; then
+                    print_info "已取消删除"
+                    sleep 1
+                    continue
+                fi
+
+                print_info "正在删除所有规则..."
+
+                local success=0
+                local failed=0
+
+                # 从大到小删除
+                for idx in $(seq ${#all_rules[@]} -1 1); do
+                    local rule="${rule_map[$idx]}"
+                    IFS='|' read -r rule_num ip_version protocol interface port_range target_port <<< "$rule"
+
+                    if delete_iptables_rule_by_number "$ip_version" "$rule_num"; then
+                        ((success++))
+                    else
+                        ((failed++))
+                    fi
+                done
+
+                if command -v netfilter-persistent &>/dev/null; then
+                    netfilter-persistent save >/dev/null 2>&1
+                elif command -v service &>/dev/null; then
+                    service iptables save 2>/dev/null
+                    service ip6tables save 2>/dev/null
+                fi
+
+                # 清空配置文件
+                echo '{"configs":[]}' > "$PORT_HOPPING_FILE"
+
+                print_success "成功删除 $success 条规则, 失败 $failed 条"
+                sleep 2
+                ;;
+
+            0)
+                return 0
+                ;;
+
+            *)
+                print_error "无效选择"
+                sleep 1
+                ;;
+        esac
+    done
 }
 
 # 修改跳跃端口配置
 modify_port_hopping() {
-    list_port_hopping
+    clear
+    print_header "修改跳跃端口规则"
+    echo ""
 
-    local count=$(jq '.configs | length' "$PORT_HOPPING_FILE" 2>/dev/null || echo "0")
-    if [[ "$count" -eq 0 ]]; then
+    # 获取所有规则
+    local all_rules=($(detect_port_hopping_rules))
+
+    if [[ ${#all_rules[@]} -eq 0 ]]; then
+        print_warning "系统中暂无端口跳跃规则"
+        echo ""
+        read -p "按回车键返回..."
         return 0
     fi
 
+    # 显示规则列表
+    echo -e "${CYAN}当前端口跳跃规则:${NC}"
     echo ""
-    read -p "请输入要修改的配置序号: " index
-    if [[ ! "$index" =~ ^[0-9]+$ ]] || [[ "$index" -lt 1 ]] || [[ "$index" -gt "$count" ]]; then
+    printf "${CYAN}%-4s %-8s %-10s %-12s %-15s %-12s${NC}\n" "序号" "IP版本" "协议" "接口" "源端口范围" "目标端口"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    local index=1
+    local -A rule_map
+    for rule in "${all_rules[@]}"; do
+        IFS='|' read -r rule_num ip_version protocol interface port_range target_port <<< "$rule"
+
+        [[ -z "$interface" || "$interface" == "*" ]] && interface="all"
+        [[ -z "$port_range" ]] && port_range="N/A"
+        [[ -z "$target_port" ]] && target_port="N/A"
+
+        printf "%-4s %-8s %-10s %-12s %-15s %-12s\n" "$index" "$ip_version" "$protocol" "$interface" "$port_range" "$target_port"
+
+        rule_map[$index]="$rule"
+        ((index++))
+    done
+
+    echo ""
+    read -p "请输入要修改的规则序号 [0=返回]: " select_idx
+
+    if [[ "$select_idx" == "0" ]]; then
+        return 0
+    fi
+
+    if [[ ! "$select_idx" =~ ^[0-9]+$ ]] || [[ "$select_idx" -lt 1 ]] || [[ "$select_idx" -gt ${#all_rules[@]} ]]; then
         print_error "无效的序号"
+        sleep 2
         return 1
     fi
 
-    # 读取当前配置
-    local config=$(jq ".configs[$((index-1))]" "$PORT_HOPPING_FILE" 2>/dev/null)
-    local current_name=$(echo "$config" | jq -r '.name')
-    local current_interface=$(echo "$config" | jq -r '.interface')
-    local current_port_range=$(echo "$config" | jq -r '.port_range')
-    local current_target_port=$(echo "$config" | jq -r '.target_port')
-    local current_protocol=$(echo "$config" | jq -r '.protocol')
-    local current_ip_version=$(echo "$config" | jq -r '.ip_version')
+    # 获取选中的规则
+    local selected_rule="${rule_map[$select_idx]}"
+    IFS='|' read -r rule_num ip_version protocol interface port_range target_port <<< "$selected_rule"
 
     clear
-    print_header "修改跳跃端口配置: $current_name"
+    print_header "修改规则 #$select_idx"
     echo ""
 
-    echo -e "${CYAN}当前配置:${NC}"
-    echo -e "  配置名称: $current_name"
-    echo -e "  网络接口: $current_interface"
-    echo -e "  源端口范围: $current_port_range"
-    echo -e "  目标端口: $current_target_port"
-    echo -e "  协议: $current_protocol"
-    echo -e "  IP版本: $current_ip_version"
+    echo -e "${CYAN}当前规则信息:${NC}"
+    echo -e "  IP版本: $ip_version"
+    echo -e "  协议: $protocol"
+    echo -e "  网络接口: $interface"
+    echo -e "  源端口范围: $port_range"
+    echo -e "  目标端口: $target_port"
     echo ""
 
-    echo -e "${GREEN}1.${NC} 修改配置名称"
-    echo -e "${GREEN}2.${NC} 修改源端口范围"
-    echo -e "${GREEN}3.${NC} 修改目标端口"
-    echo -e "${GREEN}4.${NC} 修改协议"
-    echo -e "${GREEN}5.${NC} 修改IP版本"
+    echo -e "${CYAN}修改选项:${NC}"
+    echo -e "${GREEN}1.${NC} 修改源端口范围"
+    echo -e "${GREEN}2.${NC} 修改目标端口"
     echo -e "${GREEN}0.${NC} 返回"
     echo ""
 
-    read -p "请选择操作 [0-5]: " choice
+    read -p "请选择操作 [0-2]: " modify_choice
 
-    case $choice in
+    case $modify_choice in
         1)
-            read -p "请输入新的配置名称: " new_name
-            if [[ -n "$new_name" ]]; then
-                jq "(.configs[$((index-1))].name) = \"$new_name\"" "$PORT_HOPPING_FILE" > "${PORT_HOPPING_FILE}.tmp"
-                mv "${PORT_HOPPING_FILE}.tmp" "$PORT_HOPPING_FILE"
-                print_success "配置名称已更新"
-            fi
-            ;;
-        2)
+            # 修改源端口范围
             echo ""
-            echo -e "${YELLOW}提示: 修改端口范围将删除并重新创建 iptables 规则${NC}"
-            read -p "请输入新的源端口范围(如: 20000:50000): " new_port_range
+            echo -e "${YELLOW}提示: 修改端口范围将删除旧规则并创建新规则${NC}"
+            read -p "请输入新的源端口范围（如: 30000:60000）: " new_port_range
+
             if [[ -z "$new_port_range" ]] || [[ ! "$new_port_range" =~ ^[0-9]+:[0-9]+$ ]]; then
                 print_error "无效的端口范围格式"
+                sleep 2
                 return 1
             fi
 
-            # 删除旧规则
-            if [[ "$current_ip_version" == "ipv4" ]] || [[ "$current_ip_version" == "both" ]]; then
-                [[ "$current_protocol" == "udp" || "$current_protocol" == "both" ]] && iptables -t nat -D PREROUTING -i "$current_interface" -p udp --dport "$current_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
-                [[ "$current_protocol" == "tcp" || "$current_protocol" == "both" ]] && iptables -t nat -D PREROUTING -i "$current_interface" -p tcp --dport "$current_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
+            read -p "确认将 $port_range 修改为 $new_port_range ? [y/N]: " confirm
+            if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+                print_info "已取消修改"
+                sleep 1
+                return 0
             fi
-            if [[ "$current_ip_version" == "ipv6" ]] || [[ "$current_ip_version" == "both" ]]; then
-                [[ "$current_protocol" == "udp" || "$current_protocol" == "both" ]] && ip6tables -t nat -D PREROUTING -i "$current_interface" -p udp --dport "$current_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
-                [[ "$current_protocol" == "tcp" || "$current_protocol" == "both" ]] && ip6tables -t nat -D PREROUTING -i "$current_interface" -p tcp --dport "$current_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
+
+            print_info "正在修改规则..."
+
+            # 删除旧规则
+            local cmd=""
+            [[ "$ip_version" == "ipv4" ]] && cmd="iptables"
+            [[ "$ip_version" == "ipv6" ]] && cmd="ip6tables"
+
+            if ! $cmd -t nat -D PREROUTING "$rule_num" 2>/dev/null; then
+                print_error "删除旧规则失败"
+                sleep 2
+                return 1
             fi
 
             # 添加新规则
-            if [[ "$current_ip_version" == "ipv4" ]] || [[ "$current_ip_version" == "both" ]]; then
-                [[ "$current_protocol" == "udp" || "$current_protocol" == "both" ]] && iptables -t nat -A PREROUTING -i "$current_interface" -p udp --dport "$new_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
-                [[ "$current_protocol" == "tcp" || "$current_protocol" == "both" ]] && iptables -t nat -A PREROUTING -i "$current_interface" -p tcp --dport "$new_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
-            fi
-            if [[ "$current_ip_version" == "ipv6" ]] || [[ "$current_ip_version" == "both" ]]; then
-                [[ "$current_protocol" == "udp" || "$current_protocol" == "both" ]] && ip6tables -t nat -A PREROUTING -i "$current_interface" -p udp --dport "$new_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
-                [[ "$current_protocol" == "tcp" || "$current_protocol" == "both" ]] && ip6tables -t nat -A PREROUTING -i "$current_interface" -p tcp --dport "$new_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
+            if $cmd -t nat -A PREROUTING -i "$interface" -p "$protocol" --dport "$new_port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null; then
+                # 保存规则
+                if command -v netfilter-persistent &>/dev/null; then
+                    netfilter-persistent save >/dev/null 2>&1
+                elif command -v service &>/dev/null; then
+                    service iptables save 2>/dev/null
+                    service ip6tables save 2>/dev/null
+                fi
+
+                print_success "源端口范围已修改: $port_range → $new_port_range"
+            else
+                print_error "添加新规则失败，正在回滚..."
+                # 尝试恢复旧规则
+                $cmd -t nat -A PREROUTING -i "$interface" -p "$protocol" --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null
             fi
 
-            # 保存规则
-            if command -v netfilter-persistent &>/dev/null; then
-                netfilter-persistent save >/dev/null 2>&1
-            fi
-
-            # 更新配置文件
-            jq "(.configs[$((index-1))].port_range) = \"$new_port_range\"" "$PORT_HOPPING_FILE" > "${PORT_HOPPING_FILE}.tmp"
-            mv "${PORT_HOPPING_FILE}.tmp" "$PORT_HOPPING_FILE"
-            print_success "源端口范围已更新"
+            sleep 2
             ;;
-        3)
+
+        2)
+            # 修改目标端口
             echo ""
-            echo -e "${YELLOW}提示: 修改目标端口将删除并重新创建 iptables 规则${NC}"
-            read -p "请输入新的目标端口: " new_target_port
-            if [[ -z "$new_target_port" ]] || ! [[ "$new_target_port" =~ ^[0-9]+$ ]]; then
-                print_error "无效的端口"
+            echo -e "${YELLOW}提示: 修改目标端口将删除旧规则并创建新规则${NC}"
+            read -p "请输入新的目标端口（如: 8443）: " new_target_port
+
+            if [[ -z "$new_target_port" ]] || ! [[ "$new_target_port" =~ ^[0-9]+$ ]] || [[ "$new_target_port" -lt 1 ]] || [[ "$new_target_port" -gt 65535 ]]; then
+                print_error "无效的端口号"
+                sleep 2
                 return 1
             fi
 
-            # 删除旧规则并添加新规则(同上)
-            if [[ "$current_ip_version" == "ipv4" ]] || [[ "$current_ip_version" == "both" ]]; then
-                [[ "$current_protocol" == "udp" || "$current_protocol" == "both" ]] && iptables -t nat -D PREROUTING -i "$current_interface" -p udp --dport "$current_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
-                [[ "$current_protocol" == "tcp" || "$current_protocol" == "both" ]] && iptables -t nat -D PREROUTING -i "$current_interface" -p tcp --dport "$current_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
-                [[ "$current_protocol" == "udp" || "$current_protocol" == "both" ]] && iptables -t nat -A PREROUTING -i "$current_interface" -p udp --dport "$current_port_range" -j REDIRECT --to-ports "$new_target_port" 2>/dev/null
-                [[ "$current_protocol" == "tcp" || "$current_protocol" == "both" ]] && iptables -t nat -A PREROUTING -i "$current_interface" -p tcp --dport "$current_port_range" -j REDIRECT --to-ports "$new_target_port" 2>/dev/null
-            fi
-            if [[ "$current_ip_version" == "ipv6" ]] || [[ "$current_ip_version" == "both" ]]; then
-                [[ "$current_protocol" == "udp" || "$current_protocol" == "both" ]] && ip6tables -t nat -D PREROUTING -i "$current_interface" -p udp --dport "$current_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
-                [[ "$current_protocol" == "tcp" || "$current_protocol" == "both" ]] && ip6tables -t nat -D PREROUTING -i "$current_interface" -p tcp --dport "$current_port_range" -j REDIRECT --to-ports "$current_target_port" 2>/dev/null
-                [[ "$current_protocol" == "udp" || "$current_protocol" == "both" ]] && ip6tables -t nat -A PREROUTING -i "$current_interface" -p udp --dport "$current_port_range" -j REDIRECT --to-ports "$new_target_port" 2>/dev/null
-                [[ "$current_protocol" == "tcp" || "$current_protocol" == "both" ]] && ip6tables -t nat -A PREROUTING -i "$current_interface" -p tcp --dport "$current_port_range" -j REDIRECT --to-ports "$new_target_port" 2>/dev/null
+            read -p "确认将目标端口 $target_port 修改为 $new_target_port ? [y/N]: " confirm
+            if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+                print_info "已取消修改"
+                sleep 1
+                return 0
             fi
 
-            if command -v netfilter-persistent &>/dev/null; then
-                netfilter-persistent save >/dev/null 2>&1
+            print_info "正在修改规则..."
+
+            # 删除旧规则
+            local cmd=""
+            [[ "$ip_version" == "ipv4" ]] && cmd="iptables"
+            [[ "$ip_version" == "ipv6" ]] && cmd="ip6tables"
+
+            if ! $cmd -t nat -D PREROUTING "$rule_num" 2>/dev/null; then
+                print_error "删除旧规则失败"
+                sleep 2
+                return 1
             fi
 
-            jq "(.configs[$((index-1))].target_port) = $new_target_port" "$PORT_HOPPING_FILE" > "${PORT_HOPPING_FILE}.tmp"
-            mv "${PORT_HOPPING_FILE}.tmp" "$PORT_HOPPING_FILE"
-            print_success "目标端口已更新"
+            # 添加新规则
+            if $cmd -t nat -A PREROUTING -i "$interface" -p "$protocol" --dport "$port_range" -j REDIRECT --to-ports "$new_target_port" 2>/dev/null; then
+                # 保存规则
+                if command -v netfilter-persistent &>/dev/null; then
+                    netfilter-persistent save >/dev/null 2>&1
+                elif command -v service &>/dev/null; then
+                    service iptables save 2>/dev/null
+                    service ip6tables save 2>/dev/null
+                fi
+
+                print_success "目标端口已修改: $target_port → $new_target_port"
+            else
+                print_error "添加新规则失败，正在回滚..."
+                # 尝试恢复旧规则
+                $cmd -t nat -A PREROUTING -i "$interface" -p "$protocol" --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null
+            fi
+
+            sleep 2
             ;;
-        4|5)
-            print_warning "修改协议或IP版本需要删除并重新创建配置"
-            print_info "建议删除现有配置后重新添加"
-            ;;
+
         0)
             return 0
             ;;
+
         *)
             print_error "无效选择"
+            sleep 1
             ;;
     esac
 }

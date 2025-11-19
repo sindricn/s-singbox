@@ -613,7 +613,7 @@ menu_node_add() {
         echo -e "${GREEN}11.${NC} AnyTLS    - 流量填充混淆（sing-box 1.12.0+）"
         echo ""
 
-        show_menu_footer "true" "true"
+        print_nav_options "true" "true"
         choice=$(read_menu_choice "请选择协议")
         local ret=$?
 

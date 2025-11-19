@@ -855,7 +855,7 @@ delete_port_hopping() {
         echo -e "${GREEN}4.${NC} 删除所有规则"
         echo ""
 
-        show_menu_footer "true" "true"
+        print_nav_options "true" "true"
         choice=$(read_menu_choice "请选择操作")
         local ret=$?
 
@@ -1198,7 +1198,7 @@ modify_port_hopping() {
     echo -e "${GREEN}2.${NC} 修改目标端口"
     echo ""
 
-    show_menu_footer "true" "true"
+    print_nav_options "true" "true"
     local modify_choice=$(read_menu_choice "请选择操作")
     local ret=$?
 

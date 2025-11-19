@@ -1958,7 +1958,7 @@ menu_argo_tunnel() {
         echo -e "${GREEN}9.${NC}  卸载 cloudflared"
         echo ""
 
-        show_menu_footer "true" "true"
+        print_nav_options "true" "true"
         choice=$(read_menu_choice "请选择")
         local ret=$?
 
@@ -2008,7 +2008,7 @@ menu_warp_tunnel() {
         echo -e "${GREEN}10.${NC} 卸载 wgcf"
         echo ""
 
-        show_menu_footer "true" "true"
+        print_nav_options "true" "true"
         choice=$(read_menu_choice "请选择")
         local ret=$?
 

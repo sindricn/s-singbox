@@ -692,7 +692,7 @@ test_bbr_performance() {
     echo -e "${GREEN}5.${NC} 吞吐量测试（所有地区）"
     echo ""
 
-    show_menu_footer "true" "true"
+    print_nav_options "true" "true"
     local test_choice=$(read_menu_choice "请选择")
     local ret=$?
 
@@ -717,7 +717,7 @@ test_bbr_performance() {
             echo -e "${GREEN}5.${NC} 中国台湾"
             echo ""
 
-            show_menu_footer "true" "true"
+            print_nav_options "true" "true"
             local region_choice=$(read_menu_choice "请选择")
             local ret=$?
 

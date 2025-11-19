@@ -580,7 +580,7 @@ manage_server_domain() {
     echo -e "${GREEN}3.${NC} 测试域名解析"
     echo ""
 
-    show_menu_footer "true" "true"
+    print_nav_options "true" "true"
     local choice=$(read_menu_choice "请选择")
     local ret=$?
 
@@ -788,7 +788,7 @@ manage_sni_domain() {
     echo -e "${GREEN}5.${NC} 完整域名测试 (20+域名)"
     echo ""
 
-    show_menu_footer "true" "true"
+    print_nav_options "true" "true"
     local choice=$(read_menu_choice "请选择")
     local ret=$?
 
@@ -859,7 +859,7 @@ manage_host_domain() {
     echo -e "${GREEN}3.${NC} 测试 Host 可用性"
     echo ""
 
-    show_menu_footer "true" "true"
+    print_nav_options "true" "true"
     local choice=$(read_menu_choice "请选择")
     local ret=$?
 
@@ -918,7 +918,7 @@ domain_management_menu() {
         echo -e "${GREEN}5.${NC} 校验 DNS"
         echo ""
 
-        show_menu_footer "false" "true"
+        print_nav_options "false" "true"
         choice=$(read_menu_choice "请选择操作")
         local ret=$?
 
@@ -987,7 +987,7 @@ modify_certificate() {
     echo -e "${GREEN}2.${NC} 更新密钥文件路径"
     echo ""
 
-    show_menu_footer "true" "true"
+    print_nav_options "true" "true"
     local choice=$(read_menu_choice "请选择")
     local ret=$?
 
@@ -1164,7 +1164,7 @@ certificate_management_menu() {
         echo -e "${GREEN}5.${NC} 自动申请证书"
         echo ""
 
-        show_menu_footer "false" "true"
+        print_nav_options "false" "true"
         choice=$(read_menu_choice "请选择操作")
         local ret=$?
 

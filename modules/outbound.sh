@@ -1801,7 +1801,7 @@ outbound_management_menu() {
                 print_section_end
                 echo ""
 
-                show_menu_footer "true" "true"
+                print_nav_options "true" "true"
                 local protocol_choice=$(read_menu_choice "请选择协议")
                 local ret=$?
 

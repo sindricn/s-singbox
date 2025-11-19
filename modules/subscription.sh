@@ -2754,7 +2754,7 @@ config_subscription() {
     echo -e "${GREEN}4.${NC} 查看单个节点分享链接"
     echo ""
 
-    show_menu_footer "true" "true"
+    print_nav_options "true" "true"
     local choice=$(read_menu_choice "请选择")
     local ret=$?
 
@@ -3313,7 +3313,7 @@ menu_subscription() {
         echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo ""
 
-        show_menu_footer "false" "true"
+        print_nav_options "false" "true"
         choice=$(read_menu_choice "请选择")
         local ret=$?
 
@@ -3604,7 +3604,7 @@ update_subscription_menu() {
     echo -e "${GREEN}2.${NC} 更新所有用户的所有订阅"
     echo ""
 
-    show_menu_footer "true" "true"
+    print_nav_options "true" "true"
     local choice=$(read_menu_choice "请选择")
     local ret=$?
 
@@ -3731,7 +3731,7 @@ delete_subscription_menu() {
     echo -e "${GREEN}3.${NC} 删除所有订阅"
     echo ""
 
-    show_menu_footer "true" "true"
+    print_nav_options "true" "true"
     local choice=$(read_menu_choice "请选择")
     local ret=$?
 

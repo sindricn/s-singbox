@@ -1410,7 +1410,7 @@ view_users_menu() {
         echo -e "${GREEN}1.${NC} 查看单个用户详情"
         echo ""
 
-        show_menu_footer "true" "true"
+        print_nav_options "true" "true"
         choice=$(read_menu_choice "请选择")
         local ret=$?
 
@@ -1457,7 +1457,7 @@ modify_user_menu() {
         echo -e "${GREEN}2.${NC} 修改用户绑定节点"
         echo ""
 
-        show_menu_footer "true" "true"
+        print_nav_options "true" "true"
         choice=$(read_menu_choice "请选择")
         local ret=$?
 
@@ -1546,7 +1546,7 @@ modify_user_basic_info() {
         echo -e "${GREEN}3.${NC} 修改状态"
         echo ""
 
-        show_menu_footer "true" "true"
+        print_nav_options "true" "true"
         choice=$(read_menu_choice "请选择要修改的项目")
         local ret=$?
 
@@ -1727,7 +1727,7 @@ modify_user_bindings() {
         echo -e "${GREEN}2.${NC} 移除绑定节点"
         echo ""
 
-        show_menu_footer "true" "true"
+        print_nav_options "true" "true"
         choice=$(read_menu_choice "请选择")
         local ret=$?
 

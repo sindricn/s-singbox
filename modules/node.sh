@@ -1395,7 +1395,7 @@ modify_node_config() {
     echo -e "${GREEN}3.${NC} 从节点解绑用户"
     echo ""
 
-    show_menu_footer "true" "true"
+    print_nav_options "true" "true"
     local choice=$(read_menu_choice "请选择")
     local ret=$?
 
@@ -3191,7 +3191,7 @@ menu_quick_setup() {
         echo -e "${GREEN}2.${NC}  Hysteria2         - 高性能 QUIC 协议"
         echo ""
 
-        show_menu_footer "true" "true"
+        print_nav_options "true" "true"
         choice=$(read_menu_choice "请选择")
         local ret=$?
 

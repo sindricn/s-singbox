@@ -2752,9 +2752,15 @@ config_subscription() {
     echo -e "${GREEN}2.${NC} 重启订阅服务"
     echo -e "${GREEN}3.${NC} 查看订阅服务状态"
     echo -e "${GREEN}4.${NC} 查看单个节点分享链接"
-    echo -e "${GREEN}0.${NC} 返回"
     echo ""
-    read -p "请选择 [0-4]: " choice
+
+    show_menu_footer "true" "true"
+    local choice=$(read_menu_choice "请选择")
+    local ret=$?
+
+    # 处理导航
+    [[ $ret -eq 99 ]] && return  # 返回上级
+    [[ $ret -eq 98 ]] && return  # 返回主菜单
 
     case $choice in
         1)
@@ -3304,11 +3310,15 @@ menu_subscription() {
         echo -e "${GREEN}4.${NC}  查看用户订阅"
         echo -e "${GREEN}5.${NC}  更新订阅"
         echo -e "${GREEN}6.${NC}  删除订阅"
-        echo ""
-        echo -e "${GREEN}0.${NC}  返回主菜单"
         echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo ""
-        read -p "请选择 [0-6]: " choice
+
+        show_menu_footer "false" "true"
+        choice=$(read_menu_choice "请选择")
+        local ret=$?
+
+        # 处理导航
+        [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case $choice in
             1)
@@ -3334,9 +3344,6 @@ menu_subscription() {
             6)
                 delete_subscription_menu
                 read -p "按 Enter 键继续..."
-                ;;
-            0)
-                return
                 ;;
             *)
                 print_error "无效选择"
@@ -3595,9 +3602,15 @@ update_subscription_menu() {
     echo -e "${YELLOW}请选择更新方式：${NC}"
     echo -e "${GREEN}1.${NC} 更新单个用户的所有订阅"
     echo -e "${GREEN}2.${NC} 更新所有用户的所有订阅"
-    echo -e "${GREEN}0.${NC} 返回"
     echo ""
-    read -p "请选择 [0-2]: " choice
+
+    show_menu_footer "true" "true"
+    local choice=$(read_menu_choice "请选择")
+    local ret=$?
+
+    # 处理导航
+    [[ $ret -eq 99 ]] && return 0  # 返回上级
+    [[ $ret -eq 98 ]] && return 0  # 返回主菜单
 
     case $choice in
         1)
@@ -3697,9 +3710,6 @@ update_subscription_menu() {
             echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
             print_success "更新完成！共更新 $updated_users/$total_users 个用户的订阅"
             ;;
-        0)
-            return 0
-            ;;
         *)
             print_error "无效选择"
             return 1
@@ -3719,9 +3729,15 @@ delete_subscription_menu() {
     echo -e "${GREEN}1.${NC} 删除单个订阅（按序号）"
     echo -e "${GREEN}2.${NC} 删除用户的所有订阅"
     echo -e "${GREEN}3.${NC} 删除所有订阅"
-    echo -e "${GREEN}0.${NC} 返回"
     echo ""
-    read -p "请选择 [0-3]: " choice
+
+    show_menu_footer "true" "true"
+    local choice=$(read_menu_choice "请选择")
+    local ret=$?
+
+    # 处理导航
+    [[ $ret -eq 99 ]] && return 0  # 返回上级
+    [[ $ret -eq 98 ]] && return 0  # 返回主菜单
 
     case $choice in
         1)
@@ -3864,9 +3880,6 @@ delete_subscription_menu() {
 
             echo ""
             print_success "已删除所有 $sub_count 个订阅"
-            ;;
-        0)
-            return 0
             ;;
         *)
             print_error "无效选择"

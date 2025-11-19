@@ -853,10 +853,15 @@ delete_port_hopping() {
         echo -e "${GREEN}2.${NC} 按端口范围删除"
         echo -e "${GREEN}3.${NC} 按目标端口删除"
         echo -e "${GREEN}4.${NC} 删除所有规则"
-        echo -e "${GREEN}0.${NC} 返回"
         echo ""
 
-        read -p "请选择操作 [0-4]: " choice
+        show_menu_footer "true" "true"
+        choice=$(read_menu_choice "请选择操作")
+        local ret=$?
+
+        # 处理导航
+        [[ $ret -eq 99 ]] && return 0  # 返回上级
+        [[ $ret -eq 98 ]] && return 0  # 返回主菜单
 
         case $choice in
             1)
@@ -1191,10 +1196,15 @@ modify_port_hopping() {
     echo -e "${CYAN}修改选项:${NC}"
     echo -e "${GREEN}1.${NC} 修改源端口范围"
     echo -e "${GREEN}2.${NC} 修改目标端口"
-    echo -e "${GREEN}0.${NC} 返回"
     echo ""
 
-    read -p "请选择操作 [0-2]: " modify_choice
+    show_menu_footer "true" "true"
+    local modify_choice=$(read_menu_choice "请选择操作")
+    local ret=$?
+
+    # 处理导航
+    [[ $ret -eq 99 ]] && return 0  # 返回上级
+    [[ $ret -eq 98 ]] && return 0  # 返回主菜单
 
     case $modify_choice in
         1)

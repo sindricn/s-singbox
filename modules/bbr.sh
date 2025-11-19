@@ -690,9 +690,15 @@ test_bbr_performance() {
     echo -e "${GREEN}3.${NC} 延迟测试（所有地区）"
     echo -e "${GREEN}4.${NC} 丢包测试（所有地区）"
     echo -e "${GREEN}5.${NC} 吞吐量测试（所有地区）"
-    echo -e "${GREEN}0.${NC} 返回"
     echo ""
-    read -p "请选择 [0-5]: " test_choice
+
+    show_menu_footer "true" "true"
+    local test_choice=$(read_menu_choice "请选择")
+    local ret=$?
+
+    # 处理导航
+    [[ $ret -eq 99 ]] && return  # 返回上级
+    [[ $ret -eq 98 ]] && return  # 返回主菜单
 
     case $test_choice in
         1)
@@ -709,9 +715,15 @@ test_bbr_performance() {
             echo -e "${GREEN}3.${NC} 美国"
             echo -e "${GREEN}4.${NC} 俄罗斯"
             echo -e "${GREEN}5.${NC} 中国台湾"
-            echo -e "${GREEN}0.${NC} 返回"
             echo ""
-            read -p "请选择 [0-5]: " region_choice
+
+            show_menu_footer "true" "true"
+            local region_choice=$(read_menu_choice "请选择")
+            local ret=$?
+
+            # 处理导航
+            [[ $ret -eq 99 ]] && return  # 返回上级
+            [[ $ret -eq 98 ]] && return  # 返回主菜单
 
             case $region_choice in
                 1)
@@ -728,9 +740,6 @@ test_bbr_performance() {
                     ;;
                 5)
                     test_bbr_comparison "www.pchome.com.tw" "中国台湾" "http://cachefly.cachefly.net/10mb.test"
-                    ;;
-                0)
-                    return
                     ;;
                 *)
                     print_error "无效选择"
@@ -751,10 +760,6 @@ test_bbr_performance() {
         5)
             # 吞吐量测试（所有地区）
             test_all_regions_throughput
-            ;;
-
-        0)
-            return
             ;;
 
         *)

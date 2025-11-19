@@ -1957,9 +1957,14 @@ menu_argo_tunnel() {
         echo -e "${GREEN}8.${NC}  安装 cloudflared"
         echo -e "${GREEN}9.${NC}  卸载 cloudflared"
         echo ""
-        echo -e "${GREEN}0.${NC}  返回上级菜单"
-        echo ""
-        read -p "请选择 [0-9]: " choice
+
+        show_menu_footer "true" "true"
+        choice=$(read_menu_choice "请选择")
+        local ret=$?
+
+        # 处理导航
+        [[ $ret -eq 99 ]] && return  # 返回上级
+        [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case $choice in
             1) start_temp_argo_tunnel; read -p "按 Enter 继续..." ;;
@@ -2002,9 +2007,14 @@ menu_warp_tunnel() {
         echo -e "${YELLOW}━━━━━━━ 系统管理 ━━━━━━━${NC}"
         echo -e "${GREEN}10.${NC} 卸载 wgcf"
         echo ""
-        echo -e "${GREEN}0.${NC}  返回上级菜单"
-        echo ""
-        read -p "请选择 [0-10]: " choice
+
+        show_menu_footer "true" "true"
+        choice=$(read_menu_choice "请选择")
+        local ret=$?
+
+        # 处理导航
+        [[ $ret -eq 99 ]] && return  # 返回上级
+        [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case $choice in
             1) install_wgcf; read -p "按 Enter 继续..." ;;

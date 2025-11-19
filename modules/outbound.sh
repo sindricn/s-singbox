@@ -1798,11 +1798,18 @@ outbound_management_menu() {
                 print_menu_item "6" "Shadowsocks 协议"
                 print_menu_item "7" "Hysteria2 协议"
                 print_menu_item "8" "TUIC 协议"
-                print_menu_item "0" "返回"
                 print_section_end
                 echo ""
 
-                read -p "请选择协议 [0-8]: " protocol_choice
+                show_menu_footer "true" "true"
+                local protocol_choice=$(read_menu_choice "请选择协议")
+                local ret=$?
+
+                # 处理导航
+                if [[ $ret -eq 99 ]] || [[ $ret -eq 98 ]]; then
+                    continue
+                fi
+
                 case $protocol_choice in
                     1) add_http_outbound ;;
                     2) add_socks_outbound ;;
@@ -1812,7 +1819,6 @@ outbound_management_menu() {
                     6) add_shadowsocks_outbound ;;
                     7) add_hysteria2_outbound ;;
                     8) add_tuic_outbound ;;
-                    0) ;;
                     *) print_error "无效选择" ;;
                 esac
                 wait_for_input

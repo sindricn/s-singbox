@@ -612,9 +612,14 @@ menu_node_add() {
         echo -e "${GREEN}10.${NC} SOCKS     - SOCKS5 代理"
         echo -e "${GREEN}11.${NC} AnyTLS    - 流量填充混淆（sing-box 1.12.0+）"
         echo ""
-        echo -e "${GREEN}0.${NC}  返回上级菜单"
-        echo ""
-        read -p "请选择协议 [0-11/Q]: " choice
+
+        show_menu_footer "true" "true"
+        choice=$(read_menu_choice "请选择协议")
+        local ret=$?
+
+        # 处理导航
+        [[ $ret -eq 99 ]] && return  # 返回上级
+        [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case $choice in
             q|Q) menu_quick_setup ;;
@@ -629,7 +634,6 @@ menu_node_add() {
             9) add_http_inbound_node ;;
             10) add_socks_inbound_node ;;
             11) add_anytls_node ;;
-            0) break ;;
             *) print_error "无效选择" ;;
         esac
 

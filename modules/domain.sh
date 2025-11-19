@@ -578,9 +578,15 @@ manage_server_domain() {
     echo -e "${GREEN}1.${NC} 查看当前域名"
     echo -e "${GREEN}2.${NC} 设置服务器域名"
     echo -e "${GREEN}3.${NC} 测试域名解析"
-    echo -e "${GREEN}0.${NC} 返回"
     echo ""
-    read -p "请选择 [0-3]: " choice
+
+    show_menu_footer "true" "true"
+    local choice=$(read_menu_choice "请选择")
+    local ret=$?
+
+    # 处理导航
+    [[ $ret -eq 99 ]] && return  # 返回上级
+    [[ $ret -eq 98 ]] && return  # 返回主菜单
 
     case $choice in
         1)
@@ -780,9 +786,15 @@ manage_sni_domain() {
     echo -e "${GREEN}3.${NC} 查看推荐域名列表"
     echo -e "${GREEN}4.${NC} 测试域名可用性"
     echo -e "${GREEN}5.${NC} 完整域名测试 (20+域名)"
-    echo -e "${GREEN}0.${NC} 返回"
     echo ""
-    read -p "请选择 [0-5]: " choice
+
+    show_menu_footer "true" "true"
+    local choice=$(read_menu_choice "请选择")
+    local ret=$?
+
+    # 处理导航
+    [[ $ret -eq 99 ]] && return  # 返回上级
+    [[ $ret -eq 98 ]] && return  # 返回主菜单
 
     case $choice in
         1)
@@ -845,9 +857,15 @@ manage_host_domain() {
     echo -e "${GREEN}1.${NC} 查看当前 Host 域名"
     echo -e "${GREEN}2.${NC} 设置 Host 域名"
     echo -e "${GREEN}3.${NC} 测试 Host 可用性"
-    echo -e "${GREEN}0.${NC} 返回"
     echo ""
-    read -p "请选择 [0-3]: " choice
+
+    show_menu_footer "true" "true"
+    local choice=$(read_menu_choice "请选择")
+    local ret=$?
+
+    # 处理导航
+    [[ $ret -eq 99 ]] && return  # 返回上级
+    [[ $ret -eq 98 ]] && return  # 返回主菜单
 
     case $choice in
         1)
@@ -898,9 +916,14 @@ domain_management_menu() {
         echo -e "${GREEN}3.${NC} Host 伪装域名"
         echo -e "${GREEN}4.${NC} 优选域名测试"
         echo -e "${GREEN}5.${NC} 校验 DNS"
-        echo -e "${GREEN}0.${NC} 返回主菜单"
         echo ""
-        read -p "请选择操作 [0-5]: " choice
+
+        show_menu_footer "false" "true"
+        choice=$(read_menu_choice "请选择操作")
+        local ret=$?
+
+        # 处理导航
+        [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case $choice in
             1) manage_server_domain ;;
@@ -908,7 +931,6 @@ domain_management_menu() {
             3) manage_host_domain ;;
             4) test_best_reality_domains ;;
             5) test_dns_resolution ;;
-            0) break ;;
             *) print_error "无效选择" ;;
         esac
 
@@ -963,9 +985,15 @@ modify_certificate() {
     echo ""
     echo -e "${GREEN}1.${NC} 更新证书文件路径"
     echo -e "${GREEN}2.${NC} 更新密钥文件路径"
-    echo -e "${GREEN}0.${NC} 返回"
     echo ""
-    read -p "请选择 [0-2]: " choice
+
+    show_menu_footer "true" "true"
+    local choice=$(read_menu_choice "请选择")
+    local ret=$?
+
+    # 处理导航
+    [[ $ret -eq 99 ]] && return  # 返回上级
+    [[ $ret -eq 98 ]] && return  # 返回主菜单
 
     case $choice in
         1)
@@ -1134,9 +1162,14 @@ certificate_management_menu() {
         echo -e "${GREEN}3.${NC} 添加自定义证书"
         echo -e "${GREEN}4.${NC} 删除证书"
         echo -e "${GREEN}5.${NC} 自动申请证书"
-        echo -e "${GREEN}0.${NC} 返回主菜单"
         echo ""
-        read -p "请选择操作 [0-5]: " choice
+
+        show_menu_footer "false" "true"
+        choice=$(read_menu_choice "请选择操作")
+        local ret=$?
+
+        # 处理导航
+        [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case $choice in
             1) list_certificates ;;
@@ -1144,7 +1177,6 @@ certificate_management_menu() {
             3) add_certificate ;;
             4) delete_certificate ;;
             5) auto_apply_certificate ;;
-            0) break ;;
             *) print_error "无效选择" ;;
         esac
 

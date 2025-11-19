@@ -1393,9 +1393,15 @@ modify_node_config() {
     echo -e "${GREEN}1.${NC} 修改端口"
     echo -e "${GREEN}2.${NC} 绑定用户到此节点"
     echo -e "${GREEN}3.${NC} 从节点解绑用户"
-    echo -e "${GREEN}0.${NC} 返回"
     echo ""
-    read -p "请选择 [0-3]: " choice
+
+    show_menu_footer "true" "true"
+    local choice=$(read_menu_choice "请选择")
+    local ret=$?
+
+    # 处理导航
+    [[ $ret -eq 99 ]] && return 0  # 返回上级
+    [[ $ret -eq 98 ]] && return 0  # 返回主菜单
 
     case $choice in
         1)
@@ -1496,9 +1502,6 @@ modify_node_config() {
                     fi
                 fi
             fi
-            ;;
-        0)
-            return 0
             ;;
         *)
             print_error "无效选择"
@@ -3187,9 +3190,14 @@ menu_quick_setup() {
         echo -e "${GREEN}1.${NC}  VLESS + Reality   - 无需证书，抗审查"
         echo -e "${GREEN}2.${NC}  Hysteria2         - 高性能 QUIC 协议"
         echo ""
-        echo -e "${GREEN}0.${NC}  返回上级菜单"
-        echo ""
-        read -p "请选择 [0-2]: " choice
+
+        show_menu_footer "true" "true"
+        choice=$(read_menu_choice "请选择")
+        local ret=$?
+
+        # 处理导航
+        [[ $ret -eq 99 ]] && return  # 返回上级
+        [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case $choice in
             1)
@@ -3199,9 +3207,6 @@ menu_quick_setup() {
             2)
                 quick_setup_hysteria2
                 read -p "按 Enter 键继续..."
-                ;;
-            0)
-                return
                 ;;
             *)
                 print_error "无效选择"

@@ -1408,31 +1408,29 @@ view_users_menu() {
 
         echo ""
         echo -e "${GREEN}1.${NC} 查看单个用户详情"
-        echo -e "${GREEN}0.${NC} 返回上级菜单"
         echo ""
-        read -p "请选择: " choice
+
+        show_menu_footer "true" "true"
+        choice=$(read_menu_choice "请选择")
+        local ret=$?
+
+        # 处理导航
+        [[ $ret -eq 99 ]] && return  # 返回上级
+        [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case "$choice" in
             1)
                 echo ""
-                read -p "请输入要查看的用户名 (0 返回): " username
+                read -p "请输入要查看的用户名 (按回车返回): " username
 
                 # 支持返回
-                if [[ "$username" == "0" ]]; then
+                if [[ -z "$username" ]]; then
                     continue
                 fi
 
-                if [[ -n "$username" ]]; then
-                    show_user_detail "$username"
-                    echo ""
-                    read -p "按回车键继续..."
-                else
-                    print_error "用户名不能为空"
-                    sleep 1
-                fi
-                ;;
-            0)
-                return
+                show_user_detail "$username"
+                echo ""
+                read -p "按回车键继续..."
                 ;;
             *)
                 print_error "无效选择"
@@ -1457,9 +1455,15 @@ modify_user_menu() {
         echo ""
         echo -e "${GREEN}1.${NC} 修改用户基础信息"
         echo -e "${GREEN}2.${NC} 修改用户绑定节点"
-        echo -e "${GREEN}0.${NC} 返回上级菜单"
         echo ""
-        read -p "请选择: " choice
+
+        show_menu_footer "true" "true"
+        choice=$(read_menu_choice "请选择")
+        local ret=$?
+
+        # 处理导航
+        [[ $ret -eq 99 ]] && return  # 返回上级
+        [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case "$choice" in
             1)
@@ -1468,9 +1472,6 @@ modify_user_menu() {
                 ;;
             2)
                 modify_user_bindings
-                ;;
-            0)
-                return
                 ;;
             *)
                 print_error "无效选择"
@@ -1543,9 +1544,15 @@ modify_user_basic_info() {
         echo -e "${GREEN}1.${NC} 修改密码"
         echo -e "${GREEN}2.${NC} 修改邮箱"
         echo -e "${GREEN}3.${NC} 修改状态"
-        echo -e "${GREEN}0.${NC} 返回上级菜单"
         echo ""
-        read -p "请选择要修改的项目: " choice
+
+        show_menu_footer "true" "true"
+        choice=$(read_menu_choice "请选择要修改的项目")
+        local ret=$?
+
+        # 处理导航
+        [[ $ret -eq 99 ]] && return 0  # 返回上级
+        [[ $ret -eq 98 ]] && return 0  # 返回主菜单
 
         case "$choice" in
             1)
@@ -1659,9 +1666,6 @@ modify_user_basic_info() {
                 generate_singbox_config && restart_sing-box
                 sleep 1
                 ;;
-            0)
-                return 0
-                ;;
             *)
                 print_error "无效选择"
                 sleep 1
@@ -1721,9 +1725,15 @@ modify_user_bindings() {
         echo ""
         echo -e "${GREEN}1.${NC} 添加绑定节点"
         echo -e "${GREEN}2.${NC} 移除绑定节点"
-        echo -e "${GREEN}0.${NC} 返回上级菜单"
         echo ""
-        read -p "请选择: " choice
+
+        show_menu_footer "true" "true"
+        choice=$(read_menu_choice "请选择")
+        local ret=$?
+
+        # 处理导航
+        [[ $ret -eq 99 ]] && return  # 返回上级
+        [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case "$choice" in
             1)
@@ -1733,9 +1743,6 @@ modify_user_bindings() {
             2)
                 remove_user_node_bindings "$uuid" "$username"
                 read -p "按回车键继续..."
-                ;;
-            0)
-                return
                 ;;
             *)
                 print_error "无效选择"

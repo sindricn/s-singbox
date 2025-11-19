@@ -441,7 +441,7 @@ show_node_menu() {
     print_menu_item "4" "查看节点详情"
     print_menu_item "5" "修改节点配置"
     print_section_end
-    print_nav_options "true" "true"
+    print_nav_options "false" "true"
 }
 
 # 用户管理菜单
@@ -460,7 +460,7 @@ show_user_menu() {
     print_menu_item "3" "修改用户"
     print_menu_item "4" "删除用户"
     print_section_end
-    print_nav_options "true" "true"
+    print_nav_options "false" "true"
 }
 
 # 获取绑定数量
@@ -494,7 +494,7 @@ show_binding_menu() {
     print_menu_item "7" "清理空绑定"
     print_menu_item "8" "验证绑定完整性"
     print_section_end
-    print_nav_options "true" "true"
+    print_nav_options "false" "true"
 }
 
 # 配置管理菜单（已废弃，功能移至singbox管理）
@@ -558,7 +558,10 @@ handle_node_menu() {
         [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case "$choice" in
-            1) menu_node_add ;;
+            1)
+                menu_node_add
+                [[ $? -eq 98 ]] && return  # 传播返回主菜单
+                ;;
             2) delete_node; wait_for_input ;;
             3) list_nodes; wait_for_input ;;
             4)
@@ -618,11 +621,14 @@ menu_node_add() {
         local ret=$?
 
         # 处理导航
-        [[ $ret -eq 99 ]] && return  # 返回上级
-        [[ $ret -eq 98 ]] && return  # 返回主菜单
+        [[ $ret -eq 99 ]] && return 0  # 返回上级
+        [[ $ret -eq 98 ]] && return 98  # 返回主菜单
 
         case $choice in
-            q|Q) menu_quick_setup ;;
+            q|Q)
+                menu_quick_setup
+                [[ $? -eq 98 ]] && return 98  # 传播返回主菜单
+                ;;
             1) add_vless_node ;;
             2) add_vmess_node ;;
             3) add_trojan_node ;;
@@ -651,9 +657,15 @@ handle_user_menu() {
         [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case "$choice" in
-            1) view_users_menu ;;
+            1)
+                view_users_menu
+                [[ $? -eq 98 ]] && return  # 传播返回主菜单
+                ;;
             2) add_global_user; wait_for_input ;;
-            3) modify_user_menu ;;
+            3)
+                modify_user_menu
+                [[ $? -eq 98 ]] && return  # 传播返回主菜单
+                ;;
             4) delete_users_batch; wait_for_input ;;
             *)
                 print_error "无效选择"

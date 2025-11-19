@@ -1415,8 +1415,8 @@ view_users_menu() {
         local ret=$?
 
         # 处理导航
-        [[ $ret -eq 99 ]] && return  # 返回上级
-        [[ $ret -eq 98 ]] && return  # 返回主菜单
+        [[ $ret -eq 99 ]] && return 0  # 返回上级
+        [[ $ret -eq 98 ]] && return 98  # 返回主菜单
 
         case "$choice" in
             1)
@@ -1462,16 +1462,18 @@ modify_user_menu() {
         local ret=$?
 
         # 处理导航
-        [[ $ret -eq 99 ]] && return  # 返回上级
-        [[ $ret -eq 98 ]] && return  # 返回主菜单
+        [[ $ret -eq 99 ]] && return 0  # 返回上级
+        [[ $ret -eq 98 ]] && return 98  # 返回主菜单
 
         case "$choice" in
             1)
                 modify_user_basic_info
+                [[ $? -eq 98 ]] && return 98
                 read -p "按回车键继续..."
                 ;;
             2)
                 modify_user_bindings
+                [[ $? -eq 98 ]] && return 98
                 ;;
             *)
                 print_error "无效选择"
@@ -1552,7 +1554,7 @@ modify_user_basic_info() {
 
         # 处理导航
         [[ $ret -eq 99 ]] && return 0  # 返回上级
-        [[ $ret -eq 98 ]] && return 0  # 返回主菜单
+        [[ $ret -eq 98 ]] && return 98  # 返回主菜单
 
         case "$choice" in
             1)
@@ -1732,8 +1734,8 @@ modify_user_bindings() {
         local ret=$?
 
         # 处理导航
-        [[ $ret -eq 99 ]] && return  # 返回上级
-        [[ $ret -eq 98 ]] && return  # 返回主菜单
+        [[ $ret -eq 99 ]] && return 0  # 返回上级
+        [[ $ret -eq 98 ]] && return 98  # 返回主菜单
 
         case "$choice" in
             1)

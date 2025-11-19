@@ -697,8 +697,8 @@ test_bbr_performance() {
     local ret=$?
 
     # 处理导航
-    [[ $ret -eq 99 ]] && return  # 返回上级
-    [[ $ret -eq 98 ]] && return  # 返回主菜单
+    [[ $ret -eq 99 ]] && return 0  # 返回上级
+    [[ $ret -eq 98 ]] && return 98  # 返回主菜单
 
     case $test_choice in
         1)
@@ -722,8 +722,8 @@ test_bbr_performance() {
             local ret=$?
 
             # 处理导航
-            [[ $ret -eq 99 ]] && return  # 返回上级
-            [[ $ret -eq 98 ]] && return  # 返回主菜单
+            [[ $ret -eq 99 ]] && return 0  # 返回上级
+            [[ $ret -eq 98 ]] && return 98  # 返回主菜单
 
             case $region_choice in
                 1)
@@ -803,7 +803,7 @@ menu_bbr() {
         echo -e "${GREEN}4.${NC}  禁用 BBR"
         echo -e "${GREEN}5.${NC}  测试加速效果"
         echo ""
-        print_nav_options "true" "true"
+        print_nav_options "false" "true"
 
         choice=$(read_menu_choice "请选择")
         local ret=$?
@@ -816,7 +816,11 @@ menu_bbr() {
             2) enable_bbrv3; read -p "按 Enter 继续..." ;;
             3) show_bbr_status; read -p "按 Enter 继续..." ;;
             4) disable_bbr; read -p "按 Enter 继续..." ;;
-            5) test_bbr_performance; read -p "按 Enter 继续..." ;;
+            5)
+                test_bbr_performance
+                [[ $? -eq 98 ]] && return  # 传播返回主菜单
+                read -p "按 Enter 继续..."
+                ;;
             *) print_error "无效选择"; sleep 1 ;;
         esac
     done

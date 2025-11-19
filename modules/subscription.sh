@@ -3339,10 +3339,12 @@ menu_subscription() {
                 ;;
             5)
                 update_subscription_menu
+                [[ $? -eq 98 ]] && return
                 read -p "按 Enter 键继续..."
                 ;;
             6)
                 delete_subscription_menu
+                [[ $? -eq 98 ]] && return
                 read -p "按 Enter 键继续..."
                 ;;
             *)
@@ -3610,7 +3612,7 @@ update_subscription_menu() {
 
     # 处理导航
     [[ $ret -eq 99 ]] && return 0  # 返回上级
-    [[ $ret -eq 98 ]] && return 0  # 返回主菜单
+    [[ $ret -eq 98 ]] && return 98  # 返回主菜单
 
     case $choice in
         1)
@@ -3737,7 +3739,7 @@ delete_subscription_menu() {
 
     # 处理导航
     [[ $ret -eq 99 ]] && return 0  # 返回上级
-    [[ $ret -eq 98 ]] && return 0  # 返回主菜单
+    [[ $ret -eq 98 ]] && return 98  # 返回主菜单
 
     case $choice in
         1)

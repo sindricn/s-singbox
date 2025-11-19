@@ -1963,8 +1963,8 @@ menu_argo_tunnel() {
         local ret=$?
 
         # 处理导航
-        [[ $ret -eq 99 ]] && return  # 返回上级
-        [[ $ret -eq 98 ]] && return  # 返回主菜单
+        [[ $ret -eq 99 ]] && return 0  # 返回上级
+        [[ $ret -eq 98 ]] && return 98  # 返回主菜单
 
         case $choice in
             1) start_temp_argo_tunnel; read -p "按 Enter 继续..." ;;
@@ -2013,8 +2013,8 @@ menu_warp_tunnel() {
         local ret=$?
 
         # 处理导航
-        [[ $ret -eq 99 ]] && return  # 返回上级
-        [[ $ret -eq 98 ]] && return  # 返回主菜单
+        [[ $ret -eq 99 ]] && return 0  # 返回上级
+        [[ $ret -eq 98 ]] && return 98  # 返回主菜单
 
         case $choice in
             1) install_wgcf; read -p "按 Enter 继续..." ;;
@@ -2043,7 +2043,7 @@ menu_cf_tunnel() {
         echo -e "${GREEN}1.${NC}  Argo 隧道管理"
         echo -e "${GREEN}2.${NC}  WARP 隧道管理"
         echo ""
-        print_nav_options "true" "true"
+        print_nav_options "false" "true"
 
         choice=$(read_menu_choice "请选择")
         local ret=$?
@@ -2052,8 +2052,14 @@ menu_cf_tunnel() {
         [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case $choice in
-            1) menu_argo_tunnel ;;
-            2) menu_warp_tunnel ;;
+            1)
+                menu_argo_tunnel
+                [[ $? -eq 98 ]] && return  # 传播返回主菜单
+                ;;
+            2)
+                menu_warp_tunnel
+                [[ $? -eq 98 ]] && return  # 传播返回主菜单
+                ;;
             *) print_error "无效选择"; sleep 1 ;;
         esac
     done

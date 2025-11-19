@@ -1401,7 +1401,7 @@ modify_node_config() {
 
     # 处理导航
     [[ $ret -eq 99 ]] && return 0  # 返回上级
-    [[ $ret -eq 98 ]] && return 0  # 返回主菜单
+    [[ $ret -eq 98 ]] && return 98  # 返回主菜单
 
     case $choice in
         1)
@@ -3196,8 +3196,8 @@ menu_quick_setup() {
         local ret=$?
 
         # 处理导航
-        [[ $ret -eq 99 ]] && return  # 返回上级
-        [[ $ret -eq 98 ]] && return  # 返回主菜单
+        [[ $ret -eq 99 ]] && return 0  # 返回上级
+        [[ $ret -eq 98 ]] && return 98  # 返回主菜单
 
         case $choice in
             1)

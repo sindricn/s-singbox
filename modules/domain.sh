@@ -585,8 +585,8 @@ manage_server_domain() {
     local ret=$?
 
     # 处理导航
-    [[ $ret -eq 99 ]] && return  # 返回上级
-    [[ $ret -eq 98 ]] && return  # 返回主菜单
+    [[ $ret -eq 99 ]] && return 0  # 返回上级
+    [[ $ret -eq 98 ]] && return 98  # 返回主菜单
 
     case $choice in
         1)
@@ -793,8 +793,8 @@ manage_sni_domain() {
     local ret=$?
 
     # 处理导航
-    [[ $ret -eq 99 ]] && return  # 返回上级
-    [[ $ret -eq 98 ]] && return  # 返回主菜单
+    [[ $ret -eq 99 ]] && return 0  # 返回上级
+    [[ $ret -eq 98 ]] && return 98  # 返回主菜单
 
     case $choice in
         1)
@@ -864,8 +864,8 @@ manage_host_domain() {
     local ret=$?
 
     # 处理导航
-    [[ $ret -eq 99 ]] && return  # 返回上级
-    [[ $ret -eq 98 ]] && return  # 返回主菜单
+    [[ $ret -eq 99 ]] && return 0  # 返回上级
+    [[ $ret -eq 98 ]] && return 98  # 返回主菜单
 
     case $choice in
         1)
@@ -926,9 +926,18 @@ domain_management_menu() {
         [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case $choice in
-            1) manage_server_domain ;;
-            2) manage_sni_domain ;;
-            3) manage_host_domain ;;
+            1)
+                manage_server_domain
+                [[ $? -eq 98 ]] && return  # 传播返回主菜单
+                ;;
+            2)
+                manage_sni_domain
+                [[ $? -eq 98 ]] && return  # 传播返回主菜单
+                ;;
+            3)
+                manage_host_domain
+                [[ $? -eq 98 ]] && return  # 传播返回主菜单
+                ;;
             4) test_best_reality_domains ;;
             5) test_dns_resolution ;;
             *) print_error "无效选择" ;;
@@ -992,8 +1001,8 @@ modify_certificate() {
     local ret=$?
 
     # 处理导航
-    [[ $ret -eq 99 ]] && return  # 返回上级
-    [[ $ret -eq 98 ]] && return  # 返回主菜单
+    [[ $ret -eq 99 ]] && return 0  # 返回上级
+    [[ $ret -eq 98 ]] && return 98  # 返回主菜单
 
     case $choice in
         1)
@@ -1173,7 +1182,10 @@ certificate_management_menu() {
 
         case $choice in
             1) list_certificates ;;
-            2) modify_certificate ;;
+            2)
+                modify_certificate
+                [[ $? -eq 98 ]] && return  # 传播返回主菜单
+                ;;
             3) add_certificate ;;
             4) delete_certificate ;;
             5) auto_apply_certificate ;;

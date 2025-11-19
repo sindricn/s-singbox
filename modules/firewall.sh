@@ -1347,8 +1347,8 @@ port_hopping_menu() {
         local ret=$?
 
         # 处理导航
-        [[ $ret -eq 99 ]] && return  # 返回上级
-        [[ $ret -eq 98 ]] && return  # 返回主菜单
+        [[ $ret -eq 99 ]] && return 0  # 返回上级
+        [[ $ret -eq 98 ]] && return 98  # 返回主菜单
 
         case $choice in
             1) list_port_hopping; wait_for_input ;;
@@ -1408,7 +1408,10 @@ firewall_management_menu() {
             1) open_port; wait_for_input ;;
             2) close_port; wait_for_input ;;
             3) batch_open_ports; wait_for_input ;;
-            4) port_hopping_menu ;;
+            4)
+                port_hopping_menu
+                [[ $? -eq 98 ]] && return  # 传播返回主菜单
+                ;;
             5) show_firewall_rules; wait_for_input ;;
             6) enable_firewall; wait_for_input ;;
             7) disable_firewall; wait_for_input ;;

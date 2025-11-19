@@ -1587,7 +1587,7 @@ modify_outbound() {
     local ret=$?
 
     # 处理导航
-    [[ $ret -eq 98 ]] && return 0  # 返回主菜单
+    [[ $ret -eq 98 ]] && return 98  # 返回主菜单
 
     case $choice in
         1) modify_outbound_tag "$index" "$tag" ;;

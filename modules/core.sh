@@ -570,6 +570,10 @@ create_default_config() {
     {
       "type": "direct",
       "tag": "direct-out"
+    },
+    {
+      "type": "block",
+      "tag": "block-out"
     }
   ],
   "route": {

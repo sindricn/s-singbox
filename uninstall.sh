@@ -151,6 +151,16 @@ remove_config() {
 
     for config_dir in "${config_dirs[@]}"; do
         if [[ -d "$config_dir" ]]; then
+            # 显示要删除的内容
+            print_info "发现配置目录: $config_dir"
+            if [[ -f "${config_dir}/config.json" ]]; then
+                print_info "  包含配置文件: config.json"
+            fi
+            if [[ -d "${config_dir}/certs" ]]; then
+                local cert_count=$(find "${config_dir}/certs" -type f 2>/dev/null | wc -l)
+                print_info "  包含证书文件: ${cert_count} 个"
+            fi
+
             # 如果保留证书，先备份
             if [[ "$keep_certs" =~ ^[Yy]$ && -d "${config_dir}/certs" ]]; then
                 local backup_dir="/tmp/singbox-certs-backup-$(date +%Y%m%d_%H%M%S)"
@@ -161,7 +171,28 @@ remove_config() {
 
             rm -rf "$config_dir"
             print_success "已删除: $config_dir"
+        else
+            print_info "配置目录不存在: $config_dir"
         fi
+    done
+
+    # 额外检查是否有遗留的配置文件
+    local extra_configs=(
+        "/root/sing-box/config.json"
+        "/home/*/sing-box/config.json"
+    )
+
+    for config_pattern in "${extra_configs[@]}"; do
+        for config_file in $config_pattern; do
+            if [[ -f "$config_file" ]]; then
+                print_warn "发现遗留配置文件: $config_file"
+                read -p "是否删除? [y/N]: " delete_extra
+                if [[ "$delete_extra" =~ ^[Yy]$ ]]; then
+                    rm -f "$config_file"
+                    print_success "已删除: $config_file"
+                fi
+            fi
+        done
     done
 }
 

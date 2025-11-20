@@ -278,7 +278,7 @@ show_main_menu() {
     local online_count=$(get_online_users_count 2>/dev/null || echo "0")
 
     # 使用统一的UI函数
-    print_header "sing-box 一键管理脚本 V1.0.0"
+    print_header "s-singbox 一键管理脚本 V1.0.0"
     echo ""
 
     print_section_start
@@ -766,7 +766,7 @@ show_about() {
     echo -e "${CYAN}║${NC}          关于脚本"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "${YELLOW}脚本名称：${NC}sing-box 一键管理脚本"
+    echo -e "${YELLOW}脚本名称：${NC}s-singbox 一键管理脚本"
     echo -e "${YELLOW}脚本版本：${NC}V1.0.0"
     echo ""
     echo -e "${YELLOW}功能简介：${NC}"

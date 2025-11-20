@@ -116,9 +116,8 @@ check_outbound_consistency() {
         fi
     done <<< "$config_tags"
 
-    # 如果没有异常规则，检查通过
+    # 如果没有异常规则，检查通过(不输出调试信息)
     if [[ -z "$orphan_tags" ]]; then
-        print_success "出站规则一致性检查通过"
         return 0
     fi
 
@@ -1772,7 +1771,6 @@ outbound_management_menu() {
         print_menu_item "5" "修改出站规则"
         print_menu_item "6" "删除出站规则"
         print_menu_item "7" "重新检测一致性"
-        print_menu_item "0" "返回主菜单"
         print_section_end
 
         print_nav_options "false" "true"

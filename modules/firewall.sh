@@ -1339,7 +1339,6 @@ port_hopping_menu() {
         print_menu_item "2" "添加跳跃配置"
         print_menu_item "3" "修改跳跃配置"
         print_menu_item "4" "删除跳跃配置"
-        print_menu_item "0" "返回上级菜单"
         print_section_end
 
         print_nav_options "true" "true"
@@ -1388,13 +1387,12 @@ firewall_management_menu() {
         print_menu_item "1" "开放端口"
         print_menu_item "2" "关闭端口"
         print_menu_item "3" "批量开放节点端口"
-        print_menu_item "4" "端口跳跃管理" " ${YELLOW}[安全增强]${NC}"
+        print_menu_item "4" "端口跳跃管理"
         print_menu_item "5" "查看防火墙规则"
         print_divider
         print_menu_item "6" "启用防火墙"
         print_menu_item "7" "禁用防火墙"
-        print_menu_item "8" "重置防火墙" " ${RED}[危险]${NC}"
-        print_menu_item "0" "返回主菜单"
+        print_menu_item "8" "重置防火墙"
         print_section_end
 
         print_nav_options "false" "true"

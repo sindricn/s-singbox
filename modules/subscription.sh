@@ -3299,19 +3299,17 @@ regenerate_subscription_content() {
 menu_subscription() {
     while true; do
         clear
-        echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║           订阅管理                   ║${NC}"
-        echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+        print_header "订阅管理"
         echo ""
-        echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo -e "${GREEN}1.${NC}  生成订阅链接"
-        echo -e "${GREEN}2.${NC}  查看单个节点链接"
-        echo -e "${GREEN}3.${NC}  查看所有订阅"
-        echo -e "${GREEN}4.${NC}  查看用户订阅"
-        echo -e "${GREEN}5.${NC}  更新订阅"
-        echo -e "${GREEN}6.${NC}  删除订阅"
-        echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo ""
+
+        print_section_start
+        print_menu_item "1" "生成订阅链接"
+        print_menu_item "2" "查看单个节点链接"
+        print_menu_item "3" "查看所有订阅"
+        print_menu_item "4" "查看用户订阅"
+        print_menu_item "5" "更新订阅"
+        print_menu_item "6" "删除订阅"
+        print_section_end
 
         print_nav_options "false" "true"
         choice=$(read_menu_choice "请选择")

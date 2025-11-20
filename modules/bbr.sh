@@ -780,29 +780,29 @@ test_bbr_performance() {
 menu_bbr() {
     while true; do
         clear
-        echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║       BBR 加速管理                   ║${NC}"
-        echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+        print_header "BBR 加速管理"
         echo ""
 
         # 显示当前状态
         local current_algo=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')
         if [[ "$current_algo" == "bbr" ]]; then
-            echo -e "${GREEN}当前状态: BBR 已启用${NC}"
+            print_menu_info "  ${YELLOW}当前状态${NC}" "${GREEN}BBR 已启用${NC}"
         else
-            echo -e "${YELLOW}当前状态: BBR 未启用 (当前: $current_algo)${NC}"
+            print_menu_info "  ${YELLOW}当前状态${NC}" "${YELLOW}BBR 未启用 (当前: $current_algo)${NC}"
         fi
         echo ""
 
-        echo -e "${YELLOW}━━━━━━━ BBR 管理 ━━━━━━━${NC}"
-        echo -e "${GREEN}1.${NC}  启用 BBR V1（Google 原版）"
-        echo -e "${GREEN}2.${NC}  启用 BBR V3（Google 高级版）"
-        echo ""
-        echo -e "${YELLOW}━━━━━━━ 状态管理 ━━━━━━━${NC}"
-        echo -e "${GREEN}3.${NC}  查看 BBR 状态"
-        echo -e "${GREEN}4.${NC}  禁用 BBR"
-        echo -e "${GREEN}5.${NC}  测试加速效果"
-        echo ""
+        print_section_start
+        print_menu_info "  ${YELLOW}BBR 管理${NC}" ""
+        print_menu_item "1" "启用 BBR V1" " - Google 原版"
+        print_menu_item "2" "启用 BBR V3" " - Google 高级版"
+        print_divider
+        print_menu_info "  ${YELLOW}状态管理${NC}" ""
+        print_menu_item "3" "查看 BBR 状态"
+        print_menu_item "4" "禁用 BBR"
+        print_menu_item "5" "测试加速效果"
+        print_section_end
+
         print_nav_options "false" "true"
 
         choice=$(read_menu_choice "请选择")

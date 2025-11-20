@@ -2036,13 +2036,14 @@ menu_warp_tunnel() {
 menu_cf_tunnel() {
     while true; do
         clear
-        echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║     Cloudflare 隧道管理              ║${NC}"
-        echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+        print_header "Cloudflare 隧道管理"
         echo ""
-        echo -e "${GREEN}1.${NC}  Argo 隧道管理"
-        echo -e "${GREEN}2.${NC}  WARP 隧道管理"
-        echo ""
+
+        print_section_start
+        print_menu_item "1" "Argo 隧道管理"
+        print_menu_item "2" "WARP 隧道管理"
+        print_section_end
+
         print_nav_options "false" "true"
 
         choice=$(read_menu_choice "请选择")

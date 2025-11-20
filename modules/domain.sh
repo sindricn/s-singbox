@@ -901,22 +901,21 @@ manage_host_domain() {
 domain_management_menu() {
     while true; do
         clear
+        print_header "域名管理"
+        echo ""
 
         # 显示当前默认域名
         local default_domain=$(get_default_domain)
+        print_menu_info "  ${YELLOW}默认伪装域名${NC}" "${YELLOW}$default_domain${NC}"
+        echo ""
 
-        echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║          域名管理                    ║${NC}"
-        echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
-        echo ""
-        echo -e "${BLUE}当前默认伪装域名:${NC} ${YELLOW}$default_domain${NC}"
-        echo ""
-        echo -e "${GREEN}1.${NC} 服务器域名"
-        echo -e "${GREEN}2.${NC} SNI 伪装域名"
-        echo -e "${GREEN}3.${NC} Host 伪装域名"
-        echo -e "${GREEN}4.${NC} 优选域名测试"
-        echo -e "${GREEN}5.${NC} 校验 DNS"
-        echo ""
+        print_section_start
+        print_menu_item "1" "服务器域名"
+        print_menu_item "2" "SNI 伪装域名"
+        print_menu_item "3" "Host 伪装域名"
+        print_menu_item "4" "优选域名测试"
+        print_menu_item "5" "校验 DNS"
+        print_section_end
 
         print_nav_options "false" "true"
         choice=$(read_menu_choice "请选择操作")
@@ -1162,16 +1161,16 @@ auto_apply_certificate() {
 certificate_management_menu() {
     while true; do
         clear
-        echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║          证书管理                    ║${NC}"
-        echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+        print_header "证书管理"
         echo ""
-        echo -e "${GREEN}1.${NC} 查看证书"
-        echo -e "${GREEN}2.${NC} 修改证书"
-        echo -e "${GREEN}3.${NC} 添加自定义证书"
-        echo -e "${GREEN}4.${NC} 删除证书"
-        echo -e "${GREEN}5.${NC} 自动申请证书"
-        echo ""
+
+        print_section_start
+        print_menu_item "1" "查看证书"
+        print_menu_item "2" "修改证书"
+        print_menu_item "3" "添加自定义证书"
+        print_menu_item "4" "删除证书"
+        print_menu_item "5" "自动申请证书"
+        print_section_end
 
         print_nav_options "false" "true"
         choice=$(read_menu_choice "请选择操作")

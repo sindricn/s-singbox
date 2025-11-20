@@ -341,7 +341,7 @@ menu_core() {
         print_menu_item "12" "查看配置信息"
         print_section_end
 
-        print_nav_options "true" "true"
+        print_nav_options "false" "true"
         choice=$(read_menu_choice "请选择操作 [0-12]")
         local ret=$?
 
@@ -591,30 +591,30 @@ handle_node_menu() {
 menu_node_add() {
     while true; do
         clear
-        echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║${NC}          添加节点"
-        echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+        print_header "添加节点"
         echo ""
-        echo -e "${YELLOW}━━━━━━━ 🚀 快速搭建（推荐） ━━━━━━━${NC}"
-        echo -e "${GREEN}Q.${NC}  ${CYAN}快速搭建${NC} - 一键配置常用节点"
-        echo ""
-        echo -e "${YELLOW}━━━━━━━ 主流代理协议 ━━━━━━━${NC}"
-        echo -e "${GREEN}1.${NC}  VLESS    - 通用代理（支持 XTLS）"
-        echo -e "${GREEN}2.${NC}  VMess    - V2Ray 经典协议"
-        echo -e "${GREEN}3.${NC}  Trojan   - TLS 伪装代理"
-        echo -e "${GREEN}4.${NC}  Shadowsocks - 轻量级代理"
-        echo ""
-        echo -e "${YELLOW}━━━━━━━ 高性能协议 ━━━━━━━${NC}"
-        echo -e "${GREEN}5.${NC}  Hysteria2 - 基于 QUIC 高性能（推荐）"
-        echo -e "${GREEN}6.${NC}  TUIC      - QUIC 协议代理"
-        echo ""
-        echo -e "${YELLOW}━━━━━━━ 抗审查/本地代理 ━━━━━━━${NC}"
-        echo -e "${GREEN}7.${NC}  Naive     - 强抗审查代理"
-        echo -e "${GREEN}8.${NC}  Mixed     - HTTP + SOCKS5 混合"
-        echo -e "${GREEN}9.${NC}  HTTP      - HTTP 代理"
-        echo -e "${GREEN}10.${NC} SOCKS     - SOCKS5 代理"
-        echo -e "${GREEN}11.${NC} AnyTLS    - 流量填充混淆（sing-box 1.12.0+）"
-        echo ""
+
+        print_section_start
+        print_menu_info "  ${YELLOW}🚀 快速搭建（推荐）${NC}" ""
+        print_menu_item "Q" "快速搭建" " - 一键配置常用节点"
+        print_divider
+        print_menu_info "  ${YELLOW}主流代理协议${NC}" ""
+        print_menu_item "1" "VLESS" " - 通用代理（支持 XTLS）"
+        print_menu_item "2" "VMess" " - V2Ray 经典协议"
+        print_menu_item "3" "Trojan" " - TLS 伪装代理"
+        print_menu_item "4" "Shadowsocks" " - 轻量级代理"
+        print_divider
+        print_menu_info "  ${YELLOW}高性能协议${NC}" ""
+        print_menu_item "5" "Hysteria2" " - 基于 QUIC 高性能（推荐）"
+        print_menu_item "6" "TUIC" " - QUIC 协议代理"
+        print_divider
+        print_menu_info "  ${YELLOW}抗审查/本地代理${NC}" ""
+        print_menu_item "7" "Naive" " - 强抗审查代理"
+        print_menu_item "8" "Mixed" " - HTTP + SOCKS5 混合"
+        print_menu_item "9" "HTTP" " - HTTP 代理"
+        print_menu_item "10" "SOCKS" " - SOCKS5 代理"
+        print_menu_item "11" "AnyTLS" " - 流量填充混淆（sing-box 1.12.0+）"
+        print_section_end
 
         print_nav_options "true" "true"
         choice=$(read_menu_choice "请选择协议")
@@ -949,7 +949,7 @@ menu_script() {
         print_menu_item "1" "更新脚本"
         print_menu_item "2" "卸载管理"
         print_section_end
-        print_nav_options "true" "true"
+        print_nav_options "false" "true"
 
         choice=$(read_menu_choice "请选择操作 [0-2]")
         local ret=$?

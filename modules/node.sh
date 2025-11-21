@@ -3412,6 +3412,14 @@ quick_setup_argo_vless_ws() {
             tls_key: $tls_key
         }')
 
+    echo ""
+    echo "[调试 quick_setup_argo_vless_ws]" >&2
+    echo "  端口: $port" >&2
+    echo "  WS路径: $ws_path" >&2
+    echo "  伪装域名/Host: $tls_domain" >&2
+    echo "  extra_config: $(echo "$extra_config" | jq -c '.')" >&2
+    echo ""
+
     # 保存节点信息
     save_node_info "vless" "$port" "ws" "tls" "$extra_config" "vless-ws-$port"
     if [[ $? -ne 0 ]]; then

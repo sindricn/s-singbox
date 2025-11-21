@@ -903,8 +903,15 @@ generate_singbox_transport_config() {
             local path=$(echo "$extra" | jq -r '.ws_path // "/"')
             local ws_host=$(echo "$extra" | jq -r '.ws_host // .tls_domain // ""')
 
+            # 调试输出
+            echo "[调试 generate_singbox_transport_config WS]" >&2
+            echo "  ws_path: $path" >&2
+            echo "  ws_host 提取值: $ws_host" >&2
+            echo "  extra 完整内容: $(echo "$extra" | jq -c '.')" >&2
+
             # 如果有 Host 头配置，添加到 headers
             if [[ -n "$ws_host" && "$ws_host" != "null" ]]; then
+                echo "  ✓ 将添加 Host 头: $ws_host" >&2
                 transport_config=$(jq -n \
                     --arg type "ws" \
                     --arg path "$path" \
@@ -918,6 +925,7 @@ generate_singbox_transport_config() {
                     }')
             else
                 # 没有 Host 配置时，仅设置 path
+                echo "  ⚠ ws_host 为空，不添加 Host 头" >&2
                 transport_config=$(jq -n \
                     --arg type "ws" \
                     --arg path "$path" \

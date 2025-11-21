@@ -741,12 +741,14 @@ add_vless_node() {
     # 构建extra_config JSON (包含VLESS特定参数)
     local extra_config=$(jq -n \
         --arg ws_path "$ws_path" \
+        --arg ws_host "$tls_domain" \
         --arg grpc_service "$grpc_service" \
         --arg tls_domain "$tls_domain" \
         --arg tls_cert "$tls_cert" \
         --arg tls_key "$tls_key" \
         '{
             ws_path: $ws_path,
+            ws_host: $ws_host,
             grpc_service: $grpc_service,
             tls_domain: $tls_domain,
             tls_cert: $tls_cert,
@@ -3398,11 +3400,13 @@ quick_setup_argo_vless_ws() {
     # 构建 extra_config
     local extra_config=$(jq -n \
         --arg ws_path "$ws_path" \
+        --arg ws_host "$tls_domain" \
         --arg tls_domain "$tls_domain" \
         --arg tls_cert "$tls_cert" \
         --arg tls_key "$tls_key" \
         '{
             ws_path: $ws_path,
+            ws_host: $ws_host,
             tls_domain: $tls_domain,
             tls_cert: $tls_cert,
             tls_key: $tls_key

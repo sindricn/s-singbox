@@ -901,13 +901,31 @@ generate_singbox_transport_config() {
     case $transport in
         ws)
             local path=$(echo "$extra" | jq -r '.ws_path // "/"')
-            transport_config=$(jq -n \
-                --arg type "ws" \
-                --arg path "$path" \
-                '{
-                    type: $type,
-                    path: $path
-                }')
+            local ws_host=$(echo "$extra" | jq -r '.ws_host // .tls_domain // ""')
+
+            # 如果有 Host 头配置，添加到 headers
+            if [[ -n "$ws_host" && "$ws_host" != "null" ]]; then
+                transport_config=$(jq -n \
+                    --arg type "ws" \
+                    --arg path "$path" \
+                    --arg host "$ws_host" \
+                    '{
+                        type: $type,
+                        path: $path,
+                        headers: {
+                            Host: $host
+                        }
+                    }')
+            else
+                # 没有 Host 配置时，仅设置 path
+                transport_config=$(jq -n \
+                    --arg type "ws" \
+                    --arg path "$path" \
+                    '{
+                        type: $type,
+                        path: $path
+                    }')
+            fi
             ;;
 
         grpc)

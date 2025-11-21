@@ -574,7 +574,7 @@ credentials-file: ${CLOUDFLARED_CONFIG_DIR}/${tunnel_id}.json
 
 ingress:
   - hostname: ${tunnel_domain}
-    service: http://localhost:${local_port}
+    service: tcp://localhost:${local_port}
   - service: http_status:404
 EOF
 
@@ -741,7 +741,7 @@ credentials-file: ${CLOUDFLARED_CONFIG_DIR}/${tunnel_id}.json
 
 ingress:
   - hostname: ${tunnel_domain}
-    service: http://localhost:${selected_port}
+    service: tcp://localhost:${selected_port}
   - service: http_status:404
 EOF
 
@@ -965,7 +965,7 @@ credentials-file: ${CLOUDFLARED_CONFIG_DIR}/${tunnel_id}.json
 
 ingress:
   - hostname: ${selected_url}
-    service: http://localhost:${selected_port}
+    service: tcp://localhost:${selected_port}
   - service: http_status:404
 EOF
 

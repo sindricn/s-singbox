@@ -3220,35 +3220,117 @@ quick_setup_argo_vless_ws() {
     print_success "WebSocket 路径: $ws_path"
     echo ""
 
-    # 步骤 3/5: TLS 证书配置（使用自签名）
-    echo -e "${BLUE}步骤 3/5: TLS 证书配置${NC}"
-    echo -e "${YELLOW}域名选项：${NC}"
-    echo -e "  1. 使用默认域名 (localhost)"
-    echo -e "  2. 自定义域名"
+    # 步骤 3/5: TLS 证书配置（伪装域名）
+    echo -e "${BLUE}步骤 3/5: TLS 伪装域名配置${NC}"
+    echo -e "${YELLOW}伪装域名 (SNI) 选项：${NC}"
+    echo -e "  ${GREEN}1.${NC} 使用默认域名 (www.cloudflare.com)"
+    echo -e "  ${GREEN}2.${NC} 自动优选最佳域名（智能延迟测试）"
+    echo -e "  ${GREEN}3.${NC} 自定义域名"
     echo ""
-    read -p "请选择 [1-2，默认: 1]: " domain_choice
-    domain_choice=${domain_choice:-1}
+    read -p "请选择 [1-3，默认: 2]: " domain_choice
+    domain_choice=${domain_choice:-2}
 
     local tls_domain=""
     case $domain_choice in
         1)
-            tls_domain="localhost"
-            print_info "使用默认域名: $tls_domain"
+            # 使用默认域名
+            tls_domain="www.cloudflare.com"
+            print_info "使用默认伪装域名: $tls_domain"
             ;;
         2)
-            read -p "请输入自定义域名: " custom_domain
-            if [[ -n "$custom_domain" ]]; then
-                tls_domain="$custom_domain"
+            # 自动优选域名
+            echo ""
+            print_info "开始智能优选伪装域名..."
+            echo ""
+
+            # 测试域名列表
+            local test_domains=(
+                www.cloudflare.com
+                cdn.jsdelivr.net
+                www.apple.com
+                www.microsoft.com
+                www.bing.com
+                aws.amazon.com
+                www.mozilla.org
+                www.gstatic.com
+                fonts.googleapis.com
+                ajax.cloudflare.com
+            )
+
+            local best_latency=9999
+            local best_domain="www.cloudflare.com"
+            local success_count=0
+
+            echo -e "${BLUE}正在测试域名延迟...${NC}"
+            echo ""
+
+            for domain in "${test_domains[@]}"; do
+                local t1=$(date +%s%3N)
+                if timeout 2 openssl s_client -connect "$domain:443" -servername "$domain" </dev/null >/dev/null 2>&1; then
+                    local t2=$(date +%s%3N)
+                    local latency=$((t2 - t1))
+
+                    if host "$domain" >/dev/null 2>&1; then
+                        ((success_count++))
+
+                        if [[ $latency -lt $best_latency ]]; then
+                            best_latency=$latency
+                            best_domain=$domain
+                        fi
+
+                        # 实时显示测试结果
+                        printf "  ${GREEN}✔${NC} %-35s ${CYAN}%4d ms${NC}\n" "$domain" "$latency"
+                    fi
+                else
+                    printf "  ${RED}✘${NC} %-35s ${YELLOW}超时${NC}\n" "$domain"
+                fi
+            done
+            echo ""
+
+            if [[ -n "$best_domain" && $success_count -gt 0 ]]; then
+                tls_domain=$best_domain
+
+                echo -e "${GREEN}═══════════════════════════════════${NC}"
+                print_success "优选完成！"
+                echo -e "  最佳域名: ${CYAN}$tls_domain${NC}"
+                echo -e "  延迟: ${CYAN}${best_latency}ms${NC}"
+                echo -e "  成功测试: ${CYAN}${success_count}/${#test_domains[@]}${NC} 个域名"
+                echo -e "${GREEN}═══════════════════════════════════${NC}"
+                echo ""
             else
-                tls_domain="localhost"
+                print_warning "自动优选失败，使用默认域名"
+                tls_domain="www.cloudflare.com"
+            fi
+            ;;
+        3)
+            # 自定义域名
+            echo ""
+            read -p "请输入自定义伪装域名: " custom_domain
+            if [[ -n "$custom_domain" ]]; then
+                # 测试输入的域名
+                print_info "测试域名连接性..."
+                if timeout 3 openssl s_client -connect "$custom_domain:443" -servername "$custom_domain" </dev/null >/dev/null 2>&1; then
+                    print_success "域名测试通过"
+                    tls_domain="$custom_domain"
+                else
+                    print_warning "域名测试失败，但仍可继续使用"
+                    tls_domain="$custom_domain"
+                fi
+            else
+                tls_domain="www.cloudflare.com"
                 print_warning "未输入域名，使用默认: $tls_domain"
             fi
             ;;
         *)
-            tls_domain="localhost"
-            print_info "使用默认域名: $tls_domain"
+            tls_domain="www.cloudflare.com"
+            print_info "使用默认伪装域名: $tls_domain"
             ;;
     esac
+
+    echo ""
+    echo -e "${CYAN}最终 TLS 配置：${NC}"
+    echo -e "  伪装域名 (SNI): ${YELLOW}$tls_domain${NC}"
+    echo ""
 
     # 生成自签名证书
     print_info "正在生成自签名证书..."

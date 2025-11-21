@@ -57,56 +57,39 @@ show_outbound_status() {
         config_count=$(jq '.outbounds | length' "$SINGBOX_CONFIG" 2>/dev/null || echo "0")
     fi
 
-    echo -e "${OUTBOUND_CYAN}═══════════════════════════════════════${OUTBOUND_NC}"
-    echo -e "${OUTBOUND_CYAN}出站规则状态${OUTBOUND_NC}"
-    echo -e "${OUTBOUND_CYAN}═══════════════════════════════════════${OUTBOUND_NC}"
-    echo -e "  ${OUTBOUND_YELLOW}规则库数量:${OUTBOUND_NC} $library_count"
-    echo -e "  ${OUTBOUND_YELLOW}已应用节点:${OUTBOUND_NC} $applied_count"
-    echo -e "  ${OUTBOUND_YELLOW}配置文件数量:${OUTBOUND_NC} $config_count"
-    echo -e "${OUTBOUND_CYAN}═══════════════════════════════════════${OUTBOUND_NC}"
+    echo -e "${OUTBOUND_CYAN}┌─────────────────────────────────────┐${OUTBOUND_NC}"
+    echo -e "${OUTBOUND_CYAN}│${OUTBOUND_NC}  出站规则状态"
+    echo -e "${OUTBOUND_CYAN}├─────────────────────────────────────┤${OUTBOUND_NC}"
+    echo -e "${OUTBOUND_CYAN}│${OUTBOUND_NC}  ${OUTBOUND_YELLOW}规则库数量:${OUTBOUND_NC} $library_count"
+    echo -e "${OUTBOUND_CYAN}│${OUTBOUND_NC}  ${OUTBOUND_YELLOW}已应用节点:${OUTBOUND_NC} $applied_count"
+    echo -e "${OUTBOUND_CYAN}│${OUTBOUND_NC}  ${OUTBOUND_YELLOW}配置文件数量:${OUTBOUND_NC} $config_count"
+    echo -e "${OUTBOUND_CYAN}└─────────────────────────────────────┘${OUTBOUND_NC}"
     echo ""
 }
 
 #================================================================
 # 出站规则一致性检测
+# 参数：
+#   $1 - 是否静默模式（silent/verbose），默认 silent
 #================================================================
 check_outbound_consistency() {
+    local mode="${1:-silent}"
     init_outbound_file
 
     # 检查配置文件是否存在
     if [[ ! -f "$SINGBOX_CONFIG" ]]; then
-        print_warning "配置文件不存在，跳过一致性检查"
+        # 静默模式不输出警告
+        [[ "$mode" == "verbose" ]] && print_warning "配置文件不存在，跳过一致性检查"
         return 0
     fi
-
-    echo -e "${OUTBOUND_CYAN}正在检测出站规则一致性...${OUTBOUND_NC}"
-    echo ""
 
     # 获取规则库中的所有tag
     local library_tags=$(jq -r '.outbounds[].tag' "$OUTBOUND_FILE" 2>/dev/null | sort)
     local library_count=$(echo "$library_tags" | grep -v '^$' | wc -l)
 
-
     # 获取配置文件中的所有出站规则tag
     local config_tags=$(jq -r '[.outbounds[].tag] | .[]' "$SINGBOX_CONFIG" 2>/dev/null | sort)
     local config_count=$(echo "$config_tags" | grep -v '^$' | wc -l)
-
-    # 显示检测信息
-    echo -e "${OUTBOUND_YELLOW}检测信息：${OUTBOUND_NC}"
-    echo -e "  规则库中的出站规则: $library_count 个"
-    if [[ $library_count -gt 0 ]]; then
-        echo "$library_tags" | while read -r tag; do
-            [[ -n "$tag" ]] && echo -e "    - $tag"
-        done
-    fi
-    echo ""
-    echo -e "  配置文件中的出站规则: $config_count 个"
-    if [[ $config_count -gt 0 ]]; then
-        echo "$config_tags" | while read -r tag; do
-            [[ -n "$tag" ]] && echo -e "    - $tag"
-        done
-    fi
-    echo ""
 
     # 找出配置文件中有但规则库中没有的（异常规则）
     local orphan_tags=""
@@ -116,10 +99,31 @@ check_outbound_consistency() {
         fi
     done <<< "$config_tags"
 
-    # 如果没有异常规则，检查通过(不输出调试信息)
+    # 如果没有异常规则，静默返回
     if [[ -z "$orphan_tags" ]]; then
         return 0
     fi
+
+    # 如果是verbose模式或发现异常，输出完整信息
+    echo -e "${OUTBOUND_CYAN}正在检测出站规则一致性...${OUTBOUND_NC}"
+    echo ""
+
+    # 显示检测信息
+    echo -e "${OUTBOUND_YELLOW}检测信息：${OUTBOUND_NC}"
+    echo -e "  规则库中的出站规则: $library_count 个"
+    if [[ $library_count -gt 0 && "$mode" == "verbose" ]]; then
+        echo "$library_tags" | while read -r tag; do
+            [[ -n "$tag" ]] && echo -e "    - $tag"
+        done
+    fi
+    echo ""
+    echo -e "  配置文件中的出站规则: $config_count 个"
+    if [[ $config_count -gt 0 && "$mode" == "verbose" ]]; then
+        echo "$config_tags" | while read -r tag; do
+            [[ -n "$tag" ]] && echo -e "    - $tag"
+        done
+    fi
+    echo ""
 
     # 发现异常规则，需要处理
     print_warning "发现配置文件中存在规则库没有的出站规则："
@@ -1128,7 +1132,7 @@ prompt_bind_outbound_to_node() {
     if [[ "$node_indices" == "0" ]]; then
         jq --arg tag "$outbound_tag" '(.nodes[].outbound_tag) = $tag' "$NODES_FILE" > "${NODES_FILE}.tmp"
         mv "${NODES_FILE}.tmp" "$NODES_FILE"
-        generate_sing-box_config
+        generate_singbox_config
         restart_sing-box
         print_success "已将出站规则 '$outbound_tag' 应用到所有节点"
         return 0
@@ -1152,7 +1156,7 @@ prompt_bind_outbound_to_node() {
     done
 
     if [[ $success_count -gt 0 ]]; then
-        generate_sing-box_config
+        generate_singbox_config
         restart_sing-box
         print_success "成功将出站规则 '$outbound_tag' 应用到 $success_count 个节点"
     else
@@ -1254,7 +1258,7 @@ apply_outbound_to_node() {
     done
 
     if [[ $success_count -gt 0 ]]; then
-        generate_sing-box_config
+        generate_singbox_config
         restart_sing-box
         print_success "成功将出站规则 '$outbound_tag' 应用到 $success_count 个节点"
     else
@@ -1321,7 +1325,7 @@ disable_outbound_from_node() {
     if [[ "$node_indices" == "0" ]]; then
         jq '(.nodes[].outbound_tag) = null' "$NODES_FILE" > "${NODES_FILE}.tmp"
         mv "${NODES_FILE}.tmp" "$NODES_FILE"
-        generate_sing-box_config
+        generate_singbox_config
         restart_sing-box
         print_success "已禁用所有节点的出站规则"
         return 0
@@ -1345,7 +1349,7 @@ disable_outbound_from_node() {
     done
 
     if [[ $success_count -gt 0 ]]; then
-        generate_sing-box_config
+        generate_singbox_config
         restart_sing-box
         print_success "成功禁用 $success_count 个节点的出站规则"
     else
@@ -1538,7 +1542,7 @@ delete_outbound() {
 
     # 3. 重新生成 sing-box 配置（无论是否有受影响节点都需要重新生成）
     print_info "正在重新生成配置..."
-    generate_sing-box_config
+    generate_singbox_config
     restart_sing-box
     print_success "配置已更新并重启服务"
 }
@@ -1748,16 +1752,14 @@ outbound_management_menu() {
         print_header "出站规则管理"
         echo ""
 
-        # 首次进入时运行检测
+        # 首次进入时运行静默检测
         if [[ "$first_run" == "true" ]]; then
             first_run=false
-            if ! check_outbound_consistency; then
-                echo ""
-                print_error "一致性检测未通过,请处理后再继续"
+            # 静默模式：只有发现异常才会提示
+            if ! check_outbound_consistency "silent"; then
                 wait_for_input
-                return 1
+                continue
             fi
-            echo ""
         fi
 
         # 显示状态信息
@@ -1827,7 +1829,8 @@ outbound_management_menu() {
             6) delete_outbound; wait_for_input ;;
             7)
                 clear
-                check_outbound_consistency
+                # 手动检测使用verbose模式，显示完整日志
+                check_outbound_consistency "verbose"
                 wait_for_input
                 ;;
             0) break ;;

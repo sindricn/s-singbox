@@ -72,6 +72,7 @@ generate_singbox_config() {
     local nodes_file="$DATA_DIR/nodes.json"
     local users_file="$DATA_DIR/users.json"
     local node_users_file="$DATA_DIR/node_users.json"
+    local outbound_file="$DATA_DIR/outbounds.json"
     local config_file="$SINGBOX_CONFIG"
 
     # 检查必需文件
@@ -88,6 +89,12 @@ generate_singbox_config() {
     if [[ ! -f "$node_users_file" ]]; then
         print_warning "绑定关系文件不存在，创建空文件"
         echo '{"bindings":[]}' > "$node_users_file"
+    fi
+
+    # 初始化出站规则文件
+    if [[ ! -f "$outbound_file" ]]; then
+        print_warning "出站规则文件不存在，创建空文件"
+        echo '{"outbounds":[]}' > "$outbound_file"
     fi
 
     # 提前检查WARP节点（避免悖论：只有配置成功才能看到WARP信息）
@@ -219,6 +226,37 @@ generate_singbox_config() {
         done < <(jq -c '.nodes[]' "$nodes_file" 2>/dev/null)
     fi
 
+    # ========== 处理出站规则 ==========
+    print_info "处理出站规则..."
+
+    # 提取所有节点使用的出站标签（去重）
+    local used_outbound_tags=$(jq -r '[.nodes[] | select(.outbound_tag != null) | .outbound_tag] | unique | .[]' "$nodes_file" 2>/dev/null)
+
+    # 根据使用的标签，从 outbounds.json 中提取对应的出站规则
+    local custom_outbounds="[]"
+    if [[ -n "$used_outbound_tags" ]]; then
+        local tag_count=0
+        while IFS= read -r tag; do
+            [[ -z "$tag" ]] && continue
+
+            # 从 outbounds.json 中查找该标签的配置
+            local outbound_rule=$(jq --arg tag "$tag" '.outbounds[] | select(.tag == $tag)' "$outbound_file" 2>/dev/null)
+
+            if [[ -n "$outbound_rule" && "$outbound_rule" != "null" ]]; then
+                # 添加到 custom_outbounds 数组
+                custom_outbounds=$(echo "$custom_outbounds" | jq --argjson rule "$outbound_rule" '. += [$rule]')
+                ((tag_count++))
+                print_success "  → 加载出站规则: $tag"
+            else
+                print_warning "  ⚠ 节点引用的出站规则不存在: $tag"
+            fi
+        done <<< "$used_outbound_tags"
+
+        if [[ $tag_count -gt 0 ]]; then
+            print_success "成功加载 $tag_count 个自定义出站规则"
+        fi
+    fi
+
     # 检查是否有节点启用WARP（用于配置生成）
     local warp_enabled_count=$(jq -r '[.nodes[] | select(.warp_outbound == true)] | length' "$nodes_file" 2>/dev/null)
 
@@ -243,6 +281,7 @@ generate_singbox_config() {
     # 生成完整配置（sing-box 1.11.0+ 兼容格式，使用新的endpoint格式）
     local full_config=$(jq -n \
         --argjson inbounds "$inbounds" \
+        --argjson custom_outbounds "$custom_outbounds" \
         --argjson warp_cfg "$warp_config" \
         --argjson has_warp "$has_warp" \
         '{
@@ -293,16 +332,18 @@ generate_singbox_config() {
                     []
                 end
             ),
-            outbounds: [
-                {
-                    type: "direct",
-                    tag: "direct-out"
-                },
-                {
-                    type: "block",
-                    tag: "block-out"
-                }
-            ],
+            outbounds: (
+                [
+                    {
+                        type: "direct",
+                        tag: "direct-out"
+                    },
+                    {
+                        type: "block",
+                        tag: "block-out"
+                    }
+                ] + $custom_outbounds
+            ),
             route: {
                 default_domain_resolver: "dns-local",
                 rules: (

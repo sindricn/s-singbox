@@ -315,37 +315,36 @@ add_http_outbound() {
         read -p "请输入密码: " password
     fi
 
-    # 构建出站配置 (使用jq确保JSON格式正确)
-    local server_config=$(jq -n \
-        --arg address "$server" \
-        --argjson port "$port" \
-        '{address: $address, port: $port}')
-
-    # 如果需要认证,添加users数组
+    # 构建出站配置 (sing-box 格式：扁平结构)
     if [[ -n "$username" && -n "$password" ]]; then
-        local users_array=$(jq -n \
-            --arg user "$username" \
-            --arg pass "$password" \
-            '[{user: $user, pass: $pass, level: 0}]')
-        server_config=$(echo "$server_config" | jq \
-            --argjson users "$users_array" \
-            '. + {users: $users}')
+        # 带认证
+        local outbound_config=$(jq -n \
+            --arg tag "$tag" \
+            --arg server "$server" \
+            --argjson server_port "$port" \
+            --arg username "$username" \
+            --arg password "$password" \
+            '{
+                type: "http",
+                tag: $tag,
+                server: $server,
+                server_port: $server_port,
+                username: $username,
+                password: $password
+            }')
+    else
+        # 无认证
+        local outbound_config=$(jq -n \
+            --arg tag "$tag" \
+            --arg server "$server" \
+            --argjson server_port "$port" \
+            '{
+                type: "http",
+                tag: $tag,
+                server: $server,
+                server_port: $server_port
+            }')
     fi
-
-    local outbound_config=$(jq -n \
-        --arg tag "$tag" \
-        --argjson server "$server_config" \
-        '{
-            protocol: "http",
-            tag: $tag,
-            settings: {
-                servers: [$server],
-                headers: {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"
-                }
-            }
-        }')
 
     # 添加到文件
     init_outbound_file
@@ -413,33 +412,36 @@ add_socks_outbound() {
         read -p "请输入密码: " password
     fi
 
-    # 构建出站配置 (使用jq确保JSON格式正确)
-    local server_config=$(jq -n \
-        --arg address "$server" \
-        --argjson port "$port" \
-        '{address: $address, port: $port}')
-
-    # 如果需要认证,添加users数组
+    # 构建出站配置 (sing-box格式)
     if [[ -n "$username" && -n "$password" ]]; then
-        local users_array=$(jq -n \
-            --arg user "$username" \
-            --arg pass "$password" \
-            '[{user: $user, pass: $pass, level: 0}]')
-        server_config=$(echo "$server_config" | jq \
-            --argjson users "$users_array" \
-            '. + {users: $users}')
+        local outbound_config=$(jq -n \
+            --arg tag "$tag" \
+            --arg server "$server" \
+            --argjson server_port "$port" \
+            --arg username "$username" \
+            --arg password "$password" \
+            '{
+                type: "socks",
+                tag: $tag,
+                server: $server,
+                server_port: $server_port,
+                version: "5",
+                username: $username,
+                password: $password
+            }')
+    else
+        local outbound_config=$(jq -n \
+            --arg tag "$tag" \
+            --arg server "$server" \
+            --argjson server_port "$port" \
+            '{
+                type: "socks",
+                tag: $tag,
+                server: $server,
+                server_port: $server_port,
+                version: "5"
+            }')
     fi
-
-    local outbound_config=$(jq -n \
-        --arg tag "$tag" \
-        --argjson server "$server_config" \
-        '{
-            protocol: "socks",
-            tag: $tag,
-            settings: {
-                servers: [$server]
-            }
-        }')
 
     # 添加到文件
     init_outbound_file
@@ -517,33 +519,36 @@ add_vless_outbound() {
         *) flow="" ;;
     esac
 
-    # 构建 user 配置
-    local user_config=$(jq -n \
-        --arg id "$uuid" \
-        --argjson level 0 \
-        '{id: $id, encryption: "none", level: $level}')
-
+    # 构建出站配置 (sing-box格式)
     if [[ -n "$flow" ]]; then
-        user_config=$(echo "$user_config" | jq --arg flow "$flow" '. + {flow: $flow}')
+        local outbound_config=$(jq -n \
+            --arg tag "$tag" \
+            --arg server "$server" \
+            --argjson server_port "$port" \
+            --arg uuid "$uuid" \
+            --arg flow "$flow" \
+            '{
+                type: "vless",
+                tag: $tag,
+                server: $server,
+                server_port: $server_port,
+                uuid: $uuid,
+                flow: $flow
+            }')
+    else
+        local outbound_config=$(jq -n \
+            --arg tag "$tag" \
+            --arg server "$server" \
+            --argjson server_port "$port" \
+            --arg uuid "$uuid" \
+            '{
+                type: "vless",
+                tag: $tag,
+                server: $server,
+                server_port: $server_port,
+                uuid: $uuid
+            }')
     fi
-
-    # 构建完整出站配置
-    local outbound_config=$(jq -n \
-        --arg tag "$tag" \
-        --arg address "$server" \
-        --argjson port "$port" \
-        --argjson user "$user_config" \
-        '{
-            protocol: "vless",
-            tag: $tag,
-            settings: {
-                vnext: [{
-                    address: $address,
-                    port: $port,
-                    users: [$user]
-                }]
-            }
-        }')
 
     # 添加到文件
     init_outbound_file
@@ -626,29 +631,21 @@ add_vmess_outbound() {
         *) security="auto" ;;
     esac
 
-    # 构建 user 配置
-    local user_config=$(jq -n \
-        --arg id "$uuid" \
-        --arg security "$security" \
-        --argjson level 0 \
-        '{id: $id, security: $security, level: $level}')
-
-    # 构建完整出站配置
+    # 构建出站配置 (sing-box格式)
     local outbound_config=$(jq -n \
         --arg tag "$tag" \
-        --arg address "$server" \
-        --argjson port "$port" \
-        --argjson user "$user_config" \
+        --arg server "$server" \
+        --argjson server_port "$port" \
+        --arg uuid "$uuid" \
+        --arg security "$security" \
         '{
-            protocol: "vmess",
+            type: "vmess",
             tag: $tag,
-            settings: {
-                vnext: [{
-                    address: $address,
-                    port: $port,
-                    users: [$user]
-                }]
-            }
+            server: $server,
+            server_port: $server_port,
+            uuid: $uuid,
+            security: $security,
+            alter_id: 0
         }')
 
     # 添加到文件
@@ -715,24 +712,18 @@ add_trojan_outbound() {
         return 1
     fi
 
-    # 构建 server 配置
-    local server_config=$(jq -n \
-        --arg address "$server" \
-        --argjson port "$port" \
-        --arg password "$password" \
-        --argjson level 0 \
-        '{address: $address, port: $port, password: $password, level: $level}')
-
-    # 构建完整出站配置
+    # 构建出站配置 (sing-box格式)
     local outbound_config=$(jq -n \
         --arg tag "$tag" \
-        --argjson server "$server_config" \
+        --arg server "$server" \
+        --argjson server_port "$port" \
+        --arg password "$password" \
         '{
-            protocol: "trojan",
+            type: "trojan",
             tag: $tag,
-            settings: {
-                servers: [$server]
-            }
+            server: $server,
+            server_port: $server_port,
+            password: $password
         }')
 
     # 添加到文件
@@ -819,25 +810,20 @@ add_shadowsocks_outbound() {
         return 1
     fi
 
-    # 构建 server 配置
-    local server_config=$(jq -n \
-        --arg address "$server" \
-        --argjson port "$port" \
-        --arg method "$method" \
-        --arg password "$password" \
-        --argjson level 0 \
-        '{address: $address, port: $port, method: $method, password: $password, level: $level}')
-
-    # 构建完整出站配置
+    # 构建出站配置 (sing-box格式)
     local outbound_config=$(jq -n \
         --arg tag "$tag" \
-        --argjson server "$server_config" \
+        --arg server "$server" \
+        --argjson server_port "$port" \
+        --arg method "$method" \
+        --arg password "$password" \
         '{
-            protocol: "shadowsocks",
+            type: "shadowsocks",
             tag: $tag,
-            settings: {
-                servers: [$server]
-            }
+            server: $server,
+            server_port: $server_port,
+            method: $method,
+            password: $password
         }')
 
     # 添加到文件
@@ -916,25 +902,30 @@ add_hysteria2_outbound() {
     local insecure_flag=false
     [[ "$insecure" == "y" || "$insecure" == "Y" ]] && insecure_flag=true
 
-    # 构建 server 配置
-    local server_config=$(jq -n \
-        --arg address "$server" \
-        --argjson port "$port" \
-        --arg password "$password" \
+    # 构建 TLS 配置
+    local tls_config=$(jq -n \
         --arg sni "$sni" \
         --argjson insecure "$insecure_flag" \
-        '{address: $address, port: $port, password: $password, sni: $sni, insecure: $insecure}')
+        '{
+            enabled: true,
+            server_name: $sni,
+            insecure: $insecure
+        }')
 
-    # 构建完整出站配置
+    # 构建出站配置 (sing-box格式)
     local outbound_config=$(jq -n \
         --arg tag "$tag" \
-        --argjson server "$server_config" \
+        --arg server "$server" \
+        --argjson server_port "$port" \
+        --arg password "$password" \
+        --argjson tls "$tls_config" \
         '{
-            protocol: "hysteria2",
+            type: "hysteria2",
             tag: $tag,
-            settings: {
-                servers: [$server]
-            }
+            server: $server,
+            server_port: $server_port,
+            password: $password,
+            tls: $tls
         }')
 
     # 添加到文件
@@ -1033,27 +1024,34 @@ add_tuic_outbound() {
     local insecure_flag=false
     [[ "$insecure" == "y" || "$insecure" == "Y" ]] && insecure_flag=true
 
-    # 构建 server 配置
-    local server_config=$(jq -n \
-        --arg address "$server" \
-        --argjson port "$port" \
-        --arg uuid "$uuid" \
-        --arg password "$password" \
+    # 构建 TLS 配置
+    local tls_config=$(jq -n \
         --arg sni "$sni" \
-        --arg congestion_control "$congestion_control" \
         --argjson insecure "$insecure_flag" \
-        '{address: $address, port: $port, uuid: $uuid, password: $password, sni: $sni, congestion_control: $congestion_control, insecure: $insecure}')
+        '{
+            enabled: true,
+            server_name: $sni,
+            insecure: $insecure
+        }')
 
-    # 构建完整出站配置
+    # 构建出站配置 (sing-box格式)
     local outbound_config=$(jq -n \
         --arg tag "$tag" \
-        --argjson server "$server_config" \
+        --arg server "$server" \
+        --argjson server_port "$port" \
+        --arg uuid "$uuid" \
+        --arg password "$password" \
+        --arg congestion_control "$congestion_control" \
+        --argjson tls "$tls_config" \
         '{
-            protocol: "tuic",
+            type: "tuic",
             tag: $tag,
-            settings: {
-                servers: [$server]
-            }
+            server: $server,
+            server_port: $server_port,
+            uuid: $uuid,
+            password: $password,
+            congestion_control: $congestion_control,
+            tls: $tls
         }')
 
     # 添加到文件

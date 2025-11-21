@@ -574,7 +574,7 @@ credentials-file: ${CLOUDFLARED_CONFIG_DIR}/${tunnel_id}.json
 
 ingress:
   - hostname: ${tunnel_domain}
-    service: tcp://localhost:${local_port}
+    service: http://localhost:${local_port}
   - service: http_status:404
 EOF
 
@@ -741,7 +741,7 @@ credentials-file: ${CLOUDFLARED_CONFIG_DIR}/${tunnel_id}.json
 
 ingress:
   - hostname: ${tunnel_domain}
-    service: tcp://localhost:${selected_port}
+    service: http://localhost:${selected_port}
   - service: http_status:404
 EOF
 
@@ -805,6 +805,329 @@ list_dedicated_argo_tunnels() {
     fi
 
     "$CLOUDFLARED_BIN" tunnel list
+}
+
+# 查看 cloudflared 服务日志
+view_cloudflared_logs() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║      查看 cloudflared 服务日志       ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    if [[ ! -f "$CLOUDFLARED_BIN" ]]; then
+        print_error "cloudflared 未安装"
+        return 1
+    fi
+
+    # 列出所有 cloudflared 服务
+    local services=$(systemctl list-units --type=service --all | grep cloudflared | awk '{print $1}')
+
+    if [[ -z "$services" ]]; then
+        print_info "没有运行中的 cloudflared 服务"
+        return 0
+    fi
+
+    echo -e "${YELLOW}可用的 cloudflared 服务：${NC}"
+    echo ""
+
+    local index=1
+    declare -a service_list
+    while IFS= read -r service; do
+        local status=$(systemctl is-active "$service" 2>/dev/null || echo "inactive")
+        echo -e "${GREEN}$index.${NC} $service (状态: $status)"
+        service_list[$index]="$service"
+        ((index++))
+    done <<< "$services"
+
+    echo ""
+    read -p "请选择要查看日志的服务编号 [1-$((index-1))]: " service_choice
+
+    if [[ ! "$service_choice" =~ ^[0-9]+$ ]] || [[ "$service_choice" -lt 1 ]] || [[ "$service_choice" -ge $index ]]; then
+        print_error "无效选择"
+        return 1
+    fi
+
+    local selected_service="${service_list[$service_choice]}"
+
+    echo ""
+    echo -e "${CYAN}查看日志: $selected_service${NC}"
+    echo -e "${YELLOW}提示: 按 Ctrl+C 退出${NC}"
+    echo ""
+    sleep 2
+
+    journalctl -u "$selected_service" -f --no-pager
+}
+
+# 诊断隧道连接问题
+diagnose_tunnel_connection() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║     Argo 隧道连接诊断工具           ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    if [[ ! -f "$CLOUDFLARED_BIN" ]]; then
+        print_error "cloudflared 未安装"
+        return 1
+    fi
+
+    local nodes_file="${DATA_DIR}/nodes.json"
+    if [[ ! -f "$nodes_file" ]]; then
+        print_error "节点配置文件不存在"
+        return 1
+    fi
+
+    # 列出已绑定隧道的节点
+    local bound_nodes=$(jq -r '.nodes[] | select(.tunnel_domain != null) | "\(.port)|\(.protocol)|\(.tunnel_name // "N/A")|\(.tunnel_domain)|\(.tunnel_type)"' "$nodes_file" 2>/dev/null)
+
+    if [[ -z "$bound_nodes" ]]; then
+        print_info "没有节点绑定隧道"
+        return 0
+    fi
+
+    echo -e "${YELLOW}已绑定隧道的节点：${NC}"
+    echo ""
+
+    local index=1
+    declare -a port_list
+    echo "$bound_nodes" | while IFS='|' read -r port protocol tunnel_name tunnel_domain tunnel_type; do
+        echo -e "${GREEN}$index.${NC} 端口:$port | 协议:$protocol | 隧道:$tunnel_name"
+        port_list[$index]="$port|$tunnel_name|$tunnel_domain|$tunnel_type"
+        ((index++))
+    done
+
+    echo ""
+    local total_count=$(echo "$bound_nodes" | wc -l)
+    read -p "请选择要诊断的节点 [1-$total_count]: " diag_choice
+
+    if [[ ! "$diag_choice" =~ ^[0-9]+$ ]] || [[ "$diag_choice" -lt 1 ]] || [[ "$diag_choice" -gt "$total_count" ]]; then
+        print_error "无效选择"
+        return 1
+    fi
+
+    local selected_info=$(echo "$bound_nodes" | sed -n "${diag_choice}p")
+    local sel_port=$(echo "$selected_info" | cut -d'|' -f1)
+    local sel_protocol=$(echo "$selected_info" | cut -d'|' -f2)
+    local sel_tunnel=$(echo "$selected_info" | cut -d'|' -f3)
+    local sel_domain=$(echo "$selected_info" | cut -d'|' -f4)
+    local sel_type=$(echo "$selected_info" | cut -d'|' -f5)
+
+    echo ""
+    echo -e "${CYAN}╔═══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║                    开始诊断                               ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${YELLOW}节点信息：${NC}"
+    echo -e "  端口: $sel_port"
+    echo -e "  协议: $sel_protocol"
+    echo -e "  隧道名称: $sel_tunnel"
+    echo -e "  隧道域名: $sel_domain"
+    echo -e "  隧道类型: $sel_type"
+    echo ""
+
+    # 诊断步骤
+    local issues_found=0
+
+    # 1. 检查隧道类型
+    if [[ "$sel_type" == "argo_temp" ]]; then
+        echo -e "${GREEN}[✓] 隧道类型: 临时隧道（支持 WebSocket 代理协议）${NC}"
+        echo -e "    ${YELLOW}注意: 临时隧道域名会在重启后变化${NC}"
+        echo ""
+    else
+        echo -e "${GREEN}[✓] 隧道类型: 专用隧道（固定域名，支持 WebSocket 代理协议）${NC}"
+        echo ""
+    fi
+
+    # 2. 检查 sing-box 是否在监听端口
+    echo -e "${YELLOW}[检查] sing-box 是否监听端口 $sel_port...${NC}"
+    if ss -tlnp 2>/dev/null | grep -q ":$sel_port " || netstat -tlnp 2>/dev/null | grep -q ":$sel_port "; then
+        echo -e "${GREEN}[✓] 端口 $sel_port 正在监听${NC}"
+        echo ""
+    else
+        echo -e "${RED}[✗] 端口 $sel_port 未在监听${NC}"
+        echo -e "    ${YELLOW}可能原因: sing-box 未启动或配置有误${NC}"
+        echo -e "    ${GREEN}建议: 检查 sing-box 服务状态和配置${NC}"
+        ((issues_found++))
+        echo ""
+    fi
+
+    # 3. 检查 cloudflared 服务（仅专用隧道）
+    if [[ "$sel_type" == "argo_dedicated" ]]; then
+        local service_name="cloudflared-${sel_tunnel}.service"
+        echo -e "${YELLOW}[检查] cloudflared 服务状态...${NC}"
+
+        if systemctl is-active --quiet "$service_name"; then
+            echo -e "${GREEN}[✓] 服务运行中: $service_name${NC}"
+            echo ""
+
+            # 4. 检查配置文件
+            echo -e "${YELLOW}[检查] cloudflared 配置文件...${NC}"
+            local config_file="${CLOUDFLARED_CONFIG_DIR}/config.yml"
+
+            if [[ -f "$config_file" ]]; then
+                echo -e "${GREEN}[✓] 配置文件存在: $config_file${NC}"
+                echo ""
+
+                # 检查是否使用正确的 HTTP 服务（用于 WebSocket 代理协议）
+                if grep -q "service: http://localhost:$sel_port" "$config_file"; then
+                    echo -e "${GREEN}[✓] 配置正确: 使用 HTTP 服务（支持 WebSocket）${NC}"
+                    echo -e "    service: http://localhost:$sel_port"
+                    echo ""
+                elif grep -q "service: tcp://localhost:$sel_port" "$config_file"; then
+                    echo -e "${RED}[✗] 配置错误: 使用了 TCP 转发${NC}"
+                    echo -e "    当前: service: tcp://localhost:$sel_port"
+                    echo -e "    应为: service: http://localhost:$sel_port"
+                    echo -e "    ${YELLOW}说明: Argo 隧道需要 HTTP 服务来承载 WebSocket 代理协议${NC}"
+                    echo -e "    ${GREEN}建议: 重新绑定隧道以更新配置${NC}"
+                    ((issues_found++))
+                    echo ""
+                else
+                    echo -e "${YELLOW}[?] 配置内容：${NC}"
+                    cat "$config_file"
+                    echo ""
+                fi
+            else
+                echo -e "${RED}[✗] 配置文件不存在: $config_file${NC}"
+                ((issues_found++))
+                echo ""
+            fi
+
+            # 5. 检查服务日志
+            echo -e "${YELLOW}[检查] cloudflared 服务日志 (最近10行)...${NC}"
+            journalctl -u "$service_name" -n 10 --no-pager 2>/dev/null | grep -i "error\|fail\|refused\|timeout" && {
+                echo -e "${RED}[✗] 发现错误日志${NC}"
+                echo -e "    ${GREEN}建议: 使用菜单项 8 查看完整日志${NC}"
+                ((issues_found++))
+            } || {
+                echo -e "${GREEN}[✓] 最近日志无明显错误${NC}"
+            }
+            echo ""
+
+        else
+            echo -e "${RED}[✗] 服务未运行: $service_name${NC}"
+            echo -e "    ${GREEN}建议: 使用菜单项 9 重启服务${NC}"
+            ((issues_found++))
+            echo ""
+        fi
+    fi
+
+    # 6. 检查 DNS 解析
+    echo -e "${YELLOW}[检查] 隧道域名 DNS 解析...${NC}"
+    local clean_domain=$(echo "$sel_domain" | sed -E 's|^https?://||' | sed -E 's|:[0-9]+$||')
+    if nslookup "$clean_domain" >/dev/null 2>&1 || dig "$clean_domain" >/dev/null 2>&1 || host "$clean_domain" >/dev/null 2>&1; then
+        echo -e "${GREEN}[✓] 域名可以解析: $clean_domain${NC}"
+        echo ""
+    else
+        echo -e "${RED}[✗] 域名无法解析: $clean_domain${NC}"
+        echo -e "    ${YELLOW}可能原因: DNS 问题或隧道未正确创建${NC}"
+        ((issues_found++))
+        echo ""
+    fi
+
+    # 诊断总结
+    echo -e "${CYAN}╔═══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║                    诊断总结                               ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    if [[ $issues_found -eq 0 ]]; then
+        echo -e "${GREEN}✓ 未发现明显问题，配置看起来正常${NC}"
+        echo ""
+        echo -e "${YELLOW}如果仍然无法连接，请检查：${NC}"
+        echo -e "  1. 客户端配置是否正确（地址、端口、UUID等）"
+        echo -e "  2. 网络防火墙是否阻止了连接"
+        echo -e "  3. Cloudflare 账户状态是否正常"
+    else
+        echo -e "${RED}✗ 发现 $issues_found 个问题${NC}"
+        echo ""
+        echo -e "${YELLOW}建议操作：${NC}"
+        echo -e "  1. 解决上述标记为 ${RED}[✗]${NC} 的问题"
+        echo -e "  2. 使用菜单项 8 查看详细日志"
+        echo -e "  3. 使用菜单项 9 重启相关服务"
+        echo -e "  4. 如果是临时隧道，改用专用隧道"
+    fi
+    echo ""
+}
+
+# 重启 cloudflared 服务
+restart_cloudflared_service() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║     重启 cloudflared 服务            ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    if [[ ! -f "$CLOUDFLARED_BIN" ]]; then
+        print_error "cloudflared 未安装"
+        return 1
+    fi
+
+    # 列出所有 cloudflared 服务
+    local services=$(systemctl list-units --type=service --all | grep cloudflared | awk '{print $1}')
+
+    if [[ -z "$services" ]]; then
+        print_info "没有可用的 cloudflared 服务"
+        return 0
+    fi
+
+    echo -e "${YELLOW}可用的 cloudflared 服务：${NC}"
+    echo ""
+
+    local index=1
+    declare -a service_list
+    while IFS= read -r service; do
+        local status=$(systemctl is-active "$service" 2>/dev/null || echo "inactive")
+        echo -e "${GREEN}$index.${NC} $service (状态: $status)"
+        service_list[$index]="$service"
+        ((index++))
+    done <<< "$services"
+
+    echo -e "${GREEN}0.${NC} 重启所有服务"
+    echo ""
+    read -p "请选择要重启的服务编号 [0-$((index-1))]: " service_choice
+
+    if [[ "$service_choice" == "0" ]]; then
+        # 重启所有服务
+        print_info "正在重启所有 cloudflared 服务..."
+        local success_count=0
+        local fail_count=0
+
+        while IFS= read -r service; do
+            if systemctl restart "$service" 2>/dev/null; then
+                print_success "✅ $service 重启成功"
+                ((success_count++))
+            else
+                print_error "❌ $service 重启失败"
+                ((fail_count++))
+            fi
+        done <<< "$services"
+
+        echo ""
+        echo -e "${CYAN}重启统计：${NC}"
+        echo -e "  成功: ${GREEN}$success_count${NC}"
+        echo -e "  失败: ${RED}$fail_count${NC}"
+
+    elif [[ "$service_choice" =~ ^[0-9]+$ ]] && [[ "$service_choice" -ge 1 ]] && [[ "$service_choice" -lt $index ]]; then
+        local selected_service="${service_list[$service_choice]}"
+
+        print_info "正在重启 $selected_service..."
+
+        if systemctl restart "$selected_service"; then
+            print_success "✅ $selected_service 重启成功"
+            echo ""
+            echo -e "${CYAN}服务状态：${NC}"
+            systemctl status "$selected_service" --no-pager -l
+        else
+            print_error "❌ $selected_service 重启失败"
+            echo ""
+            echo -e "${YELLOW}建议查看日志排查问题：${NC}"
+            echo "  journalctl -u $selected_service -n 50"
+        fi
+    else
+        print_error "无效选择"
+        return 1
+    fi
 }
 
 # 管理隧道节点绑定
@@ -965,7 +1288,7 @@ credentials-file: ${CLOUDFLARED_CONFIG_DIR}/${tunnel_id}.json
 
 ingress:
   - hostname: ${selected_url}
-    service: tcp://localhost:${selected_port}
+    service: http://localhost:${selected_port}
   - service: http_status:404
 EOF
 
@@ -1042,8 +1365,9 @@ EOF
             echo -e "${CYAN}═══════════════════════════════════════${NC}"
             echo ""
 
+            # 使用进程替换避免子shell问题
             local has_binding=false
-            jq -r '.nodes[] | select(.tunnel_domain != null) | "\(.port)|\(.protocol)|\(.tunnel_type // "N/A")|\(.tunnel_name // "N/A")|\(.tunnel_domain)"' "$nodes_file" 2>/dev/null | while IFS='|' read -r port protocol tunnel_type tunnel_name tunnel_domain; do
+            while IFS='|' read -r port protocol tunnel_type tunnel_name tunnel_domain; do
                 has_binding=true
                 echo -e "${GREEN}端口:${NC} $port"
                 echo -e "${GREEN}协议:${NC} $protocol"
@@ -1052,7 +1376,7 @@ EOF
                 echo -e "${GREEN}隧道域名:${NC} $tunnel_domain"
                 echo -e "${YELLOW}访问流程:${NC} 用户 → $tunnel_domain → 节点($port)"
                 echo ""
-            done
+            done < <(jq -r '.nodes[] | select(.tunnel_domain != null) | "\(.port)|\(.protocol)|\(.tunnel_type // "N/A")|\(.tunnel_name // "N/A")|\(.tunnel_domain)"' "$nodes_file" 2>/dev/null)
 
             if [[ "$has_binding" == "false" ]]; then
                 print_info "没有节点绑定隧道"
@@ -2083,11 +2407,14 @@ menu_argo_tunnel() {
         echo -e "${GREEN}4.${NC}  创建专用隧道"
         echo -e "${GREEN}5.${NC}  查看专用隧道"
         echo -e "${GREEN}6.${NC}  删除专用隧道"
-        echo -e "${GREEN}7.${NC}  管理隧道-节点绑定"
         echo ""
         echo -e "${YELLOW}━━━━━━━ 系统管理 ━━━━━━━${NC}"
-        echo -e "${GREEN}8.${NC}  安装 cloudflared"
-        echo -e "${GREEN}9.${NC}  卸载 cloudflared"
+        echo -e "${GREEN}7.${NC}  管理隧道-节点绑定"
+        echo -e "${GREEN}8.${NC}  查看服务日志"
+        echo -e "${GREEN}9.${NC}  重启 cloudflared 服务"
+        echo -e "${GREEN}10.${NC} 诊断连接问题"
+        echo -e "${GREEN}11.${NC} 安装 cloudflared"
+        echo -e "${GREEN}12.${NC} 卸载 cloudflared"
         echo ""
 
         print_nav_options "true" "true"
@@ -2106,8 +2433,11 @@ menu_argo_tunnel() {
             5) list_dedicated_argo_tunnels; read -p "按 Enter 继续..." ;;
             6) delete_dedicated_argo_tunnel; read -p "按 Enter 继续..." ;;
             7) manage_tunnel_node_binding; read -p "按 Enter 继续..." ;;
-            8) install_cloudflared; read -p "按 Enter 继续..." ;;
-            9) uninstall_cloudflared; read -p "按 Enter 继续..." ;;
+            8) view_cloudflared_logs ;;
+            9) restart_cloudflared_service; read -p "按 Enter 继续..." ;;
+            10) diagnose_tunnel_connection; read -p "按 Enter 继续..." ;;
+            11) install_cloudflared; read -p "按 Enter 继续..." ;;
+            12) uninstall_cloudflared; read -p "按 Enter 继续..." ;;
             *) print_error "无效选择"; sleep 1 ;;
         esac
     done

@@ -3178,6 +3178,310 @@ quick_setup_hysteria2() {
     generate_and_show_node_link "$port" "$admin_uuid" "$admin_username"
 }
 
+# 快速搭建 Argo + VLESS + WebSocket + TLS 节点
+quick_setup_argo_vless_ws() {
+    clear
+    echo -e "${CYAN}═══════════════════════════════════${NC}"
+    echo -e "${CYAN}  一键搭建 Argo+VLESS+WS+TLS 节点${NC}"
+    echo -e "${CYAN}═══════════════════════════════════${NC}"
+    echo ""
+    echo -e "${YELLOW}说明：${NC}"
+    echo -e "  - 协议: VLESS (零加密，性能优秀)"
+    echo -e "  - 传输: WebSocket + TLS"
+    echo -e "  - 隧道: Cloudflare Argo（支持临时/专用）"
+    echo -e "  - 优势: 隐藏源站IP，免费域名，自动HTTPS"
+    echo ""
+
+    # 检查 sing-box 是否已安装
+    if ! command -v sing-box &>/dev/null; then
+        print_error "sing-box 未安装！请先通过菜单安装 sing-box 内核"
+        return 1
+    fi
+
+    echo -e "${BLUE}开始一键快速配置...${NC}"
+    echo ""
+
+    # 步骤 1/5: 端口配置
+    echo -e "${BLUE}步骤 1/5: 端口配置${NC}"
+    read -p "请输入监听端口 [默认: 8443]: " port
+    port=${port:-8443}
+
+    if check_port_exists "$port"; then
+        print_error "端口 $port 已被占用或已存在，请使用其他端口"
+        return 1
+    fi
+    print_success "本地端口: $port"
+    echo ""
+
+    # 步骤 2/5: WebSocket 路径配置
+    echo -e "${BLUE}步骤 2/5: WebSocket 路径配置${NC}"
+    read -p "WebSocket 路径 [默认: /ws]: " ws_path
+    ws_path=${ws_path:-/ws}
+    print_success "WebSocket 路径: $ws_path"
+    echo ""
+
+    # 步骤 3/5: TLS 证书配置（使用自签名）
+    echo -e "${BLUE}步骤 3/5: TLS 证书配置${NC}"
+    echo -e "${YELLOW}域名选项：${NC}"
+    echo -e "  1. 使用默认域名 (localhost)"
+    echo -e "  2. 自定义域名"
+    echo ""
+    read -p "请选择 [1-2，默认: 1]: " domain_choice
+    domain_choice=${domain_choice:-1}
+
+    local tls_domain=""
+    case $domain_choice in
+        1)
+            tls_domain="localhost"
+            print_info "使用默认域名: $tls_domain"
+            ;;
+        2)
+            read -p "请输入自定义域名: " custom_domain
+            if [[ -n "$custom_domain" ]]; then
+                tls_domain="$custom_domain"
+            else
+                tls_domain="localhost"
+                print_warning "未输入域名，使用默认: $tls_domain"
+            fi
+            ;;
+        *)
+            tls_domain="localhost"
+            print_info "使用默认域名: $tls_domain"
+            ;;
+    esac
+
+    # 生成自签名证书
+    print_info "正在生成自签名证书..."
+    mkdir -p "${SINGBOX_DIR}/certs/${tls_domain}"
+
+    if ! openssl req -x509 -nodes -newkey rsa:2048 \
+        -keyout "${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key" \
+        -out "${SINGBOX_DIR}/certs/${tls_domain}/fullchain.cer" \
+        -subj "/CN=$tls_domain" \
+        -days 3650 &>/dev/null; then
+        print_error "证书生成失败"
+        return 1
+    fi
+
+    local tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.cer"
+    local tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
+
+    print_success "证书生成完成"
+    echo ""
+
+    # 步骤 4/5: Argo 隧道配置
+    echo -e "${BLUE}步骤 4/5: Argo 隧道配置${NC}"
+    echo -e "${YELLOW}Argo 隧道选项：${NC}"
+    echo -e "  ${GREEN}1.${NC} 临时隧道（无需CF账号，域名会变化）"
+    echo -e "  ${GREEN}2.${NC} 专用隧道（需要CF账号，固定域名）"
+    echo -e "  ${GREEN}3.${NC} 不使用Argo（仅本地节点）"
+    echo ""
+    read -p "请选择 [1-3，默认: 1]: " argo_choice
+    argo_choice=${argo_choice:-1}
+
+    local use_argo=false
+    local argo_type=""
+    local tunnel_domain=""
+
+    case $argo_choice in
+        1)
+            # 临时隧道
+            use_argo=true
+            argo_type="temp"
+            print_info "将使用临时 Argo 隧道"
+            ;;
+        2)
+            # 专用隧道
+            use_argo=true
+            argo_type="dedicated"
+            print_info "将使用专用 Argo 隧道"
+            ;;
+        3)
+            # 不使用
+            use_argo=false
+            print_info "不使用 Argo 隧道"
+            ;;
+        *)
+            # 默认临时隧道
+            use_argo=true
+            argo_type="temp"
+            print_info "将使用临时 Argo 隧道"
+            ;;
+    esac
+    echo ""
+
+    # 步骤 5/5: 保存配置并创建节点
+    echo -e "${BLUE}步骤 5/5: 保存配置并启动服务${NC}"
+
+    # 构建 extra_config
+    local extra_config=$(jq -n \
+        --arg ws_path "$ws_path" \
+        --arg tls_domain "$tls_domain" \
+        --arg tls_cert "$tls_cert" \
+        --arg tls_key "$tls_key" \
+        '{
+            ws_path: $ws_path,
+            tls_domain: $tls_domain,
+            tls_cert: $tls_cert,
+            tls_key: $tls_key
+        }')
+
+    # 保存节点信息
+    save_node_info "vless" "$port" "ws" "tls" "$extra_config" "vless-ws-$port"
+    if [[ $? -ne 0 ]]; then
+        print_error "保存节点信息失败"
+        rm -f "$tls_cert" "$tls_key"
+        return 1
+    fi
+
+    # 绑定 admin 用户到节点
+    local admin_info=$(bind_admin_to_node "$port" "vless")
+    if [[ $? -ne 0 ]]; then
+        print_error "绑定默认用户失败，正在回滚..."
+        jq --arg port "$port" '.nodes = [.nodes[] | select(.port != $port)]' "$DATA_DIR/nodes.json" > "$DATA_DIR/nodes.json.tmp"
+        mv "$DATA_DIR/nodes.json.tmp" "$DATA_DIR/nodes.json"
+        rm -f "$tls_cert" "$tls_key"
+        return 1
+    fi
+
+    IFS='|' read -r admin_uuid admin_password admin_username <<< "$admin_info"
+
+    # 重新生成sing-box配置文件
+    generate_singbox_config
+    if [[ $? -ne 0 ]]; then
+        print_error "生成配置文件失败，正在回滚..."
+        jq --arg port "$port" '.nodes = [.nodes[] | select(.port != $port)]' "$DATA_DIR/nodes.json" > "$DATA_DIR/nodes.json.tmp"
+        mv "$DATA_DIR/nodes.json.tmp" "$DATA_DIR/nodes.json"
+        jq --arg port "$port" '.bindings = [.bindings[] | select(.port != $port)]' "$DATA_DIR/node_users.json" > "$DATA_DIR/node_users.json.tmp"
+        mv "$DATA_DIR/node_users.json.tmp" "$DATA_DIR/node_users.json"
+        rm -f "$tls_cert" "$tls_key"
+        return 1
+    fi
+
+    # 重启服务
+    restart_sing-box
+    if [[ $? -ne 0 ]]; then
+        print_error "sing-box 启动失败"
+        return 1
+    fi
+
+    print_success "节点创建成功！"
+    echo ""
+
+    # 如果启用 Argo，创建并绑定隧道
+    if [[ "$use_argo" == true ]]; then
+        echo -e "${BLUE}正在配置 Argo 隧道...${NC}"
+        echo ""
+
+        # 检查 cloudflared 是否安装
+        if [[ ! -f "/usr/local/bin/cloudflared" ]]; then
+            print_warning "cloudflared 未安装"
+            read -p "是否现在安装？[Y/n]: " install_choice
+            if [[ "$install_choice" != "n" && "$install_choice" != "N" ]]; then
+                # 调用安装函数（需要确保 cf_tunnel.sh 已加载）
+                if declare -f install_cloudflared >/dev/null 2>&1; then
+                    install_cloudflared
+                else
+                    print_error "无法找到 cloudflared 安装函数"
+                    print_info "请手动通过 Argo隧道管理 菜单安装"
+                    argo_type=""
+                    use_argo=false
+                fi
+            else
+                print_info "跳过 Argo 隧道配置"
+                use_argo=false
+            fi
+        fi
+
+        if [[ "$use_argo" == true ]]; then
+            if [[ "$argo_type" == "temp" ]]; then
+                # 创建临时隧道
+                print_info "启动临时 Argo 隧道..."
+                local log_file="/tmp/argo-tunnel-${port}.log"
+                nohup /usr/local/bin/cloudflared tunnel --url "http://localhost:${port}" > "$log_file" 2>&1 &
+                local tunnel_pid=$!
+
+                # 等待隧道启动
+                sleep 5
+
+                # 检查进程是否还在运行
+                if ! kill -0 $tunnel_pid 2>/dev/null; then
+                    print_error "Argo 隧道启动失败"
+                    cat "$log_file" 2>/dev/null
+                else
+                    # 从日志中提取隧道 URL
+                    tunnel_domain=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' "$log_file" | head -1)
+
+                    if [[ -n "$tunnel_domain" ]]; then
+                        # 更新节点配置，添加隧道域名
+                        jq --arg port "$port" \
+                           --arg domain "$tunnel_domain" \
+                           --arg pid "$tunnel_pid" \
+                           '(.nodes[] | select(.port == $port)) |= (
+                               . + {
+                                   tunnel_domain: $domain,
+                                   tunnel_name: ("temp-tunnel-" + $pid),
+                                   tunnel_type: "argo_temp"
+                               }
+                           )' \
+                           "$DATA_DIR/nodes.json" > "$DATA_DIR/nodes.json.tmp" && mv "$DATA_DIR/nodes.json.tmp" "$DATA_DIR/nodes.json"
+
+                        print_success "临时 Argo 隧道创建成功！"
+                        echo -e "  隧道域名: ${GREEN}$tunnel_domain${NC}"
+                        echo -e "  进程 PID: ${GREEN}$tunnel_pid${NC}"
+                        echo ""
+                    else
+                        print_warning "无法获取隧道域名，请查看日志: $log_file"
+                    fi
+                fi
+
+            elif [[ "$argo_type" == "dedicated" ]]; then
+                # 专用隧道需要用户手动配置
+                print_info "专用隧道需要 Cloudflare 账号"
+                print_info "请使用菜单中的 Argo隧道管理 功能："
+                echo -e "  ${YELLOW}1. 创建专用隧道${NC}"
+                echo -e "  ${YELLOW}2. 将隧道绑定到端口 $port${NC}"
+                echo ""
+                print_info "配置完成后，分享链接会自动更新"
+            fi
+        fi
+    fi
+
+    # 显示最终配置信息
+    echo ""
+    echo -e "${GREEN}═══════════════════════════════════${NC}"
+    echo -e "${GREEN}   节点创建成功！${NC}"
+    echo -e "${GREEN}═══════════════════════════════════${NC}"
+    echo ""
+    echo -e "${CYAN}节点信息：${NC}"
+    echo -e "  本地端口: ${YELLOW}$port${NC}"
+    echo -e "  协议: ${YELLOW}VLESS${NC}"
+    echo -e "  传输: ${YELLOW}WebSocket + TLS${NC}"
+    echo -e "  WS路径: ${YELLOW}$ws_path${NC}"
+    echo -e "  TLS域名: ${YELLOW}$tls_domain${NC}"
+    echo -e "  默认用户: ${YELLOW}admin${NC}"
+    echo -e "  UUID: ${YELLOW}$admin_uuid${NC}"
+
+    if [[ -n "$tunnel_domain" ]]; then
+        echo -e "  Argo隧道: ${YELLOW}$tunnel_domain${NC}"
+        echo -e "  访问地址: ${GREEN}$tunnel_domain:443${NC}"
+    else
+        echo -e "  Argo隧道: ${YELLOW}未配置${NC}"
+    fi
+    echo ""
+
+    # 生成并显示分享链接
+    generate_and_show_node_link "$port" "$admin_uuid" "$admin_username"
+
+    if [[ "$use_argo" == true && "$argo_type" == "temp" && -n "$tunnel_domain" ]]; then
+        echo ""
+        echo -e "${YELLOW}重要提示：${NC}"
+        echo -e "  • 临时隧道域名在重启后会变化"
+        echo -e "  • 建议使用专用隧道获得固定域名"
+        echo -e "  • 停止隧道: kill $tunnel_pid"
+    fi
+}
+
 # 快速搭建菜单
 menu_quick_setup() {
     while true; do
@@ -3187,8 +3491,9 @@ menu_quick_setup() {
         echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
         echo ""
         echo -e "${YELLOW}━━━━━━━ 一键快速搭建 ━━━━━━━${NC}"
-        echo -e "${GREEN}1.${NC}  VLESS + Reality   - 无需证书，抗审查"
-        echo -e "${GREEN}2.${NC}  Hysteria2         - 高性能 QUIC 协议"
+        echo -e "${GREEN}1.${NC}  VLESS + Reality       - 无需证书，抗审查"
+        echo -e "${GREEN}2.${NC}  Hysteria2             - 高性能 QUIC 协议"
+        echo -e "${GREEN}3.${NC}  Argo+VLESS+WS+TLS     - 隐藏IP，免费域名"
         echo ""
 
         print_nav_options "true" "true"
@@ -3206,6 +3511,10 @@ menu_quick_setup() {
                 ;;
             2)
                 quick_setup_hysteria2
+                read -p "按 Enter 键继续..."
+                ;;
+            3)
+                quick_setup_argo_vless_ws
                 read -p "按 Enter 键继续..."
                 ;;
             *)

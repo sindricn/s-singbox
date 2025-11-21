@@ -716,6 +716,35 @@ bind_tunnel_to_node() {
         return 1
     fi
 
+    # 获取隧道 ID
+    local tunnel_id=$("$CLOUDFLARED_BIN" tunnel list 2>/dev/null | grep "$tunnel_name" | awk '{print $1}')
+
+    if [[ -z "$tunnel_id" ]]; then
+        print_error "无法找到隧道: $tunnel_name"
+        return 1
+    fi
+
+    # 更新 cloudflared 配置文件中的 ingress 规则
+    local config_file="${CLOUDFLARED_CONFIG_DIR}/config.yml"
+
+    if [[ ! -f "$config_file" ]]; then
+        print_error "配置文件不存在: $config_file"
+        return 1
+    fi
+
+    print_info "正在更新 cloudflared 配置..."
+
+    # 重新生成配置文件，将流量转发到新的节点端口
+    cat > "$config_file" <<EOF
+tunnel: ${tunnel_id}
+credentials-file: ${CLOUDFLARED_CONFIG_DIR}/${tunnel_id}.json
+
+ingress:
+  - hostname: ${tunnel_domain}
+    service: http://localhost:${selected_port}
+  - service: http_status:404
+EOF
+
     # 更新节点配置，添加隧道域名
     jq --arg port "$selected_port" \
        --arg domain "$tunnel_domain" \
@@ -729,13 +758,36 @@ bind_tunnel_to_node() {
        )' \
        "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
 
+    # 重启 cloudflared 服务使配置生效
+    local service_name="cloudflared-${tunnel_name}.service"
+
+    if systemctl is-active --quiet "$service_name"; then
+        print_info "正在重启 cloudflared 服务..."
+        systemctl restart "$service_name"
+
+        if [[ $? -eq 0 ]]; then
+            print_success "✅ cloudflared 服务已重启"
+        else
+            print_warning "cloudflared 服务重启失败，请手动重启: systemctl restart $service_name"
+        fi
+    else
+        print_warning "cloudflared 服务未运行，请手动启动: systemctl start $service_name"
+    fi
+
     print_success "✅ 隧道域名已关联到节点 (端口: $selected_port)"
     echo ""
     echo -e "${YELLOW}访问流程：${NC}"
-    echo -e "  用户 → ${GREEN}$tunnel_domain${NC} (Argo隧道) → 节点(端口:$selected_port)"
+    echo -e "  用户 → ${GREEN}$tunnel_domain${NC} (Argo隧道) → 本地端口:$selected_port (节点)"
+    echo ""
+    echo -e "${YELLOW}配置详情：${NC}"
+    echo -e "  • 隧道名称: $tunnel_name"
+    echo -e "  • 隧道 ID: $tunnel_id"
+    echo -e "  • 隧道域名: $tunnel_domain"
+    echo -e "  • 转发端口: $selected_port"
+    echo -e "  • 服务状态: $(systemctl is-active $service_name 2>/dev/null || echo 'unknown')"
     echo ""
     echo -e "${YELLOW}提示：${NC}"
-    echo -e "  • 用户将通过隧道域名访问此节点"
+    echo -e "  • cloudflared 已配置将 $tunnel_domain 的流量转发到本地端口 $selected_port"
     echo -e "  • 需要重新生成节点配置和分享链接"
 }
 
@@ -882,24 +934,104 @@ manage_tunnel_node_binding() {
                 return 1
             fi
 
-            # 绑定隧道到节点
-            jq --arg port "$selected_port" \
-               --arg domain "$selected_url" \
-               --arg tunnel_name "$selected_tunnel" \
-               --arg tunnel_type "argo_$selected_type" \
-               '(.nodes[] | select(.port == $port)) |= (
-                   . + {
-                       tunnel_domain: $domain,
-                       tunnel_name: $tunnel_name,
-                       tunnel_type: $tunnel_type
-                   }
-               )' \
-               "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
+            # 针对不同类型的隧道进行绑定
+            if [[ "$selected_type" == "dedicated" ]]; then
+                # 专用隧道：需要更新 cloudflared 配置并重启服务
+                echo ""
+                print_info "正在绑定专用隧道到节点..."
 
-            print_success "✅ 隧道已绑定到节点(端口:$selected_port)"
+                # 获取隧道 ID
+                local tunnel_id=$("$CLOUDFLARED_BIN" tunnel list 2>/dev/null | grep "$selected_tunnel" | awk '{print $1}')
+
+                if [[ -z "$tunnel_id" ]]; then
+                    print_error "无法找到隧道: $selected_tunnel"
+                    return 1
+                fi
+
+                # 更新 cloudflared 配置文件
+                local config_file="${CLOUDFLARED_CONFIG_DIR}/config.yml"
+
+                if [[ ! -f "$config_file" ]]; then
+                    print_error "配置文件不存在: $config_file"
+                    return 1
+                fi
+
+                print_info "正在更新 cloudflared 配置..."
+
+                # 重新生成配置文件
+                cat > "$config_file" <<EOF
+tunnel: ${tunnel_id}
+credentials-file: ${CLOUDFLARED_CONFIG_DIR}/${tunnel_id}.json
+
+ingress:
+  - hostname: ${selected_url}
+    service: http://localhost:${selected_port}
+  - service: http_status:404
+EOF
+
+                # 更新节点数据
+                jq --arg port "$selected_port" \
+                   --arg domain "$selected_url" \
+                   --arg tunnel_name "$selected_tunnel" \
+                   --arg tunnel_type "argo_dedicated" \
+                   '(.nodes[] | select(.port == $port)) |= (
+                       . + {
+                           tunnel_domain: $domain,
+                           tunnel_name: $tunnel_name,
+                           tunnel_type: $tunnel_type
+                       }
+                   )' \
+                   "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
+
+                # 重启 cloudflared 服务
+                local service_name="cloudflared-${selected_tunnel}.service"
+
+                if systemctl is-active --quiet "$service_name"; then
+                    print_info "正在重启 cloudflared 服务..."
+                    systemctl restart "$service_name"
+
+                    if [[ $? -eq 0 ]]; then
+                        print_success "✅ cloudflared 服务已重启"
+                    else
+                        print_warning "cloudflared 服务重启失败，请手动重启: systemctl restart $service_name"
+                    fi
+                else
+                    print_warning "cloudflared 服务未运行，请手动启动: systemctl start $service_name"
+                fi
+
+                print_success "✅ 专用隧道已绑定到节点(端口:$selected_port)"
+                echo ""
+                echo -e "${YELLOW}配置详情：${NC}"
+                echo -e "  • 隧道名称: $selected_tunnel"
+                echo -e "  • 隧道域名: $selected_url"
+                echo -e "  • 转发端口: $selected_port"
+                echo -e "  • 服务状态: $(systemctl is-active $service_name 2>/dev/null || echo 'unknown')"
+
+            else
+                # 临时隧道：只更新节点数据（临时隧道的端口转发在创建时已固定）
+                jq --arg port "$selected_port" \
+                   --arg domain "$selected_url" \
+                   --arg tunnel_name "$selected_tunnel" \
+                   --arg tunnel_type "argo_temp" \
+                   '(.nodes[] | select(.port == $port)) |= (
+                       . + {
+                           tunnel_domain: $domain,
+                           tunnel_name: $tunnel_name,
+                           tunnel_type: $tunnel_type
+                       }
+                   )' \
+                   "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
+
+                print_success "✅ 临时隧道已绑定到节点(端口:$selected_port)"
+                echo ""
+                echo -e "${YELLOW}注意：${NC}"
+                echo -e "  • 临时隧道创建时已指定转发端口"
+                echo -e "  • 请确认临时隧道的转发端口与节点端口 $selected_port 一致"
+            fi
+
             echo ""
             echo -e "${YELLOW}访问流程：${NC}"
-            echo -e "  用户 → ${GREEN}$selected_url${NC} ($selected_type隧道) → 节点端口($selected_port)"
+            echo -e "  用户 → ${GREEN}$selected_url${NC} ($selected_type隧道) → 本地端口:$selected_port (节点)"
             ;;
 
         2)

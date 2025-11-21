@@ -117,6 +117,7 @@ generate_singbox_config() {
             local transport=$(echo "$node" | jq -r '.transport // "tcp"')
             local security=$(echo "$node" | jq -r '.security // "none"')
             local warp_outbound=$(echo "$node" | jq -r '.warp_outbound // false')
+            local outbound_tag=$(echo "$node" | jq -r '.outbound_tag // ""')
             # 修复：不使用-r参数，保持extra为JSON格式
             local extra=$(echo "$node" | jq '.extra // {}')
 
@@ -215,6 +216,11 @@ generate_singbox_config() {
             # 如果节点启用了WARP出站，添加标记字段（用于路由规则过滤）
             if [[ "$warp_outbound" == "true" ]]; then
                 inbound=$(echo "$inbound" | jq '. + {warp_outbound: true}')
+            fi
+
+            # 如果节点绑定了出站规则，添加outbound_tag字段（用于路由规则过滤）
+            if [[ -n "$outbound_tag" && "$outbound_tag" != "null" ]]; then
+                inbound=$(echo "$inbound" | jq --arg tag "$outbound_tag" '. + {outbound_tag: $tag}')
             fi
 
             # 添加到inbounds列表
@@ -354,6 +360,13 @@ generate_singbox_config() {
                             outbound: "direct-out"
                         }
                     ] + (
+                        # 为绑定了 outbound_tag 的 inbound 添加路由规则
+                        ($inbounds | map(select(.outbound_tag != null and .outbound_tag != "")) | map({
+                            inbound: [.tag],
+                            action: "route",
+                            outbound: .outbound_tag
+                        }))
+                    ) + (
                         if $has_warp then
                             # 为启用 WARP 的 inbound 添加路由规则，直接路由到 endpoint
                             ($inbounds | map(select(.warp_outbound == true)) | map({
@@ -371,8 +384,8 @@ generate_singbox_config() {
             }
         }')
 
-    # 写入配置文件（移除临时的 warp_outbound 标记字段）
-    echo "$full_config" | jq 'del(.inbounds[].warp_outbound)' > "$config_file"
+    # 写入配置文件（移除临时的 warp_outbound 和 outbound_tag 标记字段）
+    echo "$full_config" | jq 'del(.inbounds[].warp_outbound) | del(.inbounds[].outbound_tag)' > "$config_file"
 
     if [[ $? -eq 0 ]]; then
         print_success "配置文件生成成功: $config_file"

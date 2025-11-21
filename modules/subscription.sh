@@ -300,7 +300,9 @@ resolve_subscription_host() {
     local tunnel_domain
     tunnel_domain=$(echo "$node_json" | jq -r '.tunnel_domain // ""')
     if [[ -n "$tunnel_domain" && "$tunnel_domain" != "null" ]]; then
-        host="$tunnel_domain"
+        # 从 URL 中提取纯域名（移除协议和端口）
+        # 示例: https://example.trycloudflare.com:443 -> example.trycloudflare.com
+        host=$(echo "$tunnel_domain" | sed -E 's|^https?://||' | sed -E 's|:[0-9]+$||')
     fi
 
     # 优先2: 从 extra 中提取 tls_domain
@@ -329,6 +331,38 @@ resolve_subscription_host() {
     fi
 
     echo "$host"
+}
+
+# 解析订阅端口（处理 Argo 隧道）
+resolve_subscription_port() {
+    local node_json=$1
+    local original_port
+    original_port=$(echo "$node_json" | jq -r '.port')
+
+    # 检查是否绑定了 Argo 隧道
+    local tunnel_domain
+    tunnel_domain=$(echo "$node_json" | jq -r '.tunnel_domain // ""')
+
+    if [[ -n "$tunnel_domain" && "$tunnel_domain" != "null" ]]; then
+        # Argo 隧道使用标准 HTTPS 端口
+        # 如果 URL 中包含端口，提取它；否则默认 443
+        if [[ "$tunnel_domain" =~ :([0-9]+)$ ]]; then
+            echo "${BASH_REMATCH[1]}"
+        else
+            # 根据协议判断端口
+            if [[ "$tunnel_domain" =~ ^https:// ]]; then
+                echo "443"
+            elif [[ "$tunnel_domain" =~ ^http:// ]]; then
+                echo "80"
+            else
+                # 无协议前缀，默认 HTTPS
+                echo "443"
+            fi
+        fi
+    else
+        # 未绑定隧道，使用原始端口
+        echo "$original_port"
+    fi
 }
 
 # URL 编码
@@ -383,7 +417,8 @@ generate_vless_reality_link_from_config() {
     local remark=$2
     local node_json=$3
 
-    local port=$(echo "$node_json" | jq -r '.port')
+    local port
+    port=$(resolve_subscription_port "$node_json")
     local extra=$(echo "$node_json" | jq -c '.extra // {}')
 
     # 从extra字段提取Reality参数
@@ -446,7 +481,8 @@ generate_vless_tls_link_from_config() {
     local remark=$2
     local node_json=$3
 
-    local port=$(echo "$node_json" | jq -r '.port')
+    local port
+    port=$(resolve_subscription_port "$node_json")
     local transport=$(echo "$node_json" | jq -r '.transport // "tcp"')
     local security=$(echo "$node_json" | jq -r '.security // "none"')
     local extra=$(echo "$node_json" | jq -c '.extra // {}')
@@ -491,7 +527,8 @@ generate_vless_plain_link_from_config() {
     local remark=$2
     local node_json=$3
 
-    local port=$(echo "$node_json" | jq -r '.port')
+    local port
+    port=$(resolve_subscription_port "$node_json")
     local transport=$(echo "$node_json" | jq -r '.transport // "tcp"')
     local extra=$(echo "$node_json" | jq -c '.extra // {}')
 
@@ -523,7 +560,8 @@ generate_vmess_link_from_config() {
     local remark=$2
     local node_json=$3
 
-    local port=$(echo "$node_json" | jq -r '.port')
+    local port
+    port=$(resolve_subscription_port "$node_json")
     local transport=$(echo "$node_json" | jq -r '.transport // "tcp"')
     local extra=$(echo "$node_json" | jq -c '.extra // {}')
 
@@ -569,7 +607,8 @@ generate_trojan_link_from_config() {
     local remark=$2
     local node_json=$3
 
-    local port=$(echo "$node_json" | jq -r '.port')
+    local port
+    port=$(resolve_subscription_port "$node_json")
     local transport=$(echo "$node_json" | jq -r '.transport // "tcp"')
     local extra=$(echo "$node_json" | jq -c '.extra // {}')
 
@@ -594,7 +633,8 @@ generate_ss_link_from_config() {
     local remark=$2
     local node_json=$3
 
-    local port=$(echo "$node_json" | jq -r '.port')
+    local port
+    port=$(resolve_subscription_port "$node_json")
     local extra=$(echo "$node_json" | jq -c '.extra // {}')
 
     # 从extra提取cipher
@@ -617,7 +657,8 @@ generate_hysteria2_link_from_config() {
     local remark=$2
     local node_json=$3
 
-    local port=$(echo "$node_json" | jq -r '.port')
+    local port
+    port=$(resolve_subscription_port "$node_json")
     local extra=$(echo "$node_json" | jq -c '.extra // {}')
 
     # 从extra提取参数
@@ -780,7 +821,8 @@ EOF
         ((processed_count++))
 
         local protocol=$(echo "$node" | jq -r '.protocol')
-        local port=$(echo "$node" | jq -r '.port')
+        local port
+        port=$(resolve_subscription_port "$node")
         local security=$(echo "$node" | jq -r '.security // "none"')
         local transport=$(echo "$node" | jq -r '.transport // "tcp"')
         local extra=$(echo "$node" | jq -r '.extra')
@@ -1278,7 +1320,8 @@ generate_singbox_subscription_config() {
         ((processed_count++))
 
         local protocol=$(echo "$node" | jq -r '.protocol')
-        local port=$(echo "$node" | jq -r '.port')
+        local port
+        port=$(resolve_subscription_port "$node")
         local security=$(echo "$node" | jq -r '.security // "none"')
         local transport=$(echo "$node" | jq -r '.transport // "tcp"')
         local extra=$(echo "$node" | jq -r '.extra')

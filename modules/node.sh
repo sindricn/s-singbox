@@ -3314,13 +3314,6 @@ quick_setup_argo_vless_ws() {
             ws_host: $ws_host
         }')
 
-    echo ""
-    echo "[调试 quick_setup_argo_vless_ws]" >&2
-    echo "  端口: $port" >&2
-    echo "  WS路径: $ws_path" >&2
-    echo "  extra_config: $(echo "$extra_config" | jq -c '.')" >&2
-    echo ""
-
     # 保存节点信息（security 为 none，不使用 TLS）
     save_node_info "vless" "$port" "ws" "none" "$extra_config" "vless-ws-$port"
     if [[ $? -ne 0 ]]; then

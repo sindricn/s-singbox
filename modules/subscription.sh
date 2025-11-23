@@ -567,9 +567,15 @@ generate_vless_plain_link_from_config() {
         share_link+="&path=$(urlencode "$ws_path")"
     fi
 
-    # 添加 Host 头（如果配置了）
-    if [[ "$transport" == "ws" && -n "$ws_host" && "$ws_host" != "null" ]]; then
-        share_link+="&host=$(urlencode "$ws_host")"
+    # 添加 Host 头
+    if [[ "$transport" == "ws" ]]; then
+        # 如果使用 Argo 隧道，Host 必须是 Argo 域名
+        if [[ "$security" == "tls" && -n "$tunnel_domain" && "$tunnel_domain" != "null" ]]; then
+            share_link+="&host=$(urlencode "$server_host")"
+        # 否则使用配置的伪装域名
+        elif [[ -n "$ws_host" && "$ws_host" != "null" ]]; then
+            share_link+="&host=$(urlencode "$ws_host")"
+        fi
     fi
 
     # 添加 gRPC service name

@@ -209,7 +209,7 @@ issue_cert_standalone() {
 install_cert() {
     local domain=$1
 
-    local cert_path="${CERT_DIR}/${domain}/fullchain.cer"
+    local cert_path="${CERT_DIR}/${domain}/fullchain.pem"
     local key_path="${CERT_DIR}/${domain}/${domain}.key"
 
     print_info "安装证书到: $CERT_DIR/$domain"
@@ -330,7 +330,7 @@ generate_self_signed_cert() {
     local cert_dir="${CERT_DIR}/${domain}"
     mkdir -p "$cert_dir"
 
-    local cert_path="${cert_dir}/fullchain.cer"
+    local cert_path="${cert_dir}/fullchain.pem"
     local key_path="${cert_dir}/${domain}.key"
 
     # 生成私钥和证书
@@ -365,7 +365,7 @@ generate_self_signed_cert() {
 show_cert_info() {
     local domain=$1
 
-    local cert_path="${CERT_DIR}/${domain}/fullchain.cer"
+    local cert_path="${CERT_DIR}/${domain}/fullchain.pem"
 
     if [[ ! -f "$cert_path" ]]; then
         print_error "证书不存在: $domain"
@@ -387,7 +387,7 @@ show_cert_info() {
 check_cert_expiry() {
     local domain=$1
 
-    local cert_path="${CERT_DIR}/${domain}/fullchain.cer"
+    local cert_path="${CERT_DIR}/${domain}/fullchain.pem"
 
     if [[ ! -f "$cert_path" ]]; then
         print_error "证书不存在: $domain"

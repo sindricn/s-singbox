@@ -407,11 +407,11 @@ add_certificate() {
 
         openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
             -keyout "${CERT_DIR}/${domain}.key" \
-            -out "${CERT_DIR}/${domain}.crt" \
+            -out "${CERT_DIR}/${domain}.pem" \
             -subj "/C=US/ST=State/L=City/O=Organization/CN=${domain}" \
             2>/dev/null
 
-        cert_file="${CERT_DIR}/${domain}.crt"
+        cert_file="${CERT_DIR}/${domain}.pem"
         key_file="${CERT_DIR}/${domain}.key"
 
         print_success "证书生成成功"
@@ -432,10 +432,10 @@ add_certificate() {
 
         # 复制到证书目录
         mkdir -p "$CERT_DIR"
-        cp "$cert_file" "${CERT_DIR}/${domain}.crt"
+        cp "$cert_file" "${CERT_DIR}/${domain}.pem"
         cp "$key_file" "${CERT_DIR}/${domain}.key"
 
-        cert_file="${CERT_DIR}/${domain}.crt"
+        cert_file="${CERT_DIR}/${domain}.pem"
         key_file="${CERT_DIR}/${domain}.key"
 
         print_success "证书导入成功"

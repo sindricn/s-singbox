@@ -733,7 +733,7 @@ add_vless_node() {
         else
             print_info "将使用自签名证书"
             generate_self_signed_cert "$tls_domain"
-            tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.cer"
+            tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.pem"
             tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
         fi
     fi
@@ -913,7 +913,7 @@ add_trojan_node() {
         read -p "请输入密钥路径: " tls_key
     else
         generate_self_signed_cert "$tls_domain"
-        tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.cer"
+        tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.pem"
         tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
     fi
 
@@ -2041,7 +2041,7 @@ add_hysteria2_node() {
         if declare -f generate_self_signed_cert &>/dev/null; then
             generate_self_signed_cert "$tls_domain"
         fi
-        tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.cer"
+        tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.pem"
         tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
     fi
 
@@ -2175,7 +2175,7 @@ add_tuic_node() {
         if declare -f generate_self_signed_cert &>/dev/null; then
             generate_self_signed_cert "$tls_domain"
         fi
-        tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.cer"
+        tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.pem"
         tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
     fi
 
@@ -2285,7 +2285,7 @@ add_naive_node() {
         if declare -f generate_self_signed_cert &>/dev/null; then
             generate_self_signed_cert "$tls_domain"
         fi
-        tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.cer"
+        tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.pem"
         tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
     fi
 
@@ -2430,7 +2430,7 @@ add_anytls_node() {
             if declare -f generate_self_signed_cert &>/dev/null; then
                 generate_self_signed_cert "$tls_domain"
             fi
-            tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.cer"
+            tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.pem"
             tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
         fi
     fi
@@ -2920,14 +2920,14 @@ quick_setup_hysteria2() {
     # 生成自签名证书（使用RSA 2048位）
     if ! openssl req -x509 -nodes -newkey rsa:2048 \
         -keyout "${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key" \
-        -out "${SINGBOX_DIR}/certs/${tls_domain}/fullchain.cer" \
+        -out "${SINGBOX_DIR}/certs/${tls_domain}/fullchain.pem" \
         -subj "/CN=$tls_domain" \
         -days 3650 &>/dev/null; then
         print_error "证书生成失败"
         return 1
     fi
 
-    local tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.cer"
+    local tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.pem"
     local tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
 
     # 验证证书文件
@@ -3340,14 +3340,14 @@ quick_setup_argo_vless_ws() {
 
     if ! openssl req -x509 -nodes -newkey rsa:2048 \
         -keyout "${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key" \
-        -out "${SINGBOX_DIR}/certs/${tls_domain}/fullchain.cer" \
+        -out "${SINGBOX_DIR}/certs/${tls_domain}/fullchain.pem" \
         -subj "/CN=$tls_domain" \
         -days 3650 &>/dev/null; then
         print_error "证书生成失败"
         return 1
     fi
 
-    local tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.cer"
+    local tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.pem"
     local tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
 
     print_success "证书生成完成"

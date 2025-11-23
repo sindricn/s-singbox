@@ -3380,9 +3380,8 @@ quick_setup_argo_vless_ws() {
     echo -e "${CYAN}节点信息：${NC}"
     echo -e "  本地端口: ${YELLOW}$port${NC}"
     echo -e "  协议: ${YELLOW}VLESS${NC}"
-    echo -e "  传输: ${YELLOW}WebSocket + TLS${NC}"
+    echo -e "  传输: ${YELLOW}WebSocket${NC}"
     echo -e "  WS路径: ${YELLOW}$ws_path${NC}"
-    echo -e "  TLS域名: ${YELLOW}$tls_domain${NC}"
     echo -e "  默认用户: ${YELLOW}admin${NC}"
     echo -e "  UUID: ${YELLOW}$admin_uuid${NC}"
 

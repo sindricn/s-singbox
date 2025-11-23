@@ -1561,23 +1561,8 @@ delete_single_node() {
     print_success "节点删除成功！"
 }
 
-# 生成自签名证书
-generate_self_signed_cert() {
-    local domain=$1
-    local cert_dir="${SINGBOX_DIR}/certs"
-
-    mkdir -p "$cert_dir"
-
-    print_info "生成自签名证书: $domain"
-
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-        -keyout "${cert_dir}/${domain}.key" \
-        -out "${cert_dir}/${domain}.crt" \
-        -subj "/C=US/ST=State/L=City/O=Organization/CN=${domain}" \
-        2>/dev/null
-
-    print_success "证书生成完成"
-}
+# 注意：generate_self_signed_cert 函数已在 cert.sh 模块中定义
+# 不要在此处重复定义，以避免覆盖 cert.sh 中的实现
 
 # 保存节点信息到数据库（新架构：只保存节点技术参数，不包含用户信息）
 save_node_info() {
@@ -2914,18 +2899,8 @@ quick_setup_hysteria2() {
     # 步骤 4/6: 生成自签名证书
     echo -e "${BLUE}步骤 4/6: 生成自签名证书${NC}"
 
-    # 确保证书目录存在
-    mkdir -p "${SINGBOX_DIR}/certs/${tls_domain}"
-
-    # 生成自签名证书（使用RSA 2048位）
-    if ! openssl req -x509 -nodes -newkey rsa:2048 \
-        -keyout "${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key" \
-        -out "${SINGBOX_DIR}/certs/${tls_domain}/fullchain.pem" \
-        -subj "/CN=$tls_domain" \
-        -days 3650 &>/dev/null; then
-        print_error "证书生成失败"
-        return 1
-    fi
+    # 生成自签名证书
+    generate_self_signed_cert "$tls_domain"
 
     local tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.pem"
     local tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
@@ -2935,8 +2910,6 @@ quick_setup_hysteria2() {
         print_error "证书文件不存在"
         return 1
     fi
-
-    print_success "证书生成完成"
     echo ""
 
     # 步骤 5/6: 配置速率限制和跳跃端口
@@ -3335,22 +3308,10 @@ quick_setup_argo_vless_ws() {
     echo ""
 
     # 生成自签名证书
-    print_info "正在生成自签名证书..."
-    mkdir -p "${SINGBOX_DIR}/certs/${tls_domain}"
-
-    if ! openssl req -x509 -nodes -newkey rsa:2048 \
-        -keyout "${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key" \
-        -out "${SINGBOX_DIR}/certs/${tls_domain}/fullchain.pem" \
-        -subj "/CN=$tls_domain" \
-        -days 3650 &>/dev/null; then
-        print_error "证书生成失败"
-        return 1
-    fi
+    generate_self_signed_cert "$tls_domain"
 
     local tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.pem"
     local tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
-
-    print_success "证书生成完成"
     echo ""
 
     # 步骤 4/5: Argo 隧道配置

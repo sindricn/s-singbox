@@ -194,7 +194,7 @@ check_certificates() {
     fi
 
     # 查找证书文件
-    local cert_files=$(find "$cert_dir" -name "*.crt" -o -name "*.pem" 2>/dev/null)
+    local cert_files=$(find "$cert_dir" -name "*.pem" 2>/dev/null)
 
     if [[ -z "$cert_files" ]]; then
         add_tip "$TIP_LEVEL_INFO" "证书" "未找到证书文件" "配置TLS证书提高安全性"

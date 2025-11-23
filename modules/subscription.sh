@@ -674,7 +674,7 @@ generate_hysteria2_link_from_config() {
         sni=$(basename "$(dirname "$tls_cert")")
         # 如果证书路径是旧格式 /path/domain.crt，则提取文件名
         if [[ "$sni" == "certs" || -z "$sni" ]]; then
-            sni=$(basename "$tls_cert" | sed -e 's/.crt$//' -e 's/.cer$//' -e 's/fullchain.//')
+            sni=$(basename "$tls_cert" | sed -e 's/.crt$//' -e 's/.cer$//' -e 's/.pem$//' -e 's/fullchain.//')
         fi
     fi
 

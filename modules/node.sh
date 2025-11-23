@@ -3188,15 +3188,81 @@ quick_setup_argo_vless_ws() {
     print_success "本地端口: $port"
     echo ""
 
-    # 步骤 2/3: WebSocket 路径配置
-    echo -e "${BLUE}步骤 2/3: WebSocket 路径配置${NC}"
+    # 步骤 2/4: WebSocket 路径配置
+    echo -e "${BLUE}步骤 2/4: WebSocket 路径配置${NC}"
     read -p "WebSocket 路径 [默认: /ws]: " ws_path
     ws_path=${ws_path:-/ws}
     print_success "WebSocket 路径: $ws_path"
     echo ""
 
-    # 步骤 3/3: Argo 隧道配置
-    echo -e "${BLUE}步骤 3/3: Argo 隧道配置${NC}"
+    # 步骤 3/4: Host 头伪装配置（自动优选）
+    echo -e "${BLUE}步骤 3/4: Host 头伪装配置${NC}"
+    echo -e "${YELLOW}Host 头伪装可以提高直连时的隐蔽性${NC}"
+    echo -e "${YELLOW}伪装域名选项：${NC}"
+    echo -e "  ${GREEN}1.${NC} 使用默认域名 (www.cloudflare.com)"
+    echo -e "  ${GREEN}2.${NC} 自动优选最佳域名（延迟测试）"
+    echo -e "  ${GREEN}3.${NC} 手动输入域名"
+    echo ""
+    read -p "请选择 [1-3，默认: 2]: " host_choice
+    host_choice=${host_choice:-2}
+
+    local ws_host=""
+    case $host_choice in
+        1)
+            ws_host="www.cloudflare.com"
+            print_info "使用默认域名: $ws_host"
+            ;;
+        2)
+            print_info "开始智能优选伪装域名..."
+            echo ""
+            local test_domains=(
+                www.cloudflare.com
+                cdn.jsdelivr.net
+                www.microsoft.com
+                www.apple.com
+                www.bing.com
+                www.mozilla.org
+                www.gstatic.com
+            )
+
+            local best_latency=9999
+            local best_domain="www.cloudflare.com"
+
+            for domain in "${test_domains[@]}"; do
+                local latency=$(ping -c 1 -W 1 "$domain" 2>/dev/null | grep 'time=' | awk -F'time=' '{print $2}' | awk '{print $1}' | cut -d'.' -f1)
+                if [[ -n "$latency" && "$latency" =~ ^[0-9]+$ ]]; then
+                    printf "  ${GREEN}✔${NC} %-30s ${CYAN}%4d ms${NC}\n" "$domain" "$latency"
+                    if [[ $latency -lt $best_latency ]]; then
+                        best_latency=$latency
+                        best_domain="$domain"
+                    fi
+                else
+                    printf "  ${RED}✘${NC} %-30s ${YELLOW}超时${NC}\n" "$domain"
+                fi
+            done
+
+            ws_host="$best_domain"
+            echo ""
+            print_success "优选域名: $ws_host (${best_latency}ms)"
+            ;;
+        3)
+            read -p "请输入自定义域名: " custom_domain
+            if [[ -n "$custom_domain" ]]; then
+                ws_host="$custom_domain"
+            else
+                ws_host="www.cloudflare.com"
+                print_warning "未输入域名，使用默认: $ws_host"
+            fi
+            ;;
+        *)
+            ws_host="www.cloudflare.com"
+            print_warning "无效选择，使用默认: $ws_host"
+            ;;
+    esac
+    echo ""
+
+    # 步骤 4/4: Argo 隧道配置
+    echo -e "${BLUE}步骤 4/4: Argo 隧道配置${NC}"
     echo -e "${YELLOW}Argo 隧道选项：${NC}"
     echo -e "  ${GREEN}1.${NC} 临时隧道（无需CF账号，域名会变化）"
     echo -e "  ${GREEN}2.${NC} 专用隧道（需要CF账号，固定域名）"
@@ -3239,11 +3305,13 @@ quick_setup_argo_vless_ws() {
     # 保存配置并创建节点
     print_info "保存配置并启动服务..."
 
-    # 构建 extra_config（仅包含 WebSocket 配置）
+    # 构建 extra_config（包含 WebSocket 配置和 Host 头）
     local extra_config=$(jq -n \
         --arg ws_path "$ws_path" \
+        --arg ws_host "$ws_host" \
         '{
-            ws_path: $ws_path
+            ws_path: $ws_path,
+            ws_host: $ws_host
         }')
 
     echo ""
@@ -3382,6 +3450,7 @@ quick_setup_argo_vless_ws() {
     echo -e "  协议: ${YELLOW}VLESS${NC}"
     echo -e "  传输: ${YELLOW}WebSocket${NC}"
     echo -e "  WS路径: ${YELLOW}$ws_path${NC}"
+    echo -e "  Host头: ${YELLOW}$ws_host${NC}"
     echo -e "  默认用户: ${YELLOW}admin${NC}"
     echo -e "  UUID: ${YELLOW}$admin_uuid${NC}"
 

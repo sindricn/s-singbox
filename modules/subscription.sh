@@ -532,19 +532,47 @@ generate_vless_plain_link_from_config() {
     local transport=$(echo "$node_json" | jq -r '.transport // "tcp"')
     local extra=$(echo "$node_json" | jq -c '.extra // {}')
 
+    # 检查是否有 Argo 隧道
+    local tunnel_domain=$(echo "$node_json" | jq -r '.tunnel_domain // ""')
+
     # 从extra提取参数
     local ws_path=$(echo "$extra" | jq -r '.ws_path // ""')
+    local ws_host=$(echo "$extra" | jq -r '.ws_host // ""')
     local grpc_service=$(echo "$extra" | jq -r '.grpc_service // ""')
 
     local server_host
-    server_host=$(resolve_subscription_host "$node_json")
+    local server_port
+    local security="none"
 
-    local share_link="vless://${uuid}@${server_host}:${port}?encryption=none&type=${transport}"
+    # 如果有 Argo 隧道，使用 Argo 域名和 TLS
+    if [[ -n "$tunnel_domain" && "$tunnel_domain" != "null" ]]; then
+        # 提取纯域名（去除 https:// 前缀）
+        server_host=$(echo "$tunnel_domain" | sed 's#^https://##' | sed 's#/$##')
+        server_port=443
+        security="tls"
+    else
+        server_host=$(resolve_subscription_host "$node_json")
+        server_port=$port
+    fi
 
+    local share_link="vless://${uuid}@${server_host}:${server_port}?encryption=none&security=${security}&type=${transport}"
+
+    # 添加 SNI（如果使用 TLS）
+    if [[ "$security" == "tls" ]]; then
+        share_link+="&sni=${server_host}"
+    fi
+
+    # 添加 WebSocket 路径
     if [[ "$transport" == "ws" && -n "$ws_path" ]]; then
         share_link+="&path=$(urlencode "$ws_path")"
     fi
 
+    # 添加 Host 头（如果配置了）
+    if [[ "$transport" == "ws" && -n "$ws_host" && "$ws_host" != "null" ]]; then
+        share_link+="&host=$(urlencode "$ws_host")"
+    fi
+
+    # 添加 gRPC service name
     if [[ "$transport" == "grpc" && -n "$grpc_service" ]]; then
         share_link+="&serviceName=$(urlencode "$grpc_service")"
     fi

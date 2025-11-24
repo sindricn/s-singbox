@@ -861,8 +861,22 @@ EOF
         local transport=$(echo "$node" | jq -r '.transport // "tcp"')
         local extra=$(echo "$node" | jq -r '.extra')
         local node_name_raw=$(echo "$node" | jq -r '.name // "未命名"')
-        local node_host=$(resolve_subscription_host "$node")
         local warp_outbound=$(echo "$node" | jq -r '.warp_outbound // false')
+
+        # 检查是否有 Argo 隧道
+        local tunnel_domain=$(echo "$node" | jq -r '.tunnel_domain // ""')
+        local node_host
+
+        # 如果有 Argo 隧道，使用 Argo 域名和 TLS
+        if [[ -n "$tunnel_domain" && "$tunnel_domain" != "null" ]]; then
+            # 提取纯域名（去除 https:// 前缀）
+            node_host=$(echo "$tunnel_domain" | sed 's#^https://##' | sed 's#/$##')
+            port=443
+            security="tls"
+        else
+            node_host=$(resolve_subscription_host "$node")
+        fi
+
         local node_name="${node_name_raw}-${username}"
         local safe_node_name=$(escape_yaml_string "$node_name")
 
@@ -919,6 +933,11 @@ EOF
                     # VLESS TLS
                     local tls_domain=$(echo "$extra" | jq -r '.tls_domain // ""')
                     local ws_path=$(echo "$extra" | jq -r '.ws_path // ""')
+                    local ws_host=$(echo "$extra" | jq -r '.ws_host // ""')
+
+                    # 确定 servername：优先使用 node_host (Argo域名), 其次 tls_domain
+                    local sni="${node_host}"
+                    [[ -z "$sni" && -n "$tls_domain" ]] && sni="$tls_domain"
 
                     node_config="  - name: \"${safe_node_name}\"
     type: vless
@@ -928,17 +947,27 @@ EOF
     udp: true
     tls: true
     skip-cert-verify: true"
-                    [[ -n "$tls_domain" ]] && node_config="${node_config}
-    servername: ${tls_domain}"
+                    [[ -n "$sni" ]] && node_config="${node_config}
+    servername: ${sni}"
                     if [[ "$transport" == "ws" && -n "$ws_path" ]]; then
+                        # 确定 Host 头：如果有 Argo 隧道用 node_host，否则用 ws_host
+                        local ws_host_header="${node_host}"
+                        if [[ -z "$tunnel_domain" || "$tunnel_domain" == "null" ]]; then
+                            [[ -n "$ws_host" ]] && ws_host_header="$ws_host"
+                        fi
+
                         node_config="${node_config}
     network: ws
     ws-opts:
       path: ${ws_path}"
+                        [[ -n "$ws_host_header" ]] && node_config="${node_config}
+      headers:
+        Host: ${ws_host_header}"
                     fi
                 else
                     # Plain VLESS (no TLS)
                     local ws_path=$(echo "$extra" | jq -r '.ws_path // ""')
+                    local ws_host=$(echo "$extra" | jq -r '.ws_host // ""')
 
                     node_config="  - name: \"${safe_node_name}\"
     type: vless
@@ -951,6 +980,10 @@ EOF
     network: ws
     ws-opts:
       path: ${ws_path}"
+                        # 添加 Host 头（如果有配置）
+                        [[ -n "$ws_host" ]] && node_config="${node_config}
+      headers:
+        Host: ${ws_host}"
                     fi
                 fi
                 ;;
@@ -958,6 +991,7 @@ EOF
                 local alter_id=$(echo "$extra" | jq -r '.alter_id // 0')
                 local cipher=$(echo "$extra" | jq -r '.cipher // "auto"')
                 local ws_path=$(echo "$extra" | jq -r '.ws_path // ""')
+                local ws_host=$(echo "$extra" | jq -r '.ws_host // ""')
 
                 # 验证 VMess cipher 是否被 Clash 支持
                 case "$cipher" in
@@ -984,6 +1018,15 @@ EOF
     network: ws
     ws-opts:
       path: ${ws_path}"
+                    # 添加 Host 头（如果有配置）
+                    # 如果有 Argo 隧道用 node_host，否则用 ws_host
+                    local vmess_host_header="${node_host}"
+                    if [[ -z "$tunnel_domain" || "$tunnel_domain" == "null" ]]; then
+                        [[ -n "$ws_host" ]] && vmess_host_header="$ws_host"
+                    fi
+                    [[ -n "$vmess_host_header" ]] && node_config="${node_config}
+      headers:
+        Host: ${vmess_host_header}"
                 fi
                 ;;
             trojan)
@@ -1360,8 +1403,21 @@ generate_singbox_subscription_config() {
         local transport=$(echo "$node" | jq -r '.transport // "tcp"')
         local extra=$(echo "$node" | jq -r '.extra')
         local node_name_raw=$(echo "$node" | jq -r '.name // "未命名"')
-        local node_host=$(resolve_subscription_host "$node")
         local warp_outbound=$(echo "$node" | jq -r '.warp_outbound // false')
+
+        # 检查是否有 Argo 隧道
+        local tunnel_domain=$(echo "$node" | jq -r '.tunnel_domain // ""')
+        local node_host
+
+        # 如果有 Argo 隧道，使用 Argo 域名和 TLS
+        if [[ -n "$tunnel_domain" && "$tunnel_domain" != "null" ]]; then
+            # 提取纯域名（去除 https:// 前缀）
+            node_host=$(echo "$tunnel_domain" | sed 's#^https://##' | sed 's#/$##')
+            port=443
+            security="tls"
+        else
+            node_host=$(resolve_subscription_host "$node")
+        fi
 
         # 获取用户信息用于节点名称
         local user=$(jq -r ".users[] | select(.id == \"$user_id\")" "$USERS_FILE" 2>/dev/null)
@@ -1433,31 +1489,73 @@ generate_singbox_subscription_config() {
                     # VLESS TLS
                     local tls_domain=$(echo "$extra" | jq -r '.tls_domain // ""')
                     local ws_path=$(echo "$extra" | jq -r '.ws_path // ""')
+                    local ws_host=$(echo "$extra" | jq -r '.ws_host // ""')
 
                     if [[ "$transport" == "ws" && -n "$ws_path" ]]; then
-                        outbound_config=$(jq -n \
-                            --arg tag "$node_tag" \
-                            --arg server "$node_host" \
-                            --argjson port "$port" \
-                            --arg uuid "$user_id" \
-                            --arg sni "$tls_domain" \
-                            --arg path "$ws_path" \
-                            '{
-                                type: "vless",
-                                tag: $tag,
-                                server: $server,
-                                server_port: $port,
-                                uuid: $uuid,
-                                tls: {
-                                    enabled: true,
-                                    server_name: $sni,
-                                    insecure: true
-                                },
-                                transport: {
-                                    type: "ws",
-                                    path: $path
-                                }
-                            }')
+                        # 确定 SNI：优先使用 node_host (Argo域名), 其次 tls_domain
+                        local sni="${node_host}"
+                        [[ -z "$sni" && -n "$tls_domain" ]] && sni="$tls_domain"
+
+                        # 确定 Host 头：如果有 Argo 隧道用 node_host，否则用 ws_host
+                        local ws_host_header="${node_host}"
+                        if [[ -z "$tunnel_domain" || "$tunnel_domain" == "null" ]]; then
+                            [[ -n "$ws_host" ]] && ws_host_header="$ws_host"
+                        fi
+
+                        # 构建基础配置
+                        if [[ -n "$ws_host_header" ]]; then
+                            outbound_config=$(jq -n \
+                                --arg tag "$node_tag" \
+                                --arg server "$node_host" \
+                                --argjson port "$port" \
+                                --arg uuid "$user_id" \
+                                --arg sni "$sni" \
+                                --arg path "$ws_path" \
+                                --arg host "$ws_host_header" \
+                                '{
+                                    type: "vless",
+                                    tag: $tag,
+                                    server: $server,
+                                    server_port: $port,
+                                    uuid: $uuid,
+                                    tls: {
+                                        enabled: true,
+                                        server_name: $sni,
+                                        insecure: true
+                                    },
+                                    transport: {
+                                        type: "ws",
+                                        path: $path,
+                                        headers: {
+                                            Host: $host
+                                        }
+                                    }
+                                }')
+                        else
+                            outbound_config=$(jq -n \
+                                --arg tag "$node_tag" \
+                                --arg server "$node_host" \
+                                --argjson port "$port" \
+                                --arg uuid "$user_id" \
+                                --arg sni "$sni" \
+                                --arg path "$ws_path" \
+                                '{
+                                    type: "vless",
+                                    tag: $tag,
+                                    server: $server,
+                                    server_port: $port,
+                                    uuid: $uuid,
+                                    tls: {
+                                        enabled: true,
+                                        server_name: $sni,
+                                        insecure: true
+                                    },
+                                    transport: {
+                                        type: "ws",
+                                        path: $path
+                                    }
+                                }')
+                        fi
                     else
                         outbound_config=$(jq -n \
                             --arg tag "$node_tag" \
@@ -1498,29 +1596,64 @@ generate_singbox_subscription_config() {
                 local alter_id=$(echo "$extra" | jq -r '.alter_id // 0')
                 local cipher=$(echo "$extra" | jq -r '.cipher // "auto"')
                 local ws_path=$(echo "$extra" | jq -r '.ws_path // ""')
+                local ws_host=$(echo "$extra" | jq -r '.ws_host // ""')
 
                 if [[ "$transport" == "ws" && -n "$ws_path" ]]; then
-                    outbound_config=$(jq -n \
-                        --arg tag "$node_tag" \
-                        --arg server "$node_host" \
-                        --argjson port "$port" \
-                        --arg uuid "$user_id" \
-                        --argjson alter_id "$alter_id" \
-                        --arg cipher "$cipher" \
-                        --arg path "$ws_path" \
-                        '{
-                            type: "vmess",
-                            tag: $tag,
-                            server: $server,
-                            server_port: $port,
-                            uuid: $uuid,
-                            alter_id: $alter_id,
-                            security: $cipher,
-                            transport: {
-                                type: "ws",
-                                path: $path
-                            }
+                    # 确定 Host 头：如果有 Argo 隧道用 node_host，否则用 ws_host
+                    local vmess_host_header="${node_host}"
+                    if [[ -z "$tunnel_domain" || "$tunnel_domain" == "null" ]]; then
+                        [[ -n "$ws_host" ]] && vmess_host_header="$ws_host"
+                    fi
+
+                    if [[ -n "$vmess_host_header" ]]; then
+                        outbound_config=$(jq -n \
+                            --arg tag "$node_tag" \
+                            --arg server "$node_host" \
+                            --argjson port "$port" \
+                            --arg uuid "$user_id" \
+                            --argjson alter_id "$alter_id" \
+                            --arg cipher "$cipher" \
+                            --arg path "$ws_path" \
+                            --arg host "$vmess_host_header" \
+                            '{
+                                type: "vmess",
+                                tag: $tag,
+                                server: $server,
+                                server_port: $port,
+                                uuid: $uuid,
+                                alter_id: $alter_id,
+                                security: $cipher,
+                                transport: {
+                                    type: "ws",
+                                    path: $path,
+                                    headers: {
+                                        Host: $host
+                                    }
+                                }
+                            }')
+                    else
+                        outbound_config=$(jq -n \
+                            --arg tag "$node_tag" \
+                            --arg server "$node_host" \
+                            --argjson port "$port" \
+                            --arg uuid "$user_id" \
+                            --argjson alter_id "$alter_id" \
+                            --arg cipher "$cipher" \
+                            --arg path "$ws_path" \
+                            '{
+                                type: "vmess",
+                                tag: $tag,
+                                server: $server,
+                                server_port: $port,
+                                uuid: $uuid,
+                                alter_id: $alter_id,
+                                security: $cipher,
+                                transport: {
+                                    type: "ws",
+                                    path: $path
+                                }
                         }')
+                    fi
                 else
                     outbound_config=$(jq -n \
                         --arg tag "$node_tag" \

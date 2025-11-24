@@ -481,16 +481,36 @@ create_dedicated_argo_tunnel() {
     # 第一步：登录 Cloudflare
     print_info "第一步：登录 Cloudflare 账号"
     echo ""
-    print_warning "将打开浏览器进行授权，请完成登录"
-    read -p "按 Enter 继续..."
-
-    if ! "$CLOUDFLARED_BIN" tunnel login; then
-        print_error "Cloudflare 登录失败"
-        return 1
-    fi
-
-    print_success "✅ Cloudflare 登录成功"
+    print_warning "将打开浏览器进行授权，请完成登录后返回终端"
     echo ""
+    read -p "按 Enter 开始登录..."
+    echo ""
+
+    local login_attempts=0
+    local max_attempts=3
+    while [[ $login_attempts -lt $max_attempts ]]; do
+        if "$CLOUDFLARED_BIN" tunnel login; then
+            print_success "✅ Cloudflare 登录成功"
+            echo ""
+            break
+        else
+            ((login_attempts++))
+            if [[ $login_attempts -lt $max_attempts ]]; then
+                print_error "Cloudflare 登录失败（尝试 $login_attempts/$max_attempts）"
+                echo ""
+                read -p "是否重试？[Y/n]: " retry
+                retry=${retry:-Y}
+                if [[ ! "$retry" =~ ^[Yy]$ ]]; then
+                    print_error "已取消创建隧道"
+                    return 1
+                fi
+                echo ""
+            else
+                print_error "Cloudflare 登录失败，已达到最大尝试次数"
+                return 1
+            fi
+        fi
+    done
 
     # 第二步：创建隧道
     read -p "请输入隧道名称 [例如: my-tunnel]: " tunnel_name
@@ -670,6 +690,9 @@ EOF
             echo -e "  用户 → ${GREEN}$tunnel_domain${NC} (Argo隧道) → 本地服务(端口:$local_port)"
         fi
     fi
+
+    echo ""
+    read -p "按 Enter 返回菜单..."
 }
 
 # 将隧道域名关联到现有节点

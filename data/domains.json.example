@@ -1,0 +1,19 @@
+{
+  "domains": [
+    {
+      "domain": "example.com",
+      "purpose": "tls",
+      "certificate_path": "/usr/local/singbox/certs/example.com.crt",
+      "key_path": "/usr/local/singbox/certs/example.com.key",
+      "associated_nodes": ["trojan-443", "hysteria2-8443"],
+      "auto_renew": true,
+      "created_at": "2024-01-01T00:00:00Z"
+    },
+    {
+      "domain": "cdn.example.com",
+      "purpose": "sni",
+      "associated_nodes": ["trojan-443"],
+      "created_at": "2024-01-01T00:00:00Z"
+    }
+  ]
+}

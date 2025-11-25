@@ -1,0 +1,8 @@
+{
+  "type": "shadowsocks",
+  "tag": "",
+  "listen": "0.0.0.0",
+  "listen_port": 0,
+  "method": "aes-128-gcm",
+  "users": []
+}

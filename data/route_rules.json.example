@@ -1,0 +1,30 @@
+{
+  "rules": [
+    {
+      "type": "geosite",
+      "code": "cn",
+      "outbound": "direct"
+    },
+    {
+      "type": "geoip",
+      "code": "cn",
+      "outbound": "direct"
+    },
+    {
+      "type": "domain",
+      "pattern": "*.cn",
+      "outbound": "direct"
+    },
+    {
+      "type": "ip",
+      "cidr": "192.168.0.0/16",
+      "outbound": "direct"
+    },
+    {
+      "type": "protocol",
+      "protocol": "dns",
+      "outbound": "dns-out"
+    }
+  ],
+  "final": "direct"
+}

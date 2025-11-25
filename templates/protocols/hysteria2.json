@@ -1,0 +1,17 @@
+{
+  "type": "hysteria2",
+  "tag": "",
+  "listen": "0.0.0.0",
+  "listen_port": 0,
+  "users": [],
+  "tls": {
+    "enabled": true,
+    "server_name": "",
+    "certificate_path": "",
+    "key_path": ""
+  },
+  "obfs": {
+    "type": "salamander",
+    "password": ""
+  }
+}

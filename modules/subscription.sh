@@ -3514,11 +3514,10 @@ menu_subscription() {
 
         print_section_start
         print_menu_item "1" "生成订阅链接"
-        print_menu_item "2" "查看单个节点链接"
-        print_menu_item "3" "查看所有订阅"
-        print_menu_item "4" "查看用户订阅"
-        print_menu_item "5" "更新订阅"
-        print_menu_item "6" "删除订阅"
+        print_menu_item "2" "查看节点链接"
+        print_menu_item "3" "查看订阅链接"
+        print_menu_item "4" "更新订阅"
+        print_menu_item "5" "删除订阅"
         print_section_end
 
         print_nav_options "false" "true"
@@ -3534,23 +3533,21 @@ menu_subscription() {
                 read -p "按 Enter 键继续..."
                 ;;
             2)
-                show_node_share_link
+                # 查看节点链接 - 支持查看单个或所有
+                view_node_links_menu
                 read -p "按 Enter 键继续..."
                 ;;
             3)
-                list_subscriptions
+                # 查看订阅链接 - 支持按用户或查看所有
+                view_subscription_links_menu
                 read -p "按 Enter 键继续..."
                 ;;
             4)
-                show_user_subscriptions
-                read -p "按 Enter 键继续..."
-                ;;
-            5)
                 update_subscription_menu
                 [[ $? -eq 98 ]] && return
                 read -p "按 Enter 键继续..."
                 ;;
-            6)
+            5)
                 delete_subscription_menu
                 [[ $? -eq 98 ]] && return
                 read -p "按 Enter 键继续..."
@@ -4090,6 +4087,127 @@ delete_subscription_menu() {
 
             echo ""
             print_success "已删除所有 $sub_count 个订阅"
+            ;;
+        *)
+            print_error "无效选择"
+            return 1
+            ;;
+    esac
+}
+
+# 查看节点链接菜单 - 支持查看单个或所有节点
+view_node_links_menu() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║           查看节点链接               ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    echo -e "${YELLOW}请选择查看方式：${NC}"
+    echo -e "${GREEN}1.${NC} 查看单个节点链接"
+    echo -e "${GREEN}2.${NC} 查看所有节点链接"
+    echo ""
+
+    read -p "请选择 (0返回): " view_choice
+
+    case $view_choice in
+        1)
+            # 查看单个节点链接 (调用原有函数)
+            show_node_share_link
+            ;;
+        2)
+            # 查看所有节点链接
+            show_all_node_links
+            ;;
+        0|"")
+            return 0
+            ;;
+        *)
+            print_error "无效选择"
+            return 1
+            ;;
+    esac
+}
+
+# 查看所有节点链接
+show_all_node_links() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║         所有节点链接                 ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    if [[ ! -f "$NODES_FILE" ]]; then
+        print_error "暂无节点"
+        return 1
+    fi
+
+    local node_count=$(jq -r '.nodes | length' "$NODES_FILE" 2>/dev/null)
+    if [[ "$node_count" -eq 0 ]]; then
+        print_error "暂无节点"
+        return 1
+    fi
+
+    echo -e "${YELLOW}共有 $node_count 个节点：${NC}"
+    echo ""
+
+    local index=1
+    while IFS= read -r node; do
+        if [[ -z "$node" || "$node" == "null" ]]; then
+            continue
+        fi
+
+        local port=$(echo "$node" | jq -r '.port')
+        local protocol=$(echo "$node" | jq -r '.protocol // "未知"')
+        local transport=$(echo "$node" | jq -r '.transport // "N/A"')
+
+        echo -e "${CYAN}═══════════════════════════════════════${NC}"
+        echo -e "${GREEN}[节点 $index]${NC} 端口: ${YELLOW}$port${NC}  协议: ${YELLOW}$protocol${NC}  传输: ${YELLOW}$transport${NC}"
+        echo ""
+
+        # 获取该节点的admin用户
+        local admin_user=$(get_admin_user_for_node "$port")
+        if [[ -n "$admin_user" && "$admin_user" != "null" ]]; then
+            local admin_uuid=$(echo "$admin_user" | jq -r '.uuid')
+            local admin_username=$(echo "$admin_user" | jq -r '.username // "admin"')
+
+            # 生成分享链接
+            generate_and_show_node_link "$port" "$admin_uuid" "$admin_username"
+        else
+            echo -e "  ${YELLOW}该节点暂无绑定用户${NC}"
+        fi
+
+        echo ""
+        ((index++))
+    done < <(jq -c '.nodes[]' "$NODES_FILE" 2>/dev/null)
+}
+
+# 查看订阅链接菜单 - 支持按用户或查看所有
+view_subscription_links_menu() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║           查看订阅链接               ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    echo -e "${YELLOW}请选择查看方式：${NC}"
+    echo -e "${GREEN}1.${NC} 按用户查看订阅"
+    echo -e "${GREEN}2.${NC} 查看所有订阅"
+    echo ""
+
+    read -p "请选择 (0返回): " view_choice
+
+    case $view_choice in
+        1)
+            # 按用户查看订阅 (调用原有函数)
+            show_user_subscriptions
+            ;;
+        2)
+            # 查看所有订阅 (调用原有函数)
+            list_subscriptions
+            ;;
+        0|"")
+            return 0
             ;;
         *)
             print_error "无效选择"

@@ -437,9 +437,8 @@ show_node_menu() {
     print_divider
     print_menu_item "1" "添加节点"
     print_menu_item "2" "删除节点"
-    print_menu_item "3" "列出节点"
-    print_menu_item "4" "查看节点详情"
-    print_menu_item "5" "修改节点配置"
+    print_menu_item "3" "查看节点"
+    print_menu_item "4" "修改节点配置"
     print_section_end
     print_nav_options "false" "true"
 }
@@ -563,12 +562,12 @@ handle_node_menu() {
                 [[ $? -eq 98 ]] && return  # 传播返回主菜单
                 ;;
             2) delete_node; wait_for_input ;;
-            3) list_nodes; wait_for_input ;;
-            4)
+            3)
+                # 合并列出节点和查看节点详情
                 list_nodes true
                 echo ""
-                read -p "请输入要查看的节点序号 (0返回): " node_idx
-                if [[ "$node_idx" != "0" && -n "$node_idx" ]]; then
+                read -p "请输入要查看的节点序号 (直接按Enter返回): " node_idx
+                if [[ -n "$node_idx" && "$node_idx" != "0" ]]; then
                     local port=$(get_node_port_by_index "$node_idx")
                     if [[ -n "$port" && "$port" != "null" ]]; then
                         show_node_detail "$port"
@@ -578,7 +577,7 @@ handle_node_menu() {
                 fi
                 wait_for_input
                 ;;
-            5) modify_node_config; wait_for_input ;;
+            4) modify_node_config; wait_for_input ;;
             *)
                 print_error "无效选择"
                 sleep 1

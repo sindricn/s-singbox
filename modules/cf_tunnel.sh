@@ -2434,10 +2434,9 @@ menu_argo_tunnel() {
         echo -e "${YELLOW}━━━━━━━ 系统管理 ━━━━━━━${NC}"
         echo -e "${GREEN}7.${NC}  管理隧道-节点绑定"
         echo -e "${GREEN}8.${NC}  查看服务日志"
-        echo -e "${GREEN}9.${NC}  重启 cloudflared 服务"
-        echo -e "${GREEN}10.${NC} 诊断连接问题"
-        echo -e "${GREEN}11.${NC} 安装 cloudflared"
-        echo -e "${GREEN}12.${NC} 卸载 cloudflared"
+        echo -e "${GREEN}9.${NC}  重启 cloudflared"
+        echo -e "${GREEN}10.${NC} 安装 cloudflared"
+        echo -e "${GREEN}11.${NC} 卸载 cloudflared"
         echo ""
 
         print_nav_options "true" "true"
@@ -2458,9 +2457,8 @@ menu_argo_tunnel() {
             7) manage_tunnel_node_binding; read -p "按 Enter 继续..." ;;
             8) view_cloudflared_logs ;;
             9) restart_cloudflared_service; read -p "按 Enter 继续..." ;;
-            10) diagnose_tunnel_connection; read -p "按 Enter 继续..." ;;
-            11) install_cloudflared; read -p "按 Enter 继续..." ;;
-            12) uninstall_cloudflared; read -p "按 Enter 继续..." ;;
+            10) install_cloudflared; read -p "按 Enter 继续..." ;;
+            11) uninstall_cloudflared; read -p "按 Enter 继续..." ;;
             *) print_error "无效选择"; sleep 1 ;;
         esac
     done

@@ -1,10 +1,15 @@
 # S-Singbox
 
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Shell](https://img.shields.io/badge/shell-bash-green.svg)](https://www.gnu.org/software/bash/)
+[![sing-box](https://img.shields.io/badge/sing--box-compatible-orange.svg)](https://sing-box.sagernet.org/)
+[![Version](https://img.shields.io/badge/version-V1.0.0-brightgreen.svg)](https://github.com/sindricn/s-singbox)
+
 基于 sing-box 的开源代理服务管理脚本，提供完整的协议支持和用户管理能力。
 
 ## 🎯 核心特性
 
-支持**"一键搭建高性能代理节点，无需域名和证书"**。主要功能包括：
+**"一键搭建高性能代理节点，无需域名和证书"**
 
 ### 📡 协议支持
 
@@ -55,27 +60,6 @@
 - **效果测试** - 延迟、丢包率、吞吐量对比测试
 - **智能优化** - 自动优化网络参数
 
-#### Reality 伪装域名
-- **智能优选** - 自动测试知名网站延迟
-- **自定义域名** - 支持添加自定义伪装域名
-- **DNS 测试** - 验证域名解析可用性
-- **批量测试** - 多域名并发测试
-
-### 🛡️ 安全特性
-
-- **Reality 支持** - 无需证书的终极伪装方案
-- **防火墙自动化** - 自动配置 iptables/nftables 规则
-- **端口跳跃** - 随机端口映射，增强安全性
-- **输入验证** - 严格的参数校验，防止注入攻击
-- **TLS 证书** - 自动申请和续期（acme.sh）
-
-### 🎨 用户界面
-
-- **统一菜单格式** - 所有子菜单采用一致的显示样式
-- **智能导航系统** - 'b' 返回上级，'m' 返回主菜单，'0' 退出
-- **快捷键支持** - 高效的键盘操作体验
-- **颜色区分** - 清晰的视觉提示和状态标识
-- **进度提示** - 操作过程实时反馈
 
 ## 🚀 快速开始
 
@@ -101,7 +85,7 @@ s-singbox
 
 # 或使用别名
 singbox-manager
-
+```
 
 
 ### 系统要求

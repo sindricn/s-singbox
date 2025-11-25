@@ -438,7 +438,7 @@ show_node_menu() {
     print_menu_item "1" "添加节点"
     print_menu_item "2" "删除节点"
     print_menu_item "3" "查看节点"
-    print_menu_item "4" "修改节点配置"
+    print_menu_item "4" "修改节点"
     print_section_end
     print_nav_options "false" "true"
 }

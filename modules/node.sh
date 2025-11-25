@@ -648,16 +648,6 @@ generate_vless_reality_share() {
     local public_key=$5
     local short_id=$6
 
-    # 调试输出
-    echo ""
-    echo "  UUID: $uuid"
-    echo "  Email: $email"
-    echo "  端口: $port"
-    echo "  SNI: $sni"
-    echo "  公钥: $public_key"
-    echo "  ShortID: $short_id"
-    echo ""
-
     # 获取服务器 IP
     local server_ip=$(curl -s ip.sb 2>/dev/null || echo "YOUR_SERVER_IP")
 

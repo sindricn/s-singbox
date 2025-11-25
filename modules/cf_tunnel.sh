@@ -1462,6 +1462,8 @@ delete_dedicated_argo_tunnel() {
     fi
 
     # 列出隧道
+    echo -e "${YELLOW}当前隧道列表：${NC}"
+    echo ""
     "$CLOUDFLARED_BIN" tunnel list
     echo ""
 
@@ -1471,20 +1473,168 @@ delete_dedicated_argo_tunnel() {
         return 1
     fi
 
-    # 停止并禁用服务
-    local service_name="cloudflared-${tunnel_name}.service"
-    if systemctl is-active --quiet "$service_name"; then
-        systemctl stop "$service_name"
-        systemctl disable "$service_name"
-        rm -f "/etc/systemd/system/$service_name"
-        systemctl daemon-reload
+    # 获取隧道ID
+    local tunnel_id=$("$CLOUDFLARED_BIN" tunnel list 2>/dev/null | grep "$tunnel_name" | awk '{print $1}')
+
+    # 确认删除
+    echo ""
+    print_warning "即将删除隧道: $tunnel_name"
+    echo ""
+    read -p "确认删除？此操作不可恢复 [y/N]: " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        print_info "已取消删除"
+        return 0
     fi
 
-    # 删除隧道
-    if "$CLOUDFLARED_BIN" tunnel delete "$tunnel_name"; then
-        print_success "隧道已删除: $tunnel_name"
+    echo ""
+    print_info "正在删除隧道: $tunnel_name"
+    echo ""
+
+    # 1. 停止并禁用 systemd 服务
+    local service_name="cloudflared-${tunnel_name}.service"
+    local service_file="/etc/systemd/system/${service_name}"
+
+    if [[ -f "$service_file" ]]; then
+        print_info "步骤 1/5: 停止并禁用服务..."
+        systemctl stop "$service_name" 2>/dev/null
+        systemctl disable "$service_name" 2>/dev/null
+        rm -f "$service_file"
+        systemctl daemon-reload
+        print_success "✅ 服务已停止并删除"
     else
-        print_error "删除失败"
+        print_info "步骤 1/5: 未找到服务文件，跳过"
+    fi
+    echo ""
+
+    # 2. 删除配置文件
+    local config_file="${CLOUDFLARED_CONFIG_DIR}/config.yml"
+    if [[ -f "$config_file" ]]; then
+        print_info "步骤 2/5: 删除配置文件..."
+        rm -f "$config_file"
+        print_success "✅ 配置文件已删除"
+    else
+        print_info "步骤 2/5: 未找到配置文件，跳过"
+    fi
+    echo ""
+
+    # 3. 删除隧道凭证文件
+    if [[ -n "$tunnel_id" ]]; then
+        local creds_file="${CLOUDFLARED_CONFIG_DIR}/${tunnel_id}.json"
+        if [[ -f "$creds_file" ]]; then
+            print_info "步骤 3/5: 删除隧道凭证..."
+            rm -f "$creds_file"
+            print_success "✅ 凭证文件已删除"
+        else
+            print_info "步骤 3/5: 未找到凭证文件，跳过"
+        fi
+    else
+        print_info "步骤 3/5: 无法获取隧道ID，跳过凭证删除"
+    fi
+    echo ""
+
+    # 4. 从节点配置中移除隧道绑定
+    local nodes_file="${DATA_DIR}/nodes.json"
+    if [[ -f "$nodes_file" ]]; then
+        print_info "步骤 4/5: 解除节点绑定..."
+        local bound_nodes=$(jq -r ".nodes[] | select(.tunnel_name == \"$tunnel_name\") | .port" "$nodes_file" 2>/dev/null)
+
+        if [[ -n "$bound_nodes" ]]; then
+            # 移除隧道相关字段
+            if jq "(.nodes[] | select(.tunnel_name == \"$tunnel_name\")) |= (del(.tunnel_name, .tunnel_domain, .tunnel_type))" \
+                "$nodes_file" > "${nodes_file}.tmp"; then
+                mv "${nodes_file}.tmp" "$nodes_file"
+                print_success "✅ 已解除节点绑定"
+            else
+                print_warning "⚠ 解除节点绑定失败"
+                rm -f "${nodes_file}.tmp"
+            fi
+        else
+            print_info "   未找到绑定的节点"
+        fi
+    else
+        print_info "步骤 4/5: 节点配置文件不存在，跳过"
+    fi
+    echo ""
+
+    # 5. 从 Cloudflare 删除隧道
+    print_info "步骤 5/5: 从 Cloudflare 删除隧道..."
+    if "$CLOUDFLARED_BIN" tunnel delete "$tunnel_name" 2>&1; then
+        print_success "✅ 隧道已从 Cloudflare 删除"
+    else
+        print_warning "⚠ 从 Cloudflare 删除失败（隧道可能已不存在）"
+    fi
+
+    echo ""
+    print_success "✅ 隧道 '$tunnel_name' 删除完成！"
+}
+
+# 取消 Cloudflare 授权
+revoke_cloudflared_auth() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║     取消 Cloudflare 授权            ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    if [[ ! -f "$CLOUDFLARED_BIN" ]]; then
+        print_error "cloudflared 未安装"
+        return 1
+    fi
+
+    local cert_file="${CLOUDFLARED_CONFIG_DIR}/cert.pem"
+
+    # 检查授权状态
+    if [[ ! -f "$cert_file" ]]; then
+        print_info "当前未授权 Cloudflare 账号"
+        echo ""
+        print_info "如需授权，请选择 '创建专用隧道' 进行登录"
+        return 0
+    fi
+
+    echo -e "${YELLOW}当前授权状态：${NC}"
+    echo -e "  凭证文件: ${GREEN}已存在${NC}"
+    echo -e "  文件路径: $cert_file"
+    echo ""
+
+    # 检查是否有正在使用的专用隧道
+    local active_tunnels=$("$CLOUDFLARED_BIN" tunnel list 2>/dev/null | tail -n +2 | wc -l)
+
+    if [[ "$active_tunnels" -gt 0 ]]; then
+        print_warning "检测到 $active_tunnels 个专用隧道"
+        echo ""
+        echo -e "${YELLOW}注意事项：${NC}"
+        echo "  1. 取消授权将导致所有专用隧道无法管理"
+        echo "  2. 建议先删除所有专用隧道再取消授权"
+        echo "  3. 现有隧道服务仍会继续运行（使用本地凭证）"
+        echo ""
+
+        "$CLOUDFLARED_BIN" tunnel list
+        echo ""
+    fi
+
+    print_warning "即将删除 Cloudflare 授权凭证"
+    echo ""
+    read -p "确认取消授权？[y/N]: " confirm
+
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        print_info "已取消操作"
+        return 0
+    fi
+
+    echo ""
+    print_info "正在删除授权凭证..."
+
+    if rm -f "$cert_file"; then
+        print_success "✅ Cloudflare 授权已取消"
+        echo ""
+        echo -e "${CYAN}说明：${NC}"
+        echo "  • 已删除授权凭证文件"
+        echo "  • 无法再创建或管理专用隧道"
+        echo "  • 现有隧道服务不受影响（使用本地凭证）"
+        echo "  • 如需重新授权，请再次执行 '创建专用隧道'"
+    else
+        print_error "删除授权凭证失败"
+        return 1
     fi
 }
 
@@ -2430,13 +2580,14 @@ menu_argo_tunnel() {
         echo -e "${GREEN}4.${NC}  创建专用隧道"
         echo -e "${GREEN}5.${NC}  查看专用隧道"
         echo -e "${GREEN}6.${NC}  删除专用隧道"
+        echo -e "${GREEN}7.${NC}  取消Cloudflare授权"
         echo ""
         echo -e "${YELLOW}━━━━━━━ 系统管理 ━━━━━━━${NC}"
-        echo -e "${GREEN}7.${NC}  管理隧道-节点绑定"
-        echo -e "${GREEN}8.${NC}  查看服务日志"
-        echo -e "${GREEN}9.${NC}  重启 cloudflared"
-        echo -e "${GREEN}10.${NC} 安装 cloudflared"
-        echo -e "${GREEN}11.${NC} 卸载 cloudflared"
+        echo -e "${GREEN}8.${NC}  管理隧道-节点绑定"
+        echo -e "${GREEN}9.${NC}  查看服务日志"
+        echo -e "${GREEN}10.${NC} 重启 cloudflared"
+        echo -e "${GREEN}11.${NC} 安装 cloudflared"
+        echo -e "${GREEN}12.${NC} 卸载 cloudflared"
         echo ""
 
         print_nav_options "true" "true"
@@ -2454,11 +2605,12 @@ menu_argo_tunnel() {
             4) create_dedicated_argo_tunnel; read -p "按 Enter 继续..." ;;
             5) list_dedicated_argo_tunnels; read -p "按 Enter 继续..." ;;
             6) delete_dedicated_argo_tunnel; read -p "按 Enter 继续..." ;;
-            7) manage_tunnel_node_binding; read -p "按 Enter 继续..." ;;
-            8) view_cloudflared_logs ;;
-            9) restart_cloudflared_service; read -p "按 Enter 继续..." ;;
-            10) install_cloudflared; read -p "按 Enter 继续..." ;;
-            11) uninstall_cloudflared; read -p "按 Enter 继续..." ;;
+            7) revoke_cloudflared_auth; read -p "按 Enter 继续..." ;;
+            8) manage_tunnel_node_binding; read -p "按 Enter 继续..." ;;
+            9) view_cloudflared_logs ;;
+            10) restart_cloudflared_service; read -p "按 Enter 继续..." ;;
+            11) install_cloudflared; read -p "按 Enter 继续..." ;;
+            12) uninstall_cloudflared; read -p "按 Enter 继续..." ;;
             *) print_error "无效选择"; sleep 1 ;;
         esac
     done

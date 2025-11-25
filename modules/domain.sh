@@ -598,7 +598,87 @@ manage_server_domain() {
             echo ""
             read -p "请输入服务器域名: " domain
             if [[ -n "$domain" ]]; then
+                # 验证域名格式
+                if [[ ! "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
+                    print_error "域名格式不正确"
+                    read -p "按 Enter 键继续..."
+                    return 1
+                fi
+
+                echo ""
+                print_info "正在验证域名解析..."
+
+                # 获取服务器公网IP
+                local server_ip=$(curl -s ip.sb 2>/dev/null || curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null)
+                if [[ -z "$server_ip" ]]; then
+                    print_warning "无法获取服务器公网IP，跳过DNS验证"
+                    read -p "是否继续设置域名？[y/N]: " confirm
+                    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+                        print_info "已取消"
+                        read -p "按 Enter 键继续..."
+                        return 0
+                    fi
+                else
+                    echo -e "  服务器IP: ${YELLOW}$server_ip${NC}"
+
+                    # 解析域名
+                    if ! command -v host &>/dev/null && ! command -v dig &>/dev/null && ! command -v nslookup &>/dev/null; then
+                        print_warning "未找到DNS查询工具，跳过DNS验证"
+                        read -p "是否继续设置域名？[y/N]: " confirm
+                        if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+                            print_info "已取消"
+                            read -p "按 Enter 键继续..."
+                            return 0
+                        fi
+                    else
+                        local domain_ip=""
+
+                        # 尝试使用host命令
+                        if command -v host &>/dev/null; then
+                            domain_ip=$(host "$domain" 2>/dev/null | grep "has address" | awk '{print $4}' | head -1)
+                        fi
+
+                        # 如果host失败，尝试dig
+                        if [[ -z "$domain_ip" ]] && command -v dig &>/dev/null; then
+                            domain_ip=$(dig +short "$domain" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+                        fi
+
+                        # 如果dig也失败，尝试nslookup
+                        if [[ -z "$domain_ip" ]] && command -v nslookup &>/dev/null; then
+                            domain_ip=$(nslookup "$domain" 2>/dev/null | grep -A1 "Name:" | grep "Address:" | awk '{print $2}' | head -1)
+                        fi
+
+                        if [[ -z "$domain_ip" ]]; then
+                            print_error "域名解析失败: $domain"
+                            print_info "请确保："
+                            echo "  1. 域名已添加DNS解析记录"
+                            echo "  2. DNS记录已生效（可能需要等待几分钟）"
+                            echo "  3. DNS服务器可正常访问"
+                            read -p "按 Enter 键继续..."
+                            return 1
+                        fi
+
+                        echo -e "  域名解析: ${YELLOW}$domain_ip${NC}"
+
+                        # 验证IP是否匹配
+                        if [[ "$domain_ip" != "$server_ip" ]]; then
+                            print_error "域名未指向本服务器"
+                            echo ""
+                            echo -e "${RED}DNS解析IP: $domain_ip${NC}"
+                            echo -e "${GREEN}服务器IP:   $server_ip${NC}"
+                            echo ""
+                            print_info "请将域名的A记录指向服务器IP: $server_ip"
+                            read -p "按 Enter 键继续..."
+                            return 1
+                        fi
+
+                        print_success "DNS解析验证通过"
+                    fi
+                fi
+
+                # 保存域名
                 echo "$domain" > "${DATA_DIR}/server_domain.txt"
+                echo ""
                 print_success "服务器域名已设置为: $domain"
             fi
             ;;

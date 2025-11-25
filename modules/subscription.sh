@@ -305,17 +305,20 @@ resolve_subscription_host() {
         host=$(echo "$tunnel_domain" | sed -E 's|^https?://||' | sed -E 's|:[0-9]+$||')
     fi
 
-    # 优先2: 从 extra 中提取 tls_domain
+    # 优先2: 从 extra 中提取 tls_domain（仅用于有TLS配置的节点）
     if [[ -z "$host" ]]; then
         case "$protocol" in
             vless|vmess|trojan)
-                host=$(echo "$extra" | jq -r '.tls_domain // ""')
-                [[ "$host" == "null" ]] && host=""
+                # 只有当节点配置了TLS时才使用TLS域名
+                if [[ "$security" == "tls" ]]; then
+                    host=$(echo "$extra" | jq -r '.tls_domain // ""')
+                    [[ "$host" == "null" ]] && host=""
+                fi
                 ;;
         esac
     fi
 
-    # 优先3: 使用配置的订阅域名
+    # 优先3: 使用配置的服务器域名
     if [[ -z "$host" ]]; then
         host=$(get_subscription_domain_hint)
     fi
@@ -2347,19 +2350,24 @@ generate_subscription_with_user() {
     echo -e "${CYAN}订阅访问配置：${NC}"
     echo ""
 
-    read -p "请输入订阅访问域名或IP [留空使用服务器IP]: " sub_domain
-    if [[ -z "$sub_domain" ]]; then
-        sub_domain=$(get_subscription_domain_hint)
+    # 获取默认域名提示
+    local default_domain=$(get_subscription_domain_hint)
+    if [[ -z "$default_domain" ]]; then
+        default_domain=$(get_public_ip)
     fi
-    if [[ -z "$sub_domain" ]]; then
-        sub_domain=$(get_public_ip)
-    fi
-    if [[ -z "$sub_domain" ]]; then
-        sub_domain="127.0.0.1"
+    if [[ -z "$default_domain" ]]; then
+        default_domain="127.0.0.1"
     fi
 
-    read -p "请输入订阅端口 [默认: 8080]: " sub_port
-    sub_port=${sub_port:-8080}
+    read -p "请输入订阅访问域名或IP [留空使用: $default_domain]: " sub_domain
+    if [[ -z "$sub_domain" ]]; then
+        sub_domain="$default_domain"
+    fi
+
+    # 获取已保存的端口，如果不存在则使用默认值
+    local default_port=$(cat "${DATA_DIR}/subscription_port.txt" 2>/dev/null || echo "8080")
+    read -p "请输入订阅端口 [默认: $default_port]: " sub_port
+    sub_port=${sub_port:-$default_port}
 
     # 订阅路径
     local sub_filename=$(basename "$sub_file")
@@ -3009,8 +3017,17 @@ config_subscription() {
 setup_subscription_server() {
     local port=$1
 
+    # 检查端口是否已在使用
+    if pgrep -f "python.*subscription_server.*${port}" > /dev/null 2>&1; then
+        print_info "订阅服务已在端口 $port 运行"
+        return 0
+    fi
+
     # 停止已有服务
     pkill -f "python.*subscription_server" 2>/dev/null
+
+    # 保存订阅端口到文件
+    echo "$port" > "${DATA_DIR}/subscription_port.txt"
 
     # 创建简单的 HTTP 服务器脚本
     cat > "${DATA_DIR}/subscription_server.py" <<'PYEOF'

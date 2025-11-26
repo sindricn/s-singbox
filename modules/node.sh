@@ -3448,28 +3448,25 @@ quick_setup_argo_vless_ws() {
                     print_info "使用授权: $auth_name"
                 fi
 
-                # 检查是否有现有的专用隧道（使用选定的授权）
+                # 检查是否有现有的专用隧道（通过域名验证）
                 local existing_tunnels=""
-                if [[ -n "$selected_cert_file" && -f "$selected_cert_file" ]]; then
-                    # 使用临时 HOME 目录和选定的证书
-                    local temp_home="/tmp/cf-quick-$$-$RANDOM"
-                    mkdir -p "$temp_home/.cloudflared"
-                    cp "$selected_cert_file" "$temp_home/.cloudflared/cert.pem" 2>/dev/null
+                local selected_auth_domain=""
 
-                    existing_tunnels=$(HOME="$temp_home" "$CLOUDFLARED_BIN" tunnel list 2>/dev/null | \
-                                       tail -n +2 | \
-                                       awk '{print $2}' | \
-                                       grep -v '^$' | \
-                                       grep -v '^NAME$')
+                # 获取选定授权的授权域名
+                if [[ "$auth_count" -eq 1 ]]; then
+                    selected_auth_domain=$(jq -r '.auths[0].auth_domain // ""' "$CLOUDFLARED_AUTH_FILE")
+                elif [[ "$auth_count" -gt 1 ]] && [[ -n "$auth_choice" ]]; then
+                    selected_auth_domain=$(jq -r ".auths[$((auth_choice-1))].auth_domain // \"\"" "$CLOUDFLARED_AUTH_FILE")
+                fi
 
-                    rm -rf "$temp_home"
-                else
-                    # 没有授权或使用默认授权
-                    existing_tunnels=$("$CLOUDFLARED_BIN" tunnel list 2>/dev/null | \
-                                       tail -n +2 | \
-                                       awk '{print $2}' | \
-                                       grep -v '^$' | \
-                                       grep -v '^NAME$')
+                # 使用域名验证方式获取隧道列表
+                if [[ -n "$selected_auth_domain" ]]; then
+                    # 调用 cf_tunnel.sh 中的函数（通过域名验证）
+                    local tunnel_list=$(get_cf_auth_tunnels "$selected_auth_domain")
+                    if [[ -n "$tunnel_list" ]]; then
+                        # 转换为换行分隔
+                        existing_tunnels=$(echo "$tunnel_list" | tr ',' '\n')
+                    fi
                 fi
 
                 if [[ -n "$existing_tunnels" ]]; then
@@ -3510,24 +3507,12 @@ quick_setup_argo_vless_ws() {
                             # 执行创建，并尝试从 nodes.json 获取绑定信息
                             create_dedicated_argo_tunnel
 
-                            # 检查最近创建的隧道（使用选定的授权）
+                            # 检查最近创建的隧道（从配置文件）
                             local latest_tunnel=""
-                            if [[ -n "$selected_cert_file" && -f "$selected_cert_file" ]]; then
-                                local temp_home2="/tmp/cf-quick-check-$$-$RANDOM"
-                                mkdir -p "$temp_home2/.cloudflared"
-                                cp "$selected_cert_file" "$temp_home2/.cloudflared/cert.pem" 2>/dev/null
-                                latest_tunnel=$(HOME="$temp_home2" "$CLOUDFLARED_BIN" tunnel list 2>/dev/null | \
-                                               tail -n +2 | \
-                                               grep -v '^NAME$' | \
-                                               tail -1 | \
-                                               awk '{print $2}')
-                                rm -rf "$temp_home2"
-                            else
-                                latest_tunnel=$("$CLOUDFLARED_BIN" tunnel list 2>/dev/null | \
-                                               tail -n +2 | \
-                                               grep -v '^NAME$' | \
-                                               tail -1 | \
-                                               awk '{print $2}')
+                            # 获取最新的配置文件（按修改时间排序）
+                            local latest_config=$(ls -t "${CLOUDFLARED_CONFIG_DIR}"/config-*.yml 2>/dev/null | head -1)
+                            if [[ -n "$latest_config" && -f "$latest_config" ]]; then
+                                latest_tunnel=$(basename "$latest_config" | sed 's/^config-//;s/\.yml$//')
                             fi
                             if [[ -n "$latest_tunnel" ]]; then
                                 new_tunnel_name="$latest_tunnel"
@@ -3555,16 +3540,21 @@ quick_setup_argo_vless_ws() {
                             IFS='|' read -r selected_tunnel selected_domain <<< "${tunnel_map[$tunnel_choice]}"
                             tunnel_domain="$selected_domain"
 
-                            # 获取隧道 ID（使用选定的授权）
+                            # 获取隧道 ID（从配置文件）
                             local tunnel_id=""
-                            if [[ -n "$selected_cert_file" && -f "$selected_cert_file" ]]; then
-                                local temp_home3="/tmp/cf-quick-id-$$-$RANDOM"
-                                mkdir -p "$temp_home3/.cloudflared"
-                                cp "$selected_cert_file" "$temp_home3/.cloudflared/cert.pem" 2>/dev/null
-                                tunnel_id=$(HOME="$temp_home3" "$CLOUDFLARED_BIN" tunnel list 2>/dev/null | grep "$selected_tunnel" | awk '{print $1}')
-                                rm -rf "$temp_home3"
-                            else
-                                tunnel_id=$("$CLOUDFLARED_BIN" tunnel list 2>/dev/null | grep "$selected_tunnel" | awk '{print $1}')
+                            local existing_config="${CLOUDFLARED_CONFIG_DIR}/config-${selected_tunnel}.yml"
+                            if [[ -f "$existing_config" ]]; then
+                                # 从现有配置文件读取 tunnel ID
+                                tunnel_id=$(grep "^tunnel:" "$existing_config" 2>/dev/null | awk '{print $2}')
+                            fi
+
+                            # 如果配置文件中没有，尝试从凭证文件推断
+                            if [[ -z "$tunnel_id" ]]; then
+                                local creds_pattern="${CLOUDFLARED_CONFIG_DIR}/*-*-*-*-*.json"
+                                local matching_creds=$(ls $creds_pattern 2>/dev/null | head -1)
+                                if [[ -n "$matching_creds" ]]; then
+                                    tunnel_id=$(basename "$matching_creds" .json)
+                                fi
                             fi
 
                             if [[ -n "$tunnel_id" ]]; then

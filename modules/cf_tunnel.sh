@@ -1804,45 +1804,32 @@ extract_top_domain() {
 
 # 获取授权账号下的隧道列表（通过域名验证）
 # 参数1: 授权顶级域名（用于域名验证）
-# 参数2: debug模式（可选，设置为"debug"开启调试）
 # 返回: 逗号分隔的隧道名称列表
 get_cf_auth_tunnels() {
     local auth_domain=$1
-    local debug_mode=$2
 
     # 如果没有提供授权域名，无法进行验证
     if [[ -z "$auth_domain" ]]; then
-        [[ "$debug_mode" == "debug" ]] && echo "[DEBUG] 未提供授权域名" >&2
         echo ""
         return 1
     fi
-
-    [[ "$debug_mode" == "debug" ]] && echo "[DEBUG] 授权域名: $auth_domain" >&2
-    [[ "$debug_mode" == "debug" ]] && echo "[DEBUG] 配置目录: ${CLOUDFLARED_CONFIG_DIR}" >&2
 
     # 获取所有已配置的专用隧道（从配置文件）
     local all_config_files=$(ls "${CLOUDFLARED_CONFIG_DIR}"/config-*.yml 2>/dev/null)
 
     if [[ -z "$all_config_files" ]]; then
-        [[ "$debug_mode" == "debug" ]] && echo "[DEBUG] 未找到任何隧道配置文件" >&2
         echo ""
         return 0
     fi
-
-    [[ "$debug_mode" == "debug" ]] && echo "[DEBUG] 找到配置文件:" >&2
-    [[ "$debug_mode" == "debug" ]] && echo "$all_config_files" >&2
 
     # 验证每个隧道的域名
     local verified_tunnels=""
     for config_file in $all_config_files; do
         # 从文件名提取隧道名称：config-tunnel1.yml -> tunnel1
         local tunnel_name=$(basename "$config_file" | sed 's/^config-//;s/\.yml$//')
-        [[ "$debug_mode" == "debug" ]] && echo "[DEBUG] 检查隧道: $tunnel_name" >&2
 
         # 从配置文件读取 hostname
         local tunnel_hostname=$(extract_tunnel_hostname "$config_file")
-        [[ "$debug_mode" == "debug" ]] && echo "[DEBUG]   配置行: $(grep "^\s*hostname:" "$config_file" 2>/dev/null | head -1)" >&2
-        [[ "$debug_mode" == "debug" ]] && echo "[DEBUG]   提取的 hostname: $tunnel_hostname" >&2
 
         if [[ -n "$tunnel_hostname" ]]; then
             # 验证：检查隧道域名是否以授权域名结尾（反向匹配）
@@ -1851,78 +1838,16 @@ get_cf_auth_tunnels() {
             # - tunnel1.free.example.com 匹配 free.example.com ✓
             # - tunnel1.other.com 不匹配 example.com ✗
             if [[ "$tunnel_hostname" == *".$auth_domain" || "$tunnel_hostname" == "$auth_domain" ]]; then
-                [[ "$debug_mode" == "debug" ]] && echo "[DEBUG]   ✓ 匹配！($tunnel_hostname 以 $auth_domain 结尾)" >&2
                 if [[ -z "$verified_tunnels" ]]; then
                     verified_tunnels="$tunnel_name"
                 else
                     verified_tunnels="${verified_tunnels},${tunnel_name}"
                 fi
-            else
-                [[ "$debug_mode" == "debug" ]] && echo "[DEBUG]   ✗ 不匹配 ($tunnel_hostname 不以 $auth_domain 结尾)" >&2
             fi
-        else
-            [[ "$debug_mode" == "debug" ]] && echo "[DEBUG]   ✗ 未配置 hostname" >&2
         fi
     done
 
-    [[ "$debug_mode" == "debug" ]] && echo "[DEBUG] 验证结果: $verified_tunnels" >&2
     echo "$verified_tunnels"
-}
-
-# 测试隧道域名关联（调试用）
-test_tunnel_auth_mapping() {
-    clear
-    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║    测试隧道-授权域名关联            ║${NC}"
-    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
-    echo ""
-
-    init_cf_auth_file
-
-    # 列出所有授权
-    local auth_count=$(jq '.auths | length' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null || echo "0")
-
-    if [[ "$auth_count" -eq 0 ]]; then
-        print_info "当前没有授权"
-        return 0
-    fi
-
-    echo -e "${YELLOW}测试所有授权的隧道关联：${NC}"
-    echo ""
-
-    local auth_data
-    mapfile -t auth_data < <(jq -r '.auths[] | "\(.name)|\(.auth_domain // "")"' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null)
-
-    for auth_line in "${auth_data[@]}"; do
-        IFS='|' read -r name auth_domain <<< "$auth_line"
-
-        echo -e "${GREEN}授权: $name${NC}"
-        if [[ -n "$auth_domain" ]]; then
-            echo -e "  授权域名: ${CYAN}${auth_domain}${NC}"
-        else
-            echo -e "  授权域名: ${YELLOW}未设置${NC}"
-        fi
-        echo ""
-
-        if [[ -n "$auth_domain" ]]; then
-            echo "  调试输出："
-            local tunnels
-            tunnels=$(get_cf_auth_tunnels "$auth_domain" "debug")
-            echo ""
-            if [[ -n "$tunnels" ]]; then
-                echo -e "  关联隧道: ${CYAN}${tunnels}${NC}"
-            else
-                echo -e "  关联隧道: ${YELLOW}无${NC}"
-            fi
-        else
-            echo -e "  ${YELLOW}未设置授权域名，无法验证${NC}"
-        fi
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
-    done
-
-    read -p "按 Enter 返回..."
 }
 
 # 新增 Cloudflare 授权
@@ -2219,17 +2144,15 @@ manage_cf_auth() {
         echo -e "${GREEN}1.${NC} 查看所有授权"
         echo -e "${GREEN}2.${NC} 新增授权"
         echo -e "${GREEN}3.${NC} 删除授权"
-        echo -e "${GREEN}4.${NC} 测试隧道关联（调试）"
         echo -e "${GREEN}0.${NC} 返回"
         echo ""
 
-        read -p "请选择 [0-4]: " choice
+        read -p "请选择 [0-3]: " choice
 
         case $choice in
             1) list_cf_auths; read -p "按 Enter 继续..." ;;
             2) add_cf_auth; read -p "按 Enter 继续..." ;;
             3) delete_cf_auth; read -p "按 Enter 继续..." ;;
-            4) test_tunnel_auth_mapping ;;
             0) return 0 ;;
             *) print_error "无效选择"; sleep 1 ;;
         esac

@@ -3401,8 +3401,76 @@ quick_setup_argo_vless_ws() {
                 echo -e "${BLUE}专用隧道配置${NC}"
                 echo ""
 
-                # 检查是否有现有的专用隧道
-                local existing_tunnels=$("$CLOUDFLARED_BIN" tunnel list 2>/dev/null | tail -n +2 | awk '{print $2}')
+                # 加载 cf_tunnel.sh 模块以使用授权管理
+                if [[ -f "${SCRIPT_DIR}/modules/cf_tunnel.sh" ]]; then
+                    source "${SCRIPT_DIR}/modules/cf_tunnel.sh"
+                fi
+
+                # 初始化授权文件
+                init_cf_auth_file
+
+                # 检查授权数量，如果有多个授权，让用户选择
+                local auth_count=$(jq '.auths | length' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null || echo "0")
+                local selected_cert_file=""
+
+                if [[ "$auth_count" -gt 1 ]]; then
+                    # 有多个授权，让用户选择
+                    echo -e "${YELLOW}检测到多个授权，请选择：${NC}"
+                    local auth_index=1
+                    jq -r '.auths[] | "\(.name)|\(.cert_file)|\(.auth_domain // "")|\(.note)"' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null | \
+                    while IFS='|' read -r name cert_file auth_domain note; do
+                        if [[ -n "$note" && -n "$auth_domain" ]]; then
+                            echo -e "${GREEN}${auth_index}.${NC} $name - $note (${CYAN}$auth_domain${NC})"
+                        elif [[ -n "$note" ]]; then
+                            echo -e "${GREEN}${auth_index}.${NC} $name - $note"
+                        elif [[ -n "$auth_domain" ]]; then
+                            echo -e "${GREEN}${auth_index}.${NC} $name (${CYAN}$auth_domain${NC})"
+                        else
+                            echo -e "${GREEN}${auth_index}.${NC} $name"
+                        fi
+                        ((auth_index++))
+                    done
+                    echo ""
+
+                    read -p "请选择授权 [1-$auth_count]: " auth_choice
+
+                    if ! [[ "$auth_choice" =~ ^[0-9]+$ ]] || [[ "$auth_choice" -lt 1 ]] || [[ "$auth_choice" -gt "$auth_count" ]]; then
+                        print_error "无效选择"
+                        use_argo=false
+                        continue
+                    fi
+
+                    selected_cert_file=$(jq -r ".auths[$((auth_choice-1))].cert_file" "$CLOUDFLARED_AUTH_FILE")
+                elif [[ "$auth_count" -eq 1 ]]; then
+                    # 只有一个授权，直接使用
+                    selected_cert_file=$(jq -r '.auths[0].cert_file' "$CLOUDFLARED_AUTH_FILE")
+                    local auth_name=$(jq -r '.auths[0].name' "$CLOUDFLARED_AUTH_FILE")
+                    print_info "使用授权: $auth_name"
+                fi
+
+                # 检查是否有现有的专用隧道（使用选定的授权）
+                local existing_tunnels=""
+                if [[ -n "$selected_cert_file" && -f "$selected_cert_file" ]]; then
+                    # 使用临时 HOME 目录和选定的证书
+                    local temp_home="/tmp/cf-quick-$$-$RANDOM"
+                    mkdir -p "$temp_home/.cloudflared"
+                    cp "$selected_cert_file" "$temp_home/.cloudflared/cert.pem" 2>/dev/null
+
+                    existing_tunnels=$(HOME="$temp_home" "$CLOUDFLARED_BIN" tunnel list 2>/dev/null | \
+                                       tail -n +2 | \
+                                       awk '{print $2}' | \
+                                       grep -v '^$' | \
+                                       grep -v '^NAME$')
+
+                    rm -rf "$temp_home"
+                else
+                    # 没有授权或使用默认授权
+                    existing_tunnels=$("$CLOUDFLARED_BIN" tunnel list 2>/dev/null | \
+                                       tail -n +2 | \
+                                       awk '{print $2}' | \
+                                       grep -v '^$' | \
+                                       grep -v '^NAME$')
+                fi
 
                 if [[ -n "$existing_tunnels" ]]; then
                     # 有现有隧道，让用户选择
@@ -3442,8 +3510,25 @@ quick_setup_argo_vless_ws() {
                             # 执行创建，并尝试从 nodes.json 获取绑定信息
                             create_dedicated_argo_tunnel
 
-                            # 检查最近创建的隧道
-                            local latest_tunnel=$("$CLOUDFLARED_BIN" tunnel list 2>/dev/null | tail -n +2 | tail -1 | awk '{print $2}')
+                            # 检查最近创建的隧道（使用选定的授权）
+                            local latest_tunnel=""
+                            if [[ -n "$selected_cert_file" && -f "$selected_cert_file" ]]; then
+                                local temp_home2="/tmp/cf-quick-check-$$-$RANDOM"
+                                mkdir -p "$temp_home2/.cloudflared"
+                                cp "$selected_cert_file" "$temp_home2/.cloudflared/cert.pem" 2>/dev/null
+                                latest_tunnel=$(HOME="$temp_home2" "$CLOUDFLARED_BIN" tunnel list 2>/dev/null | \
+                                               tail -n +2 | \
+                                               grep -v '^NAME$' | \
+                                               tail -1 | \
+                                               awk '{print $2}')
+                                rm -rf "$temp_home2"
+                            else
+                                latest_tunnel=$("$CLOUDFLARED_BIN" tunnel list 2>/dev/null | \
+                                               tail -n +2 | \
+                                               grep -v '^NAME$' | \
+                                               tail -1 | \
+                                               awk '{print $2}')
+                            fi
                             if [[ -n "$latest_tunnel" ]]; then
                                 new_tunnel_name="$latest_tunnel"
                                 local config_file="${CLOUDFLARED_CONFIG_DIR}/config-${latest_tunnel}.yml"
@@ -3470,8 +3555,17 @@ quick_setup_argo_vless_ws() {
                             IFS='|' read -r selected_tunnel selected_domain <<< "${tunnel_map[$tunnel_choice]}"
                             tunnel_domain="$selected_domain"
 
-                            # 获取隧道 ID
-                            local tunnel_id=$("$CLOUDFLARED_BIN" tunnel list 2>/dev/null | grep "$selected_tunnel" | awk '{print $1}')
+                            # 获取隧道 ID（使用选定的授权）
+                            local tunnel_id=""
+                            if [[ -n "$selected_cert_file" && -f "$selected_cert_file" ]]; then
+                                local temp_home3="/tmp/cf-quick-id-$$-$RANDOM"
+                                mkdir -p "$temp_home3/.cloudflared"
+                                cp "$selected_cert_file" "$temp_home3/.cloudflared/cert.pem" 2>/dev/null
+                                tunnel_id=$(HOME="$temp_home3" "$CLOUDFLARED_BIN" tunnel list 2>/dev/null | grep "$selected_tunnel" | awk '{print $1}')
+                                rm -rf "$temp_home3"
+                            else
+                                tunnel_id=$("$CLOUDFLARED_BIN" tunnel list 2>/dev/null | grep "$selected_tunnel" | awk '{print $1}')
+                            fi
 
                             if [[ -n "$tunnel_id" ]]; then
                                 # 更新隧道配置，将其绑定到新创建的节点端口

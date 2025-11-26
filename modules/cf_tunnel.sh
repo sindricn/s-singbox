@@ -1294,6 +1294,45 @@ manage_tunnel_node_binding() {
             echo -e "${YELLOW}━━━━━━━ 可用隧道列表 ━━━━━━━${NC}"
             echo ""
 
+            # 如果有多个授权，先让用户选择
+            init_cf_auth_file
+            local auth_count=$(jq '.auths | length' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null || echo "0")
+            local selected_cert_file=""
+
+            if [[ "$auth_count" -gt 1 ]]; then
+                echo -e "${YELLOW}检测到多个授权，请选择要查看的授权：${NC}"
+                local auth_index=1
+                jq -r '.auths[] | "\(.name)|\(.cert_file)|\(.auth_domain // "")|\(.note)"' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null | \
+                while IFS='|' read -r name cert_file auth_domain note; do
+                    if [[ -n "$note" && -n "$auth_domain" ]]; then
+                        echo -e "${GREEN}${auth_index}.${NC} $name - $note (${CYAN}$auth_domain${NC})"
+                    elif [[ -n "$note" ]]; then
+                        echo -e "${GREEN}${auth_index}.${NC} $name - $note"
+                    elif [[ -n "$auth_domain" ]]; then
+                        echo -e "${GREEN}${auth_index}.${NC} $name (${CYAN}$auth_domain${NC})"
+                    else
+                        echo -e "${GREEN}${auth_index}.${NC} $name"
+                    fi
+                    ((auth_index++))
+                done
+                echo -e "${GREEN}0.${NC} 显示所有授权的隧道"
+                echo ""
+
+                read -p "请选择授权 [0-$auth_count]: " auth_choice
+
+                if [[ "$auth_choice" != "0" ]]; then
+                    if ! [[ "$auth_choice" =~ ^[0-9]+$ ]] || [[ "$auth_choice" -lt 1 ]] || [[ "$auth_choice" -gt "$auth_count" ]]; then
+                        print_error "无效选择"
+                        return 1
+                    fi
+                    selected_cert_file=$(jq -r ".auths[$((auth_choice-1))].cert_file" "$CLOUDFLARED_AUTH_FILE")
+                    print_info "已选择授权，将只显示该授权下的专用隧道"
+                    echo ""
+                fi
+            elif [[ "$auth_count" -eq 1 ]]; then
+                selected_cert_file=$(jq -r '.auths[0].cert_file' "$CLOUDFLARED_AUTH_FILE")
+            fi
+
             # 收集所有隧道
             declare -a tunnel_list
             declare -a tunnel_types
@@ -1323,9 +1362,28 @@ manage_tunnel_node_binding() {
                 echo ""
             fi
 
-            # 2. 专用隧道（从cloudflared获取）
+            # 2. 专用隧道（从选定的授权或默认授权获取）
             if [[ -f "$CLOUDFLARED_BIN" ]]; then
-                local dedicated_tunnels=$("$CLOUDFLARED_BIN" tunnel list 2>/dev/null | tail -n +2 | awk '{print $2}')
+                local dedicated_tunnels=""
+                if [[ -n "$selected_cert_file" && -f "$selected_cert_file" ]]; then
+                    # 使用选定的授权
+                    local temp_home="/tmp/cf-bind-$$-$RANDOM"
+                    mkdir -p "$temp_home/.cloudflared"
+                    cp "$selected_cert_file" "$temp_home/.cloudflared/cert.pem" 2>/dev/null
+                    dedicated_tunnels=$(HOME="$temp_home" "$CLOUDFLARED_BIN" tunnel list 2>/dev/null | \
+                                       tail -n +2 | \
+                                       awk '{print $2}' | \
+                                       grep -v '^$' | \
+                                       grep -v '^NAME$')
+                    rm -rf "$temp_home"
+                else
+                    # 使用默认授权或显示所有
+                    dedicated_tunnels=$("$CLOUDFLARED_BIN" tunnel list 2>/dev/null | \
+                                       tail -n +2 | \
+                                       awk '{print $2}' | \
+                                       grep -v '^$' | \
+                                       grep -v '^NAME$')
+                fi
                 if [[ -n "$dedicated_tunnels" ]]; then
                     echo -e "${CYAN}专用隧道：${NC}"
                     for tname in $dedicated_tunnels; do
@@ -1704,7 +1762,7 @@ get_cf_auth_tunnels() {
 
     # cloudflared 会读取 ~/.cloudflared/cert.pem
     # 我们需要临时创建一个 HOME 目录并复制证书
-    local temp_home="/tmp/cf-auth-check-$$"
+    local temp_home="/tmp/cf-auth-check-$$-$RANDOM"
     mkdir -p "$temp_home/.cloudflared"
 
     # 复制证书到临时目录
@@ -1715,15 +1773,28 @@ get_cf_auth_tunnels() {
     }
 
     # 使用临时 HOME 执行 cloudflared tunnel list
-    local tunnel_info=$(HOME="$temp_home" "$CLOUDFLARED_BIN" tunnel list 2>/dev/null)
+    # 明确设置 HOME 环境变量
+    local tunnel_info
+    tunnel_info=$(HOME="$temp_home" "$CLOUDFLARED_BIN" tunnel list 2>/dev/null)
 
     # 清理临时目录
     rm -rf "$temp_home"
 
-    # 提取隧道名称列表
+    # 提取隧道名称列表，过滤掉表头和空行
+    # cloudflared tunnel list 输出格式：
+    # ID                                   NAME        CREATED              CONNECTIONS
+    # xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx tunnel-name 2024-01-01T00:00:00Z 2xLAX
     local tunnels=""
     if [[ -n "$tunnel_info" ]]; then
-        tunnels=$(echo "$tunnel_info" | tail -n +2 | awk '{print $2}' | sort -u | tr '\n' ',' | sed 's/,$//')
+        # 跳过第一行（表头），提取第二列（NAME），过滤空值和 'NAME' 字符串
+        tunnels=$(echo "$tunnel_info" | \
+                  tail -n +2 | \
+                  awk '{print $2}' | \
+                  grep -v '^$' | \
+                  grep -v '^NAME$' | \
+                  sort -u | \
+                  tr '\n' ',' | \
+                  sed 's/,$//')
     fi
 
     echo "$tunnels"
@@ -1964,7 +2035,17 @@ delete_cf_auth() {
 
     # 检查是否有隧道使用此授权
     if [[ -f "$cert_file" ]]; then
-        local tunnel_count=$(HOME=$(dirname "$cert_file") "$CLOUDFLARED_BIN" tunnel list 2>/dev/null | tail -n +2 | wc -l || echo "0")
+        local temp_home_del="/tmp/cf-del-check-$$-$RANDOM"
+        mkdir -p "$temp_home_del/.cloudflared"
+        cp "$cert_file" "$temp_home_del/.cloudflared/cert.pem" 2>/dev/null
+
+        local tunnel_count=$(HOME="$temp_home_del" "$CLOUDFLARED_BIN" tunnel list 2>/dev/null | \
+                            tail -n +2 | \
+                            grep -v '^NAME$' | \
+                            grep -v '^$' | \
+                            wc -l || echo "0")
+
+        rm -rf "$temp_home_del"
         if [[ "$tunnel_count" -gt 0 ]]; then
             print_warning "此授权下有 $tunnel_count 个专用隧道"
             echo "  删除授权后将无法管理这些隧道"

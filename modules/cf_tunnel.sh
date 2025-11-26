@@ -1784,7 +1784,8 @@ extract_tunnel_hostname() {
     # 格式1: hostname: domain.com（有空格）
     # 格式2: hostname:domain.com（无空格）
     # 格式3:   hostname: domain.com（有缩进）
-    local hostname=$(grep "^\s*hostname:" "$config_file" 2>/dev/null | head -1 | sed 's/^\s*hostname:\s*//' | awk '{print $1}')
+    # 格式4:   - hostname: domain.com（YAML 列表格式）
+    local hostname=$(grep -E "^\s*-?\s*hostname:" "$config_file" 2>/dev/null | head -1 | sed -E 's/^\s*-?\s*hostname:\s*//' | awk '{print $1}')
 
     echo "$hostname"
 }

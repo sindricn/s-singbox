@@ -3396,13 +3396,249 @@ quick_setup_argo_vless_ws() {
                 fi
 
             elif [[ "$argo_type" == "dedicated" ]]; then
-                # 专用隧道需要用户手动配置
-                print_info "专用隧道需要 Cloudflare 账号"
-                print_info "请使用菜单中的 Argo隧道管理 功能："
-                echo -e "  ${YELLOW}1. 创建专用隧道${NC}"
-                echo -e "  ${YELLOW}2. 将隧道绑定到端口 $port${NC}"
+                # 专用隧道绑定流程
                 echo ""
-                print_info "配置完成后，分享链接会自动更新"
+                echo -e "${BLUE}专用隧道配置${NC}"
+                echo ""
+
+                # 加载 cf_tunnel.sh 模块以使用授权管理
+                if [[ -f "${SCRIPT_DIR}/modules/cf_tunnel.sh" ]]; then
+                    source "${SCRIPT_DIR}/modules/cf_tunnel.sh"
+                fi
+
+                # 初始化授权文件
+                init_cf_auth_file
+
+                # 检查授权数量，如果有多个授权，让用户选择
+                local auth_count=$(jq '.auths | length' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null || echo "0")
+                local selected_cert_file=""
+
+                if [[ "$auth_count" -gt 1 ]]; then
+                    # 有多个授权，让用户选择
+                    echo -e "${YELLOW}检测到多个授权，请选择：${NC}"
+
+                    # 使用数组避免子 shell 问题
+                    local auth_quick_list
+                    mapfile -t auth_quick_list < <(jq -r '.auths[] | "\(.name)|\(.cert_file)|\(.auth_domain // "")|\(.note)"' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null)
+
+                    local auth_index=1
+                    for auth_quick_item in "${auth_quick_list[@]}"; do
+                        IFS='|' read -r name cert_file auth_domain note <<< "$auth_quick_item"
+                        if [[ -n "$note" && -n "$auth_domain" ]]; then
+                            echo -e "${GREEN}${auth_index}.${NC} $name - $note (${CYAN}$auth_domain${NC})"
+                        elif [[ -n "$note" ]]; then
+                            echo -e "${GREEN}${auth_index}.${NC} $name - $note"
+                        elif [[ -n "$auth_domain" ]]; then
+                            echo -e "${GREEN}${auth_index}.${NC} $name (${CYAN}$auth_domain${NC})"
+                        else
+                            echo -e "${GREEN}${auth_index}.${NC} $name"
+                        fi
+                        ((auth_index++))
+                    done
+                    echo ""
+
+                    read -p "请选择授权 [1-$auth_count]: " auth_choice
+
+                    if ! [[ "$auth_choice" =~ ^[0-9]+$ ]] || [[ "$auth_choice" -lt 1 ]] || [[ "$auth_choice" -gt "$auth_count" ]]; then
+                        print_error "无效选择"
+                        use_argo=false
+                        continue
+                    fi
+
+                    selected_cert_file=$(jq -r ".auths[$((auth_choice-1))].cert_file" "$CLOUDFLARED_AUTH_FILE")
+                elif [[ "$auth_count" -eq 1 ]]; then
+                    # 只有一个授权，直接使用
+                    selected_cert_file=$(jq -r '.auths[0].cert_file' "$CLOUDFLARED_AUTH_FILE")
+                    local auth_name=$(jq -r '.auths[0].name' "$CLOUDFLARED_AUTH_FILE")
+                    print_info "使用授权: $auth_name"
+                fi
+
+                # 检查是否有现有的专用隧道（通过域名验证）
+                local existing_tunnels=""
+                local selected_auth_domain=""
+
+                # 获取选定授权的授权域名
+                if [[ "$auth_count" -eq 1 ]]; then
+                    selected_auth_domain=$(jq -r '.auths[0].auth_domain // ""' "$CLOUDFLARED_AUTH_FILE")
+                elif [[ "$auth_count" -gt 1 ]] && [[ -n "$auth_choice" ]]; then
+                    selected_auth_domain=$(jq -r ".auths[$((auth_choice-1))].auth_domain // \"\"" "$CLOUDFLARED_AUTH_FILE")
+                fi
+
+                # 使用域名验证方式获取隧道列表
+                if [[ -n "$selected_auth_domain" ]]; then
+                    # 调用 cf_tunnel.sh 中的函数（通过域名验证）
+                    local tunnel_list=$(get_cf_auth_tunnels "$selected_auth_domain")
+                    if [[ -n "$tunnel_list" ]]; then
+                        # 转换为换行分隔
+                        existing_tunnels=$(echo "$tunnel_list" | tr ',' '\n')
+                    fi
+                fi
+
+                if [[ -n "$existing_tunnels" ]]; then
+                    # 有现有隧道，让用户选择
+                    echo -e "${YELLOW}检测到现有专用隧道：${NC}"
+                    local tunnel_index=1
+                    declare -A tunnel_map
+
+                    for tname in $existing_tunnels; do
+                        local config_file="${CLOUDFLARED_CONFIG_DIR}/config-${tname}.yml"
+                        # 使用 cf_tunnel.sh 中的辅助函数提取 hostname
+                        local domain=$(extract_tunnel_hostname "$config_file")
+                        echo -e "${GREEN}${tunnel_index}.${NC} $tname ${domain:+→ $domain}"
+                        tunnel_map[$tunnel_index]="$tname|$domain"
+                        ((tunnel_index++))
+                    done
+                    echo -e "${GREEN}0.${NC} 创建新的专用隧道"
+                    echo ""
+
+                    read -p "请选择 [0-$((tunnel_index-1))]: " tunnel_choice
+
+                    if [[ "$tunnel_choice" == "0" ]]; then
+                        # 创建新隧道
+                        print_info "即将创建新的专用隧道"
+                        print_info "请按照提示完成 Cloudflare 授权和隧道配置"
+                        echo ""
+                        read -p "按回车键继续..."
+
+                        # 调用创建专用隧道函数
+                        if declare -f create_dedicated_argo_tunnel >/dev/null 2>&1; then
+                            # 临时获取隧道信息
+                            local tunnel_created=false
+                            local new_tunnel_name=""
+                            local new_tunnel_domain=""
+
+                            # 执行创建，并尝试从 nodes.json 获取绑定信息
+                            create_dedicated_argo_tunnel
+
+                            # 检查最近创建的隧道（从配置文件）
+                            local latest_tunnel=""
+                            # 获取最新的配置文件（按修改时间排序）
+                            local latest_config=$(ls -t "${CLOUDFLARED_CONFIG_DIR}"/config-*.yml 2>/dev/null | head -1)
+                            if [[ -n "$latest_config" && -f "$latest_config" ]]; then
+                                latest_tunnel=$(basename "$latest_config" | sed 's/^config-//;s/\.yml$//')
+                            fi
+                            if [[ -n "$latest_tunnel" ]]; then
+                                new_tunnel_name="$latest_tunnel"
+                                local config_file="${CLOUDFLARED_CONFIG_DIR}/config-${latest_tunnel}.yml"
+                                if [[ -f "$config_file" ]]; then
+                                    # 使用 cf_tunnel.sh 中的辅助函数提取 hostname
+                                    new_tunnel_domain=$(extract_tunnel_hostname "$config_file")
+                                    tunnel_created=true
+                                fi
+                            fi
+
+                            if [[ "$tunnel_created" == true ]]; then
+                                tunnel_domain="$new_tunnel_domain"
+                                print_success "隧道创建成功: $new_tunnel_name"
+                            else
+                                print_warning "无法确认隧道创建状态"
+                                use_argo=false
+                            fi
+                        else
+                            print_error "无法找到创建隧道的函数"
+                            use_argo=false
+                        fi
+                    else
+                        # 使用现有隧道
+                        if [[ -n "${tunnel_map[$tunnel_choice]}" ]]; then
+                            IFS='|' read -r selected_tunnel selected_domain <<< "${tunnel_map[$tunnel_choice]}"
+                            tunnel_domain="$selected_domain"
+
+                            # 获取隧道 ID（从配置文件）
+                            local tunnel_id=""
+                            local existing_config="${CLOUDFLARED_CONFIG_DIR}/config-${selected_tunnel}.yml"
+                            if [[ -f "$existing_config" ]]; then
+                                # 从现有配置文件读取 tunnel ID
+                                tunnel_id=$(grep "^tunnel:" "$existing_config" 2>/dev/null | awk '{print $2}')
+                            fi
+
+                            # 如果配置文件中没有，尝试从凭证文件推断
+                            if [[ -z "$tunnel_id" ]]; then
+                                local creds_pattern="${CLOUDFLARED_CONFIG_DIR}/*-*-*-*-*.json"
+                                local matching_creds=$(ls $creds_pattern 2>/dev/null | head -1)
+                                if [[ -n "$matching_creds" ]]; then
+                                    tunnel_id=$(basename "$matching_creds" .json)
+                                fi
+                            fi
+
+                            if [[ -n "$tunnel_id" ]]; then
+                                # 更新隧道配置，将其绑定到新创建的节点端口
+                                local config_file="${CLOUDFLARED_CONFIG_DIR}/config-${selected_tunnel}.yml"
+
+                                print_info "正在绑定隧道到端口 $port..."
+
+                                cat > "$config_file" <<EOF
+tunnel: ${tunnel_id}
+credentials-file: ${CLOUDFLARED_CONFIG_DIR}/${tunnel_id}.json
+
+ingress:
+  - hostname: ${tunnel_domain}
+    service: http://localhost:${port}
+  - service: http_status:404
+EOF
+
+                                # 更新节点配置
+                                jq --arg port "$port" \
+                                   --arg domain "$tunnel_domain" \
+                                   --arg tunnel_name "$selected_tunnel" \
+                                   '(.nodes[] | select(.port == $port)) |= (
+                                       . + {
+                                           tunnel_domain: $domain,
+                                           tunnel_name: $tunnel_name,
+                                           tunnel_type: "argo_dedicated"
+                                       }
+                                   )' \
+                                   "$DATA_DIR/nodes.json" > "$DATA_DIR/nodes.json.tmp" && mv "$DATA_DIR/nodes.json.tmp" "$DATA_DIR/nodes.json"
+
+                                # 重启 cloudflared 服务
+                                local service_name="cloudflared-${selected_tunnel}.service"
+                                if systemctl is-active --quiet "$service_name"; then
+                                    systemctl restart "$service_name" 2>/dev/null
+                                fi
+
+                                print_success "隧道绑定成功: $selected_tunnel → 端口 $port"
+                            else
+                                print_error "无法获取隧道 ID"
+                                use_argo=false
+                            fi
+                        else
+                            print_error "无效选择"
+                            use_argo=false
+                        fi
+                    fi
+                else
+                    # 没有现有隧道，引导创建
+                    print_info "未检测到专用隧道，需要先创建"
+                    print_info "专用隧道需要 Cloudflare 账号授权"
+                    echo ""
+                    read -p "是否现在创建专用隧道？[Y/n]: " create_choice
+
+                    if [[ "$create_choice" != "n" && "$create_choice" != "N" ]]; then
+                        if declare -f create_dedicated_argo_tunnel >/dev/null 2>&1; then
+                            create_dedicated_argo_tunnel
+
+                            # 检查创建结果
+                            local latest_tunnel=$("$CLOUDFLARED_BIN" tunnel list 2>/dev/null | tail -n +2 | tail -1 | awk '{print $2}')
+                            if [[ -n "$latest_tunnel" ]]; then
+                                local config_file="${CLOUDFLARED_CONFIG_DIR}/config-${latest_tunnel}.yml"
+                                if [[ -f "$config_file" ]]; then
+                                    # 使用 cf_tunnel.sh 中的辅助函数提取 hostname
+                                    tunnel_domain=$(extract_tunnel_hostname "$config_file")
+                                    print_success "隧道创建成功"
+                                fi
+                            else
+                                print_warning "隧道创建可能失败"
+                                use_argo=false
+                            fi
+                        else
+                            print_error "无法找到创建隧道的函数"
+                            use_argo=false
+                        fi
+                    else
+                        print_info "跳过专用隧道配置"
+                        use_argo=false
+                    fi
+                fi
             fi
         fi
     fi

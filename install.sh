@@ -7,6 +7,9 @@
 
 set -e
 
+# 默认分支配置
+DEFAULT_BRANCH="main"
+
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -149,22 +152,29 @@ if [[ ! -f "${SCRIPT_DIR}/singbox-manager.sh" || ! -d "${SCRIPT_DIR}/modules" ]]
     TEMP_DIR="/tmp/s-singbox-$$"
     BACKUP_DIR=""
 
-    # 自动检测分支：
-    # 1. 如果当前目录是git仓库，使用当前分支
-    # 2. 否则使用环境变量BRANCH
-    # 3. 默认使用main分支
+    # 分支选择优先级：
+    # 1. 命令行参数 $1
+    # 2. 本地git仓库的当前分支（如果存在）
+    # 3. 环境变量 BRANCH
+    # 4. 脚本内定义的 DEFAULT_BRANCH
     BRANCH=""
-    if [[ -d "${SCRIPT_DIR}/.git" ]]; then
+
+    # 优先使用命令行参数
+    if [[ -n "$1" ]]; then
+        BRANCH="$1"
+        print_info "使用命令行参数指定的分支: $BRANCH"
+    # 检测本地git仓库
+    elif [[ -d "${SCRIPT_DIR}/.git" ]]; then
         BRANCH=$(git -C "${SCRIPT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
         if [[ -n "$BRANCH" ]]; then
             print_info "检测到git仓库，使用当前分支: $BRANCH"
         fi
     fi
 
-    # 如果未检测到git分支，使用环境变量或默认值
+    # 如果都未检测到，使用环境变量或脚本默认分支
     if [[ -z "$BRANCH" ]]; then
-        BRANCH="${BRANCH:-main}"
-        print_info "使用分支: $BRANCH"
+        BRANCH="${BRANCH:-$DEFAULT_BRANCH}"
+        print_info "使用默认分支: $BRANCH"
     fi
 
     # 备份现有数据

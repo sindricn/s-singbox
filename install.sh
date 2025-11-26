@@ -149,6 +149,24 @@ if [[ ! -f "${SCRIPT_DIR}/singbox-manager.sh" || ! -d "${SCRIPT_DIR}/modules" ]]
     TEMP_DIR="/tmp/s-singbox-$$"
     BACKUP_DIR=""
 
+    # 自动检测分支：
+    # 1. 如果当前目录是git仓库，使用当前分支
+    # 2. 否则使用环境变量BRANCH
+    # 3. 默认使用main分支
+    BRANCH=""
+    if [[ -d "${SCRIPT_DIR}/.git" ]]; then
+        BRANCH=$(git -C "${SCRIPT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+        if [[ -n "$BRANCH" ]]; then
+            print_info "检测到git仓库，使用当前分支: $BRANCH"
+        fi
+    fi
+
+    # 如果未检测到git分支，使用环境变量或默认值
+    if [[ -z "$BRANCH" ]]; then
+        BRANCH="${BRANCH:-main}"
+        print_info "使用分支: $BRANCH"
+    fi
+
     # 备份现有数据
     if [[ -d "$INSTALL_DIR/data" ]]; then
         print_info "检测到现有数据，正在备份..."
@@ -159,13 +177,14 @@ if [[ ! -f "${SCRIPT_DIR}/singbox-manager.sh" || ! -d "${SCRIPT_DIR}/modules" ]]
     fi
 
     # 下载项目文件
-    print_info "下载最新代码..."
+    print_info "下载最新代码 (分支: $BRANCH)..."
     mkdir -p "$TEMP_DIR"
 
-    if git clone --depth=1 https://github.com/sindricn/s-singbox.git "$TEMP_DIR" 2>&1 | grep -E "^(Cloning|Receiving)" || true; then
-        print_success "代码下载完成"
+    if git clone --depth=1 --branch "$BRANCH" https://github.com/sindricn/s-singbox.git "$TEMP_DIR" 2>&1 | grep -E "^(Cloning|Receiving)" || true; then
+        print_success "代码下载完成 (分支: $BRANCH)"
     else
-        print_error "下载失败，请检查网络连接"
+        print_error "下载失败，请检查网络连接或分支名称是否正确"
+        print_info "提示: 可用分支通常为 main 或 dev"
         exit 1
     fi
 

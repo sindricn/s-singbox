@@ -1845,20 +1845,20 @@ get_cf_auth_tunnels() {
         [[ "$debug_mode" == "debug" ]] && echo "[DEBUG]   提取的 hostname: $tunnel_hostname" >&2
 
         if [[ -n "$tunnel_hostname" ]]; then
-            # 提取隧道域名的顶级域名
-            local tunnel_top_domain=$(extract_top_domain "$tunnel_hostname")
-            [[ "$debug_mode" == "debug" ]] && echo "[DEBUG]   顶级域名: $tunnel_top_domain" >&2
-
-            # 验证：隧道的顶级域名必须匹配授权域名
-            if [[ "$tunnel_top_domain" == "$auth_domain" ]]; then
-                [[ "$debug_mode" == "debug" ]] && echo "[DEBUG]   ✓ 匹配！" >&2
+            # 验证：检查隧道域名是否以授权域名结尾（反向匹配）
+            # 这样可以自动兼容2段和3段式顶级域名：
+            # - tunnel1.example.com 匹配 example.com ✓
+            # - tunnel1.free.example.com 匹配 free.example.com ✓
+            # - tunnel1.other.com 不匹配 example.com ✗
+            if [[ "$tunnel_hostname" == *".$auth_domain" || "$tunnel_hostname" == "$auth_domain" ]]; then
+                [[ "$debug_mode" == "debug" ]] && echo "[DEBUG]   ✓ 匹配！($tunnel_hostname 以 $auth_domain 结尾)" >&2
                 if [[ -z "$verified_tunnels" ]]; then
                     verified_tunnels="$tunnel_name"
                 else
                     verified_tunnels="${verified_tunnels},${tunnel_name}"
                 fi
             else
-                [[ "$debug_mode" == "debug" ]] && echo "[DEBUG]   ✗ 不匹配 ($tunnel_top_domain != $auth_domain)" >&2
+                [[ "$debug_mode" == "debug" ]] && echo "[DEBUG]   ✗ 不匹配 ($tunnel_hostname 不以 $auth_domain 结尾)" >&2
             fi
         else
             [[ "$debug_mode" == "debug" ]] && echo "[DEBUG]   ✗ 未配置 hostname" >&2

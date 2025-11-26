@@ -8,6 +8,7 @@
 # Cloudflared 安装路径
 readonly CLOUDFLARED_BIN="/usr/local/bin/cloudflared"
 readonly CLOUDFLARED_CONFIG_DIR="/etc/cloudflared"
+readonly CLOUDFLARED_AUTH_FILE="${DATA_DIR}/cf_auths.json"
 readonly WARP_DIR="/opt/warp-plus"
 readonly WARP_BIN="${WARP_DIR}/warp-plus"
 
@@ -478,79 +479,99 @@ create_dedicated_argo_tunnel() {
     # 创建配置目录
     mkdir -p "$CLOUDFLARED_CONFIG_DIR"
 
-    # 第一步：检查并登录 Cloudflare
-    print_info "第一步：检查 Cloudflare 授权"
+    # 第一步：选择或新增 Cloudflare 授权
+    print_info "第一步：选择 Cloudflare 授权"
     echo ""
 
-    # 检查授权证书是否存在
-    local cert_file=""
-    local cert_locations=(
-        "$HOME/.cloudflared/cert.pem"
-        "/root/.cloudflared/cert.pem"
-        "${CLOUDFLARED_CONFIG_DIR}/cert.pem"
-    )
+    init_cf_auth_file
 
-    for location in "${cert_locations[@]}"; do
-        if [[ -f "$location" ]]; then
-            cert_file="$location"
-            break
-        fi
-    done
+    local auth_count=$(jq '.auths | length' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null || echo "0")
+    local selected_cert=""
+    local selected_auth_name=""
 
-    if [[ -n "$cert_file" ]]; then
-        print_success "✅ 已检测到授权凭证: $cert_file"
+    if [[ "$auth_count" -gt 0 ]]; then
+        # 有已保存的授权，列出供选择
+        echo -e "${YELLOW}已保存的授权：${NC}"
+        local index=1
+        jq -r '.auths[] | "\(.name)|\(.cert_file)|\(.domains | join(", "))|\(.note)"' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null | \
+        while IFS='|' read -r name cert_file domains note; do
+            if [[ -n "$note" ]]; then
+                echo -e "${GREEN}$index.${NC} $name - $note"
+            else
+                echo -e "${GREEN}$index.${NC} $name"
+            fi
+            if [[ -n "$domains" ]]; then
+                echo "    域名: $domains"
+            fi
+            ((index++))
+        done
+        echo -e "${GREEN}0.${NC} 新增授权"
         echo ""
-        read -p "是否使用现有授权？[Y/n]: " use_existing
-        use_existing=${use_existing:-Y}
 
-        if [[ "$use_existing" =~ ^[Yy]$ ]]; then
-            print_info "使用现有授权"
-        else
-            print_warning "将重新登录（现有凭证将被覆盖）"
+        read -p "请选择授权 [0-$auth_count]: " auth_choice
+
+        if [[ "$auth_choice" == "0" ]]; then
+            # 新增授权
             echo ""
-            read -p "按 Enter 开始登录..."
+            print_info "即将新增授权"
             echo ""
 
-            if ! "$CLOUDFLARED_BIN" tunnel login; then
-                print_error "Cloudflare 登录失败"
+            if add_cf_auth; then
+                # 获取刚添加的授权（最后一个）
+                local auth_info=$(jq -r '.auths[-1] | "\(.name)|\(.cert_file)"' "$CLOUDFLARED_AUTH_FILE")
+                IFS='|' read -r selected_auth_name selected_cert <<< "$auth_info"
+                print_success "将使用新增授权: $selected_auth_name"
+            else
+                print_error "新增授权失败"
                 return 1
             fi
-            print_success "✅ Cloudflare 登录成功"
+        else
+            # 使用现有授权
+            if ! [[ "$auth_choice" =~ ^[0-9]+$ ]] || [[ "$auth_choice" -lt 1 ]] || [[ "$auth_choice" -gt "$auth_count" ]]; then
+                print_error "无效选择"
+                return 1
+            fi
+
+            local auth_info=$(jq -r ".auths[$((auth_choice-1))] | \"\(.name)|\(.cert_file)\"" "$CLOUDFLARED_AUTH_FILE")
+            IFS='|' read -r selected_auth_name selected_cert <<< "$auth_info"
+
+            if [[ ! -f "$selected_cert" ]]; then
+                print_error "授权证书文件不存在: $selected_cert"
+                print_info "请先删除此授权记录，然后重新添加"
+                return 1
+            fi
+
+            print_success "✓ 选择授权: $selected_auth_name"
         fi
     else
-        print_info "未检测到授权，需要登录"
-        print_warning "将打开浏览器进行授权，请完成登录后返回终端"
-        echo ""
-        read -p "按 Enter 开始登录..."
+        # 没有授权，引导新增
+        print_info "未检测到授权，需要先添加"
         echo ""
 
-        local login_attempts=0
-        local max_attempts=3
-        while [[ $login_attempts -lt $max_attempts ]]; do
-            if "$CLOUDFLARED_BIN" tunnel login; then
-                print_success "✅ Cloudflare 登录成功"
-                echo ""
-                break
-            else
-                ((login_attempts++))
-                if [[ $login_attempts -lt $max_attempts ]]; then
-                    print_error "Cloudflare 登录失败（尝试 $login_attempts/$max_attempts）"
-                    echo ""
-                    read -p "是否重试？[Y/n]: " retry
-                    retry=${retry:-Y}
-                    if [[ ! "$retry" =~ ^[Yy]$ ]]; then
-                        print_error "已取消创建隧道"
-                        return 1
-                    fi
-                    echo ""
-                else
-                    print_error "Cloudflare 登录失败，已达到最大尝试次数"
-                    return 1
-                fi
-            fi
-        done
+        if add_cf_auth; then
+            # 获取刚添加的授权（第一个也是唯一一个）
+            local auth_info=$(jq -r '.auths[0] | "\(.name)|\(.cert_file)"' "$CLOUDFLARED_AUTH_FILE")
+            IFS='|' read -r selected_auth_name selected_cert <<< "$auth_info"
+            print_success "将使用授权: $selected_auth_name"
+        else
+            print_error "添加授权失败"
+            return 1
+        fi
     fi
+
     echo ""
+    print_info "使用授权: $selected_auth_name"
+    echo "  证书: $selected_cert"
+    echo ""
+
+    # 设置临时 HOME 以使用选定的证书
+    # cloudflared 会从 ~/.cloudflared/cert.pem 读取证书
+    local tunnel_home="/tmp/cf-tunnel-$$"
+    mkdir -p "$tunnel_home/.cloudflared"
+    cp "$selected_cert" "$tunnel_home/.cloudflared/cert.pem"
+
+    # 后续的 cloudflared 命令需要使用这个临时 HOME
+    export CF_TUNNEL_HOME="$tunnel_home"
 
     # 第二步：创建隧道
     read -p "请输入隧道名称 [例如: my-tunnel]: " tunnel_name
@@ -560,8 +581,9 @@ create_dedicated_argo_tunnel() {
     fi
 
     print_info "正在创建隧道: $tunnel_name"
-    if ! "$CLOUDFLARED_BIN" tunnel create "$tunnel_name"; then
+    if ! HOME="$CF_TUNNEL_HOME" "$CLOUDFLARED_BIN" tunnel create "$tunnel_name"; then
         print_error "隧道创建失败"
+        rm -rf "$CF_TUNNEL_HOME"
         return 1
     fi
 
@@ -569,9 +591,10 @@ create_dedicated_argo_tunnel() {
     echo ""
 
     # 获取隧道 ID
-    local tunnel_id=$("$CLOUDFLARED_BIN" tunnel list | grep "$tunnel_name" | awk '{print $1}')
+    local tunnel_id=$(HOME="$CF_TUNNEL_HOME" "$CLOUDFLARED_BIN" tunnel list | grep "$tunnel_name" | awk '{print $1}')
     if [[ -z "$tunnel_id" ]]; then
         print_error "无法获取隧道 ID"
+        rm -rf "$CF_TUNNEL_HOME"
         return 1
     fi
 
@@ -581,22 +604,11 @@ create_dedicated_argo_tunnel() {
     # 复制凭证文件到配置目录
     # cloudflared 在创建隧道时会将凭证文件保存在 ~/.cloudflared/<tunnel_id>.json
     # 我们需要将其复制到 /etc/cloudflared/ 供 systemd 服务使用
-    local source_creds=""
-    local creds_locations=(
-        "$HOME/.cloudflared/${tunnel_id}.json"
-        "/root/.cloudflared/${tunnel_id}.json"
-    )
+    local source_creds="${CF_TUNNEL_HOME}/.cloudflared/${tunnel_id}.json"
 
-    for location in "${creds_locations[@]}"; do
-        if [[ -f "$location" ]]; then
-            source_creds="$location"
-            break
-        fi
-    done
-
-    if [[ -z "$source_creds" ]]; then
-        print_error "无法找到隧道凭证文件"
-        print_error "尝试的位置: ${creds_locations[*]}"
+    if [[ ! -f "$source_creds" ]]; then
+        print_error "无法找到隧道凭证文件: $source_creds"
+        rm -rf "$CF_TUNNEL_HOME"
         return 1
     fi
 
@@ -606,6 +618,7 @@ create_dedicated_argo_tunnel() {
         print_success "✅ 凭证文件已复制: $target_creds"
     else
         print_error "凭证文件复制失败"
+        rm -rf "$CF_TUNNEL_HOME"
         return 1
     fi
     echo ""
@@ -697,7 +710,7 @@ EOF
 
     # 第五步：配置 DNS
     print_info "正在配置 DNS 记录..."
-    if "$CLOUDFLARED_BIN" tunnel route dns "$tunnel_id" "$tunnel_domain"; then
+    if HOME="$CF_TUNNEL_HOME" "$CLOUDFLARED_BIN" tunnel route dns "$tunnel_id" "$tunnel_domain"; then
         print_success "✅ DNS 记录配置成功"
     else
         print_warning "DNS 配置失败，请手动添加 DNS 记录"
@@ -705,6 +718,9 @@ EOF
         echo "  名称: $tunnel_domain"
         echo "  内容: ${tunnel_id}.cfargotunnel.com"
     fi
+
+    # 清理临时目录
+    rm -rf "$CF_TUNNEL_HOME"
 
     echo ""
 
@@ -1312,16 +1328,17 @@ manage_tunnel_node_binding() {
                 if [[ -n "$dedicated_tunnels" ]]; then
                     echo -e "${CYAN}专用隧道：${NC}"
                     for tname in $dedicated_tunnels; do
-                        # 从配置文件获取域名
-                        local config_file="${CLOUDFLARED_CONFIG_DIR}/config.yml"
+                        # 从独立配置文件获取域名
+                        local config_file="${CLOUDFLARED_CONFIG_DIR}/config-${tname}.yml"
+                        local domain=""
                         if [[ -f "$config_file" ]]; then
-                            local domain=$(grep "hostname:" "$config_file" | head -1 | awk '{print $2}')
-                            echo -e "${GREEN}$index.${NC} [专用] $tname → ${domain:-未配置域名}"
-                            tunnel_list[$index]="$tname"
-                            tunnel_types[$index]="dedicated"
-                            tunnel_urls[$index]="${domain:-}"
-                            ((index++))
+                            domain=$(grep "hostname:" "$config_file" | head -1 | awk '{print $2}')
                         fi
+                        echo -e "${GREEN}$index.${NC} [专用] $tname → ${domain:-未配置域名}"
+                        tunnel_list[$index]="$tname"
+                        tunnel_types[$index]="dedicated"
+                        tunnel_urls[$index]="${domain:-}"
+                        ((index++))
                     done
                     echo ""
                 fi
@@ -1664,11 +1681,44 @@ delete_dedicated_argo_tunnel() {
     print_success "✅ 隧道 '$tunnel_name' 删除完成！"
 }
 
-# 取消 Cloudflare 授权
-revoke_cloudflared_auth() {
+# ============================================================================
+# Cloudflare 授权管理
+# ============================================================================
+
+# 初始化授权数据文件
+init_cf_auth_file() {
+    if [[ ! -f "$CLOUDFLARED_AUTH_FILE" ]]; then
+        echo '{"auths":[]}' > "$CLOUDFLARED_AUTH_FILE"
+    fi
+}
+
+# 获取授权账号的域名列表
+get_cf_auth_domains() {
+    local cert_file=$1
+
+    if [[ ! -f "$cert_file" ]]; then
+        echo ""
+        return 1
+    fi
+
+    # 使用 cloudflared 临时使用此证书查询域名
+    # cloudflared 会读取 ~/.cloudflared/cert.pem，所以需要临时链接
+    local temp_cert_dir="/tmp/cf-auth-check-$$"
+    mkdir -p "$temp_cert_dir"
+    cp "$cert_file" "$temp_cert_dir/cert.pem"
+
+    local domains=$(HOME="$temp_cert_dir" "$CLOUDFLARED_BIN" tunnel list 2>/dev/null | tail -n +2 | awk '{print $3}' | sort -u | tr '\n' ',' | sed 's/,$//')
+
+    rm -rf "$temp_cert_dir"
+
+    echo "$domains"
+}
+
+# 新增 Cloudflare 授权
+add_cf_auth() {
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║     取消 Cloudflare 授权            ║${NC}"
+    echo -e "${CYAN}║      新增 Cloudflare 授权           ║${NC}"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
@@ -1677,105 +1727,250 @@ revoke_cloudflared_auth() {
         return 1
     fi
 
-    # cloudflared 的授权证书可能在多个位置，按优先级检查：
-    # 1. ~/.cloudflared/cert.pem (默认位置)
-    # 2. /root/.cloudflared/cert.pem (root用户)
-    # 3. /etc/cloudflared/cert.pem (自定义配置)
-    local cert_file=""
-    local cert_locations=(
-        "$HOME/.cloudflared/cert.pem"
-        "/root/.cloudflared/cert.pem"
-        "${CLOUDFLARED_CONFIG_DIR}/cert.pem"
-    )
+    init_cf_auth_file
 
-    # 查找实际存在的证书文件
-    for location in "${cert_locations[@]}"; do
-        if [[ -f "$location" ]]; then
-            cert_file="$location"
-            break
-        fi
-    done
-
-    # 检查授权状态
-    if [[ -z "$cert_file" ]]; then
-        print_info "当前未授权 Cloudflare 账号"
-        echo ""
-        print_info "如需授权，请选择 '创建专用隧道' 进行登录"
-        echo ""
-        echo -e "${YELLOW}已检查的位置：${NC}"
-        for location in "${cert_locations[@]}"; do
-            echo "  ✗ $location"
-        done
-        return 0
-    fi
-
-    echo -e "${YELLOW}当前授权状态：${NC}"
-    echo -e "  凭证文件: ${GREEN}已存在${NC}"
-    echo -e "  文件路径: $cert_file"
-    echo ""
-
-    # 检查是否有正在使用的专用隧道
-    local active_tunnels=$("$CLOUDFLARED_BIN" tunnel list 2>/dev/null | tail -n +2 | wc -l)
-
-    if [[ "$active_tunnels" -gt 0 ]]; then
-        print_warning "检测到 $active_tunnels 个专用隧道"
-        echo ""
-        echo -e "${YELLOW}注意事项：${NC}"
-        echo "  1. 取消授权将导致所有专用隧道无法管理"
-        echo "  2. 建议先删除所有专用隧道再取消授权"
-        echo "  3. 现有隧道服务仍会继续运行（使用本地凭证）"
-        echo ""
-
-        "$CLOUDFLARED_BIN" tunnel list
-        echo ""
-    fi
-
-    print_warning "即将删除 Cloudflare 授权凭证"
-    echo ""
-    read -p "确认取消授权？[y/N]: " confirm
-
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-        print_info "已取消操作"
-        return 0
-    fi
-
-    echo ""
-    print_info "正在删除授权凭证..."
-
-    # 删除找到的证书文件
-    local deleted=false
-    if [[ -n "$cert_file" && -f "$cert_file" ]]; then
-        if rm -f "$cert_file"; then
-            print_success "✅ 已删除: $cert_file"
-            deleted=true
-        else
-            print_error "❌ 删除失败: $cert_file"
-        fi
-    fi
-
-    # 额外清理：删除所有可能位置的证书文件（以防有多个副本）
-    for location in "${cert_locations[@]}"; do
-        if [[ "$location" != "$cert_file" && -f "$location" ]]; then
-            if rm -f "$location"; then
-                print_success "✅ 已删除: $location"
-                deleted=true
-            fi
-        fi
-    done
-
-    if [[ "$deleted" == true ]]; then
-        echo ""
-        print_success "✅ Cloudflare 授权已取消"
-        echo ""
-        echo -e "${CYAN}说明：${NC}"
-        echo "  • 已删除授权凭证文件"
-        echo "  • 无法再创建或管理专用隧道"
-        echo "  • 现有隧道服务不受影响（使用本地凭证）"
-        echo "  • 如需重新授权，请再次执行 '创建专用隧道'"
-    else
-        print_error "删除授权凭证失败"
+    # 输入授权名称
+    read -p "请输入授权名称（用于标识，如: main, backup）: " auth_name
+    if [[ -z "$auth_name" ]]; then
+        print_error "授权名称不能为空"
         return 1
     fi
+
+    # 检查名称是否已存在
+    if jq -e --arg name "$auth_name" '.auths[] | select(.name == $name)' "$CLOUDFLARED_AUTH_FILE" >/dev/null 2>&1; then
+        print_error "授权名称已存在: $auth_name"
+        return 1
+    fi
+
+    # 可选：添加备注
+    read -p "请输入备注（可选，如: 主账号）: " auth_note
+
+    # 定义证书保存路径
+    local cert_file="${CLOUDFLARED_CONFIG_DIR}/cert-${auth_name}.pem"
+
+    # 临时目录用于 cloudflared login
+    local temp_home="/tmp/cf-login-$$"
+    mkdir -p "$temp_home/.cloudflared"
+
+    print_info "准备授权登录..."
+    print_warning "将打开浏览器进行授权，请完成登录后返回终端"
+    echo ""
+    read -p "按 Enter 开始登录..."
+    echo ""
+
+    # 使用临时 HOME 执行登录
+    if HOME="$temp_home" "$CLOUDFLARED_BIN" tunnel login; then
+        # 登录成功，移动证书到目标位置
+        if [[ -f "$temp_home/.cloudflared/cert.pem" ]]; then
+            mkdir -p "$CLOUDFLARED_CONFIG_DIR"
+            mv "$temp_home/.cloudflared/cert.pem" "$cert_file"
+            chmod 600 "$cert_file"
+
+            print_success "✅ 授权登录成功"
+            echo ""
+
+            # 尝试获取关联的域名
+            print_info "正在获取授权关联的域名..."
+            local domains=$(get_cf_auth_domains "$cert_file")
+
+            if [[ -n "$domains" ]]; then
+                print_success "检测到域名: $domains"
+            else
+                print_info "未检测到已有隧道，域名列表为空"
+                domains=""
+            fi
+            echo ""
+
+            # 保存到授权数据文件
+            local created_at=$(date +%Y-%m-%d)
+            jq --arg name "$auth_name" \
+               --arg cert "$cert_file" \
+               --arg domains "$domains" \
+               --arg note "$auth_note" \
+               --arg created "$created_at" \
+               '.auths += [{
+                   name: $name,
+                   cert_file: $cert,
+                   domains: ($domains | split(",") | map(select(length > 0))),
+                   note: $note,
+                   created_at: $created
+               }]' \
+               "$CLOUDFLARED_AUTH_FILE" > "${CLOUDFLARED_AUTH_FILE}.tmp" && \
+               mv "${CLOUDFLARED_AUTH_FILE}.tmp" "$CLOUDFLARED_AUTH_FILE"
+
+            print_success "✅ 授权已添加: $auth_name"
+            echo ""
+            echo -e "${CYAN}授权信息：${NC}"
+            echo -e "  名称: ${GREEN}$auth_name${NC}"
+            echo -e "  证书: $cert_file"
+            echo -e "  域名: ${domains:-无}"
+            echo -e "  备注: ${auth_note:-无}"
+        else
+            print_error "未找到授权证书文件"
+            rm -rf "$temp_home"
+            return 1
+        fi
+    else
+        print_error "Cloudflare 授权登录失败"
+        rm -rf "$temp_home"
+        return 1
+    fi
+
+    rm -rf "$temp_home"
+}
+
+# 查看所有授权
+list_cf_auths() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║    Cloudflare 授权列表              ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    init_cf_auth_file
+
+    local auth_count=$(jq '.auths | length' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null || echo "0")
+
+    if [[ "$auth_count" -eq 0 ]]; then
+        print_info "当前没有已保存的授权"
+        echo ""
+        print_info "使用 '新增授权' 功能添加 Cloudflare 账号授权"
+        return 0
+    fi
+
+    echo -e "${YELLOW}共有 $auth_count 个授权：${NC}"
+    echo ""
+
+    local index=1
+    jq -r '.auths[] | "\(.name)|\(.cert_file)|\(.domains | join(", "))|\(.note)|\(.created_at)"' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null | \
+    while IFS='|' read -r name cert_file domains note created_at; do
+        echo -e "${GREEN}[$index]${NC} ${CYAN}$name${NC}"
+        echo "    证书文件: $cert_file"
+
+        # 检查证书文件是否存在
+        if [[ -f "$cert_file" ]]; then
+            echo -e "    文件状态: ${GREEN}✓ 存在${NC}"
+        else
+            echo -e "    文件状态: ${RED}✗ 缺失${NC}"
+        fi
+
+        if [[ -n "$domains" ]]; then
+            echo "    关联域名: $domains"
+        else
+            echo "    关联域名: 无"
+        fi
+
+        if [[ -n "$note" ]]; then
+            echo "    备注: $note"
+        fi
+
+        echo "    创建时间: $created_at"
+        echo ""
+        ((index++))
+    done
+}
+
+# 删除指定授权
+delete_cf_auth() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║      删除 Cloudflare 授权           ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    init_cf_auth_file
+
+    local auth_count=$(jq '.auths | length' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null || echo "0")
+
+    if [[ "$auth_count" -eq 0 ]]; then
+        print_info "当前没有已保存的授权"
+        return 0
+    fi
+
+    # 列出所有授权
+    echo -e "${YELLOW}已保存的授权：${NC}"
+    local index=1
+    jq -r '.auths[] | "\(.name)|\(.note)"' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null | \
+    while IFS='|' read -r name note; do
+        if [[ -n "$note" ]]; then
+            echo -e "${GREEN}$index.${NC} $name - $note"
+        else
+            echo -e "${GREEN}$index.${NC} $name"
+        fi
+        ((index++))
+    done
+    echo ""
+
+    read -p "请选择要删除的授权 [1-$auth_count]: " choice
+
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [[ "$choice" -lt 1 ]] || [[ "$choice" -gt "$auth_count" ]]; then
+        print_error "无效选择"
+        return 1
+    fi
+
+    # 获取选中的授权信息
+    local auth_info=$(jq -r ".auths[$((choice-1))] | \"\(.name)|\(.cert_file)\"" "$CLOUDFLARED_AUTH_FILE")
+    IFS='|' read -r auth_name cert_file <<< "$auth_info"
+
+    echo ""
+    print_warning "即将删除授权: $auth_name"
+    echo -e "  证书文件: $cert_file"
+    echo ""
+
+    # 检查是否有隧道使用此授权
+    if [[ -f "$cert_file" ]]; then
+        local tunnel_count=$(HOME=$(dirname "$cert_file") "$CLOUDFLARED_BIN" tunnel list 2>/dev/null | tail -n +2 | wc -l || echo "0")
+        if [[ "$tunnel_count" -gt 0 ]]; then
+            print_warning "此授权下有 $tunnel_count 个专用隧道"
+            echo "  删除授权后将无法管理这些隧道"
+            echo ""
+        fi
+    fi
+
+    read -p "确认删除？[y/N]: " confirm
+
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        print_info "已取消删除"
+        return 0
+    fi
+
+    # 删除证书文件
+    if [[ -f "$cert_file" ]]; then
+        rm -f "$cert_file"
+        print_success "✅ 已删除证书文件"
+    fi
+
+    # 从数据文件中删除
+    jq "del(.auths[$((choice-1))])" "$CLOUDFLARED_AUTH_FILE" > "${CLOUDFLARED_AUTH_FILE}.tmp" && \
+    mv "${CLOUDFLARED_AUTH_FILE}.tmp" "$CLOUDFLARED_AUTH_FILE"
+
+    print_success "✅ 授权已删除: $auth_name"
+}
+
+# Cloudflare 授权管理菜单
+manage_cf_auth() {
+    while true; do
+        clear
+        echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║    Cloudflare 授权管理              ║${NC}"
+        echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+        echo ""
+        echo -e "${GREEN}1.${NC} 查看所有授权"
+        echo -e "${GREEN}2.${NC} 新增授权"
+        echo -e "${GREEN}3.${NC} 删除授权"
+        echo -e "${GREEN}0.${NC} 返回"
+        echo ""
+
+        read -p "请选择 [0-3]: " choice
+
+        case $choice in
+            1) list_cf_auths; read -p "按 Enter 继续..." ;;
+            2) add_cf_auth; read -p "按 Enter 继续..." ;;
+            3) delete_cf_auth; read -p "按 Enter 继续..." ;;
+            0) return 0 ;;
+            *) print_error "无效选择"; sleep 1 ;;
+        esac
+    done
 }
 
 # ============================================================================
@@ -2720,7 +2915,7 @@ menu_argo_tunnel() {
         echo -e "${GREEN}4.${NC}  创建专用隧道"
         echo -e "${GREEN}5.${NC}  查看专用隧道"
         echo -e "${GREEN}6.${NC}  删除专用隧道"
-        echo -e "${GREEN}7.${NC}  取消Cloudflare授权"
+        echo -e "${GREEN}7.${NC}  CF授权管理"
         echo ""
         echo -e "${YELLOW}━━━━━━━ 系统管理 ━━━━━━━${NC}"
         echo -e "${GREEN}8.${NC}  管理隧道-节点绑定"
@@ -2745,7 +2940,7 @@ menu_argo_tunnel() {
             4) create_dedicated_argo_tunnel; read -p "按 Enter 继续..." ;;
             5) list_dedicated_argo_tunnels; read -p "按 Enter 继续..." ;;
             6) delete_dedicated_argo_tunnel; read -p "按 Enter 继续..." ;;
-            7) revoke_cloudflared_auth; read -p "按 Enter 继续..." ;;
+            7) manage_cf_auth ;;
             8) manage_tunnel_node_binding; read -p "按 Enter 继续..." ;;
             9) view_cloudflared_logs ;;
             10) restart_cloudflared_service; read -p "按 Enter 继续..." ;;

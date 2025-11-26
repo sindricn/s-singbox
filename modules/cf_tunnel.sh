@@ -570,24 +570,57 @@ create_dedicated_argo_tunnel() {
             read -p "请选择 [0-$(echo "$nodes" | wc -l)]: " node_choice
 
             if [[ "$node_choice" == "0" ]]; then
-                read -p "请输入本地服务端口 [例如: 8080]: " local_port
+                read -p "请输入本地服务端口 [默认: 8080]: " local_port
+                local_port=${local_port:-8080}
             else
                 local_port=$(echo "$nodes" | sed -n "${node_choice}p" | cut -d'|' -f1)
             fi
         else
-            read -p "没有现有节点，请输入本地服务端口 [例如: 8080]: " local_port
+            read -p "没有现有节点，请输入本地服务端口 [默认: 8080]: " local_port
+            local_port=${local_port:-8080}
         fi
     else
-        read -p "请输入本地服务端口 [例如: 8080]: " local_port
+        read -p "请输入本地服务端口 [默认: 8080]: " local_port
+        local_port=${local_port:-8080}
     fi
 
-    if [[ -z "$local_port" ]]; then
-        print_error "端口不能为空"
-        return 1
-    fi
+    # 验证端口
+    while true; do
+        if [[ -z "$local_port" ]]; then
+            print_error "端口不能为空"
+            read -p "请输入本地服务端口 [默认: 8080]: " local_port
+            local_port=${local_port:-8080}
+            continue
+        fi
 
-    # 创建配置文件
-    local config_file="${CLOUDFLARED_CONFIG_DIR}/config.yml"
+        # 验证端口号格式
+        if ! [[ "$local_port" =~ ^[0-9]+$ ]] || [[ "$local_port" -lt 1 ]] || [[ "$local_port" -gt 65535 ]]; then
+            print_error "端口号必须是 1-65535 之间的数字"
+            read -p "请重新输入本地服务端口 [默认: 8080]: " local_port
+            local_port=${local_port:-8080}
+            continue
+        fi
+
+        # 检查端口是否被占用
+        if ss -tlnp 2>/dev/null | grep -q ":$local_port " || netstat -tlnp 2>/dev/null | grep -q ":$local_port "; then
+            print_warning "端口 $local_port 已被占用"
+            read -p "是否继续使用此端口？[y/N]: " use_busy_port
+            if [[ ! "$use_busy_port" =~ ^[Yy]$ ]]; then
+                read -p "请输入其他端口 [默认: 8080]: " local_port
+                local_port=${local_port:-8080}
+                continue
+            fi
+        fi
+
+        # 验证通过
+        break
+    done
+
+    print_success "✓ 使用端口: $local_port"
+    echo ""
+
+    # 创建独立的配置文件（每个隧道一个配置文件，避免覆盖）
+    local config_file="${CLOUDFLARED_CONFIG_DIR}/config-${tunnel_name}.yml"
     cat > "$config_file" <<EOF
 tunnel: ${tunnel_id}
 credentials-file: ${CLOUDFLARED_CONFIG_DIR}/${tunnel_id}.json
@@ -747,11 +780,12 @@ bind_tunnel_to_node() {
         return 1
     fi
 
-    # 更新 cloudflared 配置文件中的 ingress 规则
-    local config_file="${CLOUDFLARED_CONFIG_DIR}/config.yml"
+    # 更新专用隧道的独立配置文件
+    local config_file="${CLOUDFLARED_CONFIG_DIR}/config-${tunnel_name}.yml"
 
     if [[ ! -f "$config_file" ]]; then
         print_error "配置文件不存在: $config_file"
+        print_info "请先创建隧道: $tunnel_name"
         return 1
     fi
 
@@ -1294,17 +1328,18 @@ manage_tunnel_node_binding() {
                     return 1
                 fi
 
-                # 更新 cloudflared 配置文件
-                local config_file="${CLOUDFLARED_CONFIG_DIR}/config.yml"
+                # 更新专用隧道的独立配置文件
+                local config_file="${CLOUDFLARED_CONFIG_DIR}/config-${selected_tunnel}.yml"
 
                 if [[ ! -f "$config_file" ]]; then
                     print_error "配置文件不存在: $config_file"
+                    print_info "请先创建隧道: $selected_tunnel"
                     return 1
                 fi
 
                 print_info "正在更新 cloudflared 配置..."
 
-                # 重新生成配置文件
+                # 重新生成配置文件（使用独立配置）
                 cat > "$config_file" <<EOF
 tunnel: ${tunnel_id}
 credentials-file: ${CLOUDFLARED_CONFIG_DIR}/${tunnel_id}.json
@@ -1506,12 +1541,12 @@ delete_dedicated_argo_tunnel() {
     fi
     echo ""
 
-    # 2. 删除配置文件
-    local config_file="${CLOUDFLARED_CONFIG_DIR}/config.yml"
+    # 2. 删除独立配置文件
+    local config_file="${CLOUDFLARED_CONFIG_DIR}/config-${tunnel_name}.yml"
     if [[ -f "$config_file" ]]; then
         print_info "步骤 2/5: 删除配置文件..."
         rm -f "$config_file"
-        print_success "✅ 配置文件已删除"
+        print_success "✅ 配置文件已删除: $config_file"
     else
         print_info "步骤 2/5: 未找到配置文件，跳过"
     fi

@@ -1581,13 +1581,35 @@ revoke_cloudflared_auth() {
         return 1
     fi
 
-    local cert_file="${CLOUDFLARED_CONFIG_DIR}/cert.pem"
+    # cloudflared 的授权证书可能在多个位置，按优先级检查：
+    # 1. ~/.cloudflared/cert.pem (默认位置)
+    # 2. /root/.cloudflared/cert.pem (root用户)
+    # 3. /etc/cloudflared/cert.pem (自定义配置)
+    local cert_file=""
+    local cert_locations=(
+        "$HOME/.cloudflared/cert.pem"
+        "/root/.cloudflared/cert.pem"
+        "${CLOUDFLARED_CONFIG_DIR}/cert.pem"
+    )
+
+    # 查找实际存在的证书文件
+    for location in "${cert_locations[@]}"; do
+        if [[ -f "$location" ]]; then
+            cert_file="$location"
+            break
+        fi
+    done
 
     # 检查授权状态
-    if [[ ! -f "$cert_file" ]]; then
+    if [[ -z "$cert_file" ]]; then
         print_info "当前未授权 Cloudflare 账号"
         echo ""
         print_info "如需授权，请选择 '创建专用隧道' 进行登录"
+        echo ""
+        echo -e "${YELLOW}已检查的位置：${NC}"
+        for location in "${cert_locations[@]}"; do
+            echo "  ✗ $location"
+        done
         return 0
     fi
 
@@ -1624,7 +1646,29 @@ revoke_cloudflared_auth() {
     echo ""
     print_info "正在删除授权凭证..."
 
-    if rm -f "$cert_file"; then
+    # 删除找到的证书文件
+    local deleted=false
+    if [[ -n "$cert_file" && -f "$cert_file" ]]; then
+        if rm -f "$cert_file"; then
+            print_success "✅ 已删除: $cert_file"
+            deleted=true
+        else
+            print_error "❌ 删除失败: $cert_file"
+        fi
+    fi
+
+    # 额外清理：删除所有可能位置的证书文件（以防有多个副本）
+    for location in "${cert_locations[@]}"; do
+        if [[ "$location" != "$cert_file" && -f "$location" ]]; then
+            if rm -f "$location"; then
+                print_success "✅ 已删除: $location"
+                deleted=true
+            fi
+        fi
+    done
+
+    if [[ "$deleted" == true ]]; then
+        echo ""
         print_success "✅ Cloudflare 授权已取消"
         echo ""
         echo -e "${CYAN}说明：${NC}"

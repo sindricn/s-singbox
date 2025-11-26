@@ -478,39 +478,79 @@ create_dedicated_argo_tunnel() {
     # 创建配置目录
     mkdir -p "$CLOUDFLARED_CONFIG_DIR"
 
-    # 第一步：登录 Cloudflare
-    print_info "第一步：登录 Cloudflare 账号"
-    echo ""
-    print_warning "将打开浏览器进行授权，请完成登录后返回终端"
-    echo ""
-    read -p "按 Enter 开始登录..."
+    # 第一步：检查并登录 Cloudflare
+    print_info "第一步：检查 Cloudflare 授权"
     echo ""
 
-    local login_attempts=0
-    local max_attempts=3
-    while [[ $login_attempts -lt $max_attempts ]]; do
-        if "$CLOUDFLARED_BIN" tunnel login; then
-            print_success "✅ Cloudflare 登录成功"
-            echo ""
+    # 检查授权证书是否存在
+    local cert_file=""
+    local cert_locations=(
+        "$HOME/.cloudflared/cert.pem"
+        "/root/.cloudflared/cert.pem"
+        "${CLOUDFLARED_CONFIG_DIR}/cert.pem"
+    )
+
+    for location in "${cert_locations[@]}"; do
+        if [[ -f "$location" ]]; then
+            cert_file="$location"
             break
-        else
-            ((login_attempts++))
-            if [[ $login_attempts -lt $max_attempts ]]; then
-                print_error "Cloudflare 登录失败（尝试 $login_attempts/$max_attempts）"
-                echo ""
-                read -p "是否重试？[Y/n]: " retry
-                retry=${retry:-Y}
-                if [[ ! "$retry" =~ ^[Yy]$ ]]; then
-                    print_error "已取消创建隧道"
-                    return 1
-                fi
-                echo ""
-            else
-                print_error "Cloudflare 登录失败，已达到最大尝试次数"
-                return 1
-            fi
         fi
     done
+
+    if [[ -n "$cert_file" ]]; then
+        print_success "✅ 已检测到授权凭证: $cert_file"
+        echo ""
+        read -p "是否使用现有授权？[Y/n]: " use_existing
+        use_existing=${use_existing:-Y}
+
+        if [[ "$use_existing" =~ ^[Yy]$ ]]; then
+            print_info "使用现有授权"
+        else
+            print_warning "将重新登录（现有凭证将被覆盖）"
+            echo ""
+            read -p "按 Enter 开始登录..."
+            echo ""
+
+            if ! "$CLOUDFLARED_BIN" tunnel login; then
+                print_error "Cloudflare 登录失败"
+                return 1
+            fi
+            print_success "✅ Cloudflare 登录成功"
+        fi
+    else
+        print_info "未检测到授权，需要登录"
+        print_warning "将打开浏览器进行授权，请完成登录后返回终端"
+        echo ""
+        read -p "按 Enter 开始登录..."
+        echo ""
+
+        local login_attempts=0
+        local max_attempts=3
+        while [[ $login_attempts -lt $max_attempts ]]; do
+            if "$CLOUDFLARED_BIN" tunnel login; then
+                print_success "✅ Cloudflare 登录成功"
+                echo ""
+                break
+            else
+                ((login_attempts++))
+                if [[ $login_attempts -lt $max_attempts ]]; then
+                    print_error "Cloudflare 登录失败（尝试 $login_attempts/$max_attempts）"
+                    echo ""
+                    read -p "是否重试？[Y/n]: " retry
+                    retry=${retry:-Y}
+                    if [[ ! "$retry" =~ ^[Yy]$ ]]; then
+                        print_error "已取消创建隧道"
+                        return 1
+                    fi
+                    echo ""
+                else
+                    print_error "Cloudflare 登录失败，已达到最大尝试次数"
+                    return 1
+                fi
+            fi
+        done
+    fi
+    echo ""
 
     # 第二步：创建隧道
     read -p "请输入隧道名称 [例如: my-tunnel]: " tunnel_name
@@ -536,6 +576,38 @@ create_dedicated_argo_tunnel() {
     fi
 
     print_info "隧道 ID: $tunnel_id"
+    echo ""
+
+    # 复制凭证文件到配置目录
+    # cloudflared 在创建隧道时会将凭证文件保存在 ~/.cloudflared/<tunnel_id>.json
+    # 我们需要将其复制到 /etc/cloudflared/ 供 systemd 服务使用
+    local source_creds=""
+    local creds_locations=(
+        "$HOME/.cloudflared/${tunnel_id}.json"
+        "/root/.cloudflared/${tunnel_id}.json"
+    )
+
+    for location in "${creds_locations[@]}"; do
+        if [[ -f "$location" ]]; then
+            source_creds="$location"
+            break
+        fi
+    done
+
+    if [[ -z "$source_creds" ]]; then
+        print_error "无法找到隧道凭证文件"
+        print_error "尝试的位置: ${creds_locations[*]}"
+        return 1
+    fi
+
+    local target_creds="${CLOUDFLARED_CONFIG_DIR}/${tunnel_id}.json"
+    if cp "$source_creds" "$target_creds"; then
+        chmod 600 "$target_creds"
+        print_success "✅ 凭证文件已复制: $target_creds"
+    else
+        print_error "凭证文件复制失败"
+        return 1
+    fi
     echo ""
 
     # 第三步：配置域名
@@ -584,7 +656,7 @@ create_dedicated_argo_tunnel() {
         local_port=${local_port:-8080}
     fi
 
-    # 验证端口
+    # 验证端口格式
     while true; do
         if [[ -z "$local_port" ]]; then
             print_error "端口不能为空"
@@ -593,23 +665,12 @@ create_dedicated_argo_tunnel() {
             continue
         fi
 
-        # 验证端口号格式
+        # 验证端口号格式（1-65535）
         if ! [[ "$local_port" =~ ^[0-9]+$ ]] || [[ "$local_port" -lt 1 ]] || [[ "$local_port" -gt 65535 ]]; then
             print_error "端口号必须是 1-65535 之间的数字"
             read -p "请重新输入本地服务端口 [默认: 8080]: " local_port
             local_port=${local_port:-8080}
             continue
-        fi
-
-        # 检查端口是否被占用
-        if ss -tlnp 2>/dev/null | grep -q ":$local_port " || netstat -tlnp 2>/dev/null | grep -q ":$local_port "; then
-            print_warning "端口 $local_port 已被占用"
-            read -p "是否继续使用此端口？[y/N]: " use_busy_port
-            if [[ ! "$use_busy_port" =~ ^[Yy]$ ]]; then
-                read -p "请输入其他端口 [默认: 8080]: " local_port
-                local_port=${local_port:-8080}
-                continue
-            fi
         fi
 
         # 验证通过

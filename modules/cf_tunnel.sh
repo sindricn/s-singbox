@@ -939,12 +939,34 @@ list_dedicated_argo_tunnels() {
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
-    if [[ ! -f "$CLOUDFLARED_BIN" ]]; then
-        print_error "cloudflared 未安装"
-        return 1
+    # 从配置文件列出隧道
+    local config_files=$(ls "${CLOUDFLARED_CONFIG_DIR}"/config-*.yml 2>/dev/null)
+
+    if [[ -z "$config_files" ]]; then
+        print_info "当前没有配置的隧道"
+        return 0
     fi
 
-    "$CLOUDFLARED_BIN" tunnel list
+    echo -e "${YELLOW}隧道名称${NC}          ${YELLOW}域名${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    local tunnel_count=0
+    for config_file in $config_files; do
+        local tunnel_name=$(basename "$config_file" | sed 's/^config-//;s/\.yml$//')
+        local tunnel_domain=$(extract_tunnel_hostname "$config_file")
+
+        if [[ -z "$tunnel_domain" ]]; then
+            tunnel_domain="${YELLOW}未配置${NC}"
+        else
+            tunnel_domain="${CYAN}${tunnel_domain}${NC}"
+        fi
+
+        printf "%-25s %b\n" "$tunnel_name" "$tunnel_domain"
+        ((tunnel_count++))
+    done
+
+    echo ""
+    echo -e "${GREEN}共找到 $tunnel_count 个隧道${NC}"
 }
 
 # 查看 cloudflared 服务日志
@@ -1646,25 +1668,47 @@ delete_dedicated_argo_tunnel() {
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
-    if [[ ! -f "$CLOUDFLARED_BIN" ]]; then
-        print_error "cloudflared 未安装"
-        return 1
+    # 从配置文件列出隧道
+    local config_files=$(ls "${CLOUDFLARED_CONFIG_DIR}"/config-*.yml 2>/dev/null)
+
+    if [[ -z "$config_files" ]]; then
+        print_info "当前没有配置的隧道"
+        return 0
     fi
 
-    # 列出隧道
     echo -e "${YELLOW}当前隧道列表：${NC}"
     echo ""
-    "$CLOUDFLARED_BIN" tunnel list
-    echo ""
+    echo -e "${YELLOW}编号  隧道名称               域名${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-    read -p "请输入要删除的隧道名称: " tunnel_name
-    if [[ -z "$tunnel_name" ]]; then
-        print_error "隧道名称不能为空"
+    local index=1
+    declare -a tunnel_names
+    for config_file in $config_files; do
+        local tunnel_name=$(basename "$config_file" | sed 's/^config-//;s/\.yml$//')
+        local tunnel_domain=$(extract_tunnel_hostname "$config_file")
+
+        if [[ -z "$tunnel_domain" ]]; then
+            tunnel_domain="未配置"
+        fi
+
+        printf "${GREEN}%-6s${NC}%-25s%s\n" "$index." "$tunnel_name" "$tunnel_domain"
+        tunnel_names[$index]="$tunnel_name"
+        ((index++))
+    done
+
+    echo ""
+    read -p "请选择要删除的隧道编号 [1-$((index-1))]: " choice
+
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [[ "$choice" -lt 1 ]] || [[ "$choice" -ge $index ]]; then
+        print_error "无效选择"
         return 1
     fi
 
-    # 获取隧道ID
-    local tunnel_id=$("$CLOUDFLARED_BIN" tunnel list 2>/dev/null | grep "$tunnel_name" | awk '{print $1}')
+    local tunnel_name="${tunnel_names[$choice]}"
+    local config_file="${CLOUDFLARED_CONFIG_DIR}/config-${tunnel_name}.yml"
+
+    # 从配置文件读取 tunnel ID
+    local tunnel_id=$(grep "^tunnel:" "$config_file" 2>/dev/null | awk '{print $2}')
 
     # 确认删除
     echo ""

@@ -3416,9 +3416,14 @@ quick_setup_argo_vless_ws() {
                 if [[ "$auth_count" -gt 1 ]]; then
                     # 有多个授权，让用户选择
                     echo -e "${YELLOW}检测到多个授权，请选择：${NC}"
+
+                    # 使用数组避免子 shell 问题
+                    local auth_quick_list
+                    mapfile -t auth_quick_list < <(jq -r '.auths[] | "\(.name)|\(.cert_file)|\(.auth_domain // "")|\(.note)"' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null)
+
                     local auth_index=1
-                    jq -r '.auths[] | "\(.name)|\(.cert_file)|\(.auth_domain // "")|\(.note)"' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null | \
-                    while IFS='|' read -r name cert_file auth_domain note; do
+                    for auth_quick_item in "${auth_quick_list[@]}"; do
+                        IFS='|' read -r name cert_file auth_domain note <<< "$auth_quick_item"
                         if [[ -n "$note" && -n "$auth_domain" ]]; then
                             echo -e "${GREEN}${auth_index}.${NC} $name - $note (${CYAN}$auth_domain${NC})"
                         elif [[ -n "$note" ]]; then

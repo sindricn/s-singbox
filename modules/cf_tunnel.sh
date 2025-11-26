@@ -492,9 +492,14 @@ create_dedicated_argo_tunnel() {
     if [[ "$auth_count" -gt 0 ]]; then
         # 有已保存的授权，列出供选择
         echo -e "${YELLOW}已保存的授权：${NC}"
+
+        # 使用数组避免子 shell 问题
+        local auth_select_list
+        mapfile -t auth_select_list < <(jq -r '.auths[] | "\(.name)|\(.cert_file)|\(.auth_domain // "")|\(.note)"' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null)
+
         local index=1
-        jq -r '.auths[] | "\(.name)|\(.cert_file)|\(.auth_domain // "")|\(.note)"' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null | \
-        while IFS='|' read -r name cert_file auth_domain note; do
+        for auth_select_item in "${auth_select_list[@]}"; do
+            IFS='|' read -r name cert_file auth_domain note <<< "$auth_select_item"
             if [[ -n "$note" && -n "$auth_domain" ]]; then
                 echo -e "${GREEN}$index.${NC} $name - $note (${CYAN}$auth_domain${NC})"
             elif [[ -n "$note" ]]; then
@@ -1301,9 +1306,14 @@ manage_tunnel_node_binding() {
 
             if [[ "$auth_count" -gt 1 ]]; then
                 echo -e "${YELLOW}检测到多个授权，请选择要查看的授权：${NC}"
+
+                # 使用数组避免子 shell 问题
+                local auth_bind_list
+                mapfile -t auth_bind_list < <(jq -r '.auths[] | "\(.name)|\(.cert_file)|\(.auth_domain // "")|\(.note)"' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null)
+
                 local auth_index=1
-                jq -r '.auths[] | "\(.name)|\(.cert_file)|\(.auth_domain // "")|\(.note)"' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null | \
-                while IFS='|' read -r name cert_file auth_domain note; do
+                for auth_bind_item in "${auth_bind_list[@]}"; do
+                    IFS='|' read -r name cert_file auth_domain note <<< "$auth_bind_item"
                     if [[ -n "$note" && -n "$auth_domain" ]]; then
                         echo -e "${GREEN}${auth_index}.${NC} $name - $note (${CYAN}$auth_domain${NC})"
                     elif [[ -n "$note" ]]; then
@@ -1968,9 +1978,14 @@ list_cf_auths() {
     echo -e "${YELLOW}共有 $auth_count 个授权：${NC}"
     echo ""
 
+    # 使用数组避免子 shell 问题
+    local auth_data
+    mapfile -t auth_data < <(jq -r '.auths[] | "\(.name)|\(.cert_file)|\(.auth_domain // "")|\(.note)|\(.created_at)"' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null)
+
     local index=1
-    jq -r '.auths[] | "\(.name)|\(.cert_file)|\(.auth_domain // "")|\(.note)|\(.created_at)"' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null | \
-    while IFS='|' read -r name cert_file auth_domain note created_at; do
+    for auth_line in "${auth_data[@]}"; do
+        IFS='|' read -r name cert_file auth_domain note created_at <<< "$auth_line"
+
         echo -e "${GREEN}[$index]${NC} ${CYAN}$name${NC}"
         echo "    证书文件: $cert_file"
 
@@ -1996,14 +2011,15 @@ list_cf_auths() {
 
         # 动态查询并显示该授权下的隧道列表（通过域名验证）
         if [[ -n "$auth_domain" ]]; then
-            local tunnels=$(get_cf_auth_tunnels "$auth_domain")
+            local tunnels
+            tunnels=$(get_cf_auth_tunnels "$auth_domain" 2>/dev/null)
             if [[ -n "$tunnels" ]]; then
-                echo -e "    关联隧道: ${CYAN}$tunnels${NC}"
+                echo -e "    关联隧道: ${CYAN}${tunnels}${NC}"
             else
-                echo "    关联隧道: ${YELLOW}无${NC}"
+                echo -e "    关联隧道: ${YELLOW}无${NC}"
             fi
         else
-            echo "    关联隧道: ${YELLOW}需设置授权域名${NC}"
+            echo -e "    关联隧道: ${YELLOW}需设置授权域名${NC}"
         fi
 
         echo ""
@@ -2030,9 +2046,14 @@ delete_cf_auth() {
 
     # 列出所有授权
     echo -e "${YELLOW}已保存的授权：${NC}"
+
+    # 使用数组避免子 shell 问题
+    local auth_list
+    mapfile -t auth_list < <(jq -r '.auths[] | "\(.name)|\(.note)"' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null)
+
     local index=1
-    jq -r '.auths[] | "\(.name)|\(.note)"' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null | \
-    while IFS='|' read -r name note; do
+    for auth_item in "${auth_list[@]}"; do
+        IFS='|' read -r name note <<< "$auth_item"
         if [[ -n "$note" ]]; then
             echo -e "${GREEN}$index.${NC} $name - $note"
         else

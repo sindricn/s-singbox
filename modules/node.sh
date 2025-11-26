@@ -3482,10 +3482,8 @@ quick_setup_argo_vless_ws() {
 
                     for tname in $existing_tunnels; do
                         local config_file="${CLOUDFLARED_CONFIG_DIR}/config-${tname}.yml"
-                        local domain=""
-                        if [[ -f "$config_file" ]]; then
-                            domain=$(grep "hostname:" "$config_file" 2>/dev/null | head -1 | awk '{print $2}')
-                        fi
+                        # 使用 cf_tunnel.sh 中的辅助函数提取 hostname
+                        local domain=$(extract_tunnel_hostname "$config_file")
                         echo -e "${GREEN}${tunnel_index}.${NC} $tname ${domain:+→ $domain}"
                         tunnel_map[$tunnel_index]="$tname|$domain"
                         ((tunnel_index++))
@@ -3523,7 +3521,8 @@ quick_setup_argo_vless_ws() {
                                 new_tunnel_name="$latest_tunnel"
                                 local config_file="${CLOUDFLARED_CONFIG_DIR}/config-${latest_tunnel}.yml"
                                 if [[ -f "$config_file" ]]; then
-                                    new_tunnel_domain=$(grep "hostname:" "$config_file" 2>/dev/null | head -1 | awk '{print $2}')
+                                    # 使用 cf_tunnel.sh 中的辅助函数提取 hostname
+                                    new_tunnel_domain=$(extract_tunnel_hostname "$config_file")
                                     tunnel_created=true
                                 fi
                             fi
@@ -3623,7 +3622,8 @@ EOF
                             if [[ -n "$latest_tunnel" ]]; then
                                 local config_file="${CLOUDFLARED_CONFIG_DIR}/config-${latest_tunnel}.yml"
                                 if [[ -f "$config_file" ]]; then
-                                    tunnel_domain=$(grep "hostname:" "$config_file" 2>/dev/null | head -1 | awk '{print $2}')
+                                    # 使用 cf_tunnel.sh 中的辅助函数提取 hostname
+                                    tunnel_domain=$(extract_tunnel_hostname "$config_file")
                                     print_success "隧道创建成功"
                                 fi
                             else

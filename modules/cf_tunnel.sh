@@ -1410,10 +1410,7 @@ manage_tunnel_node_binding() {
                     for tname in $dedicated_tunnels; do
                         # 从独立配置文件获取域名
                         local config_file="${CLOUDFLARED_CONFIG_DIR}/config-${tname}.yml"
-                        local domain=""
-                        if [[ -f "$config_file" ]]; then
-                            domain=$(grep "hostname:" "$config_file" | head -1 | awk '{print $2}')
-                        fi
+                        local domain=$(extract_tunnel_hostname "$config_file")
                         echo -e "${GREEN}$index.${NC} [专用] $tname → ${domain:-未配置域名}"
                         tunnel_list[$index]="$tname"
                         tunnel_types[$index]="dedicated"
@@ -1772,6 +1769,26 @@ init_cf_auth_file() {
     fi
 }
 
+# 从隧道配置文件中提取 hostname
+# 参数1: 配置文件路径
+# 返回: hostname 值
+extract_tunnel_hostname() {
+    local config_file=$1
+
+    if [[ ! -f "$config_file" ]]; then
+        echo ""
+        return 1
+    fi
+
+    # 支持多种格式：
+    # 格式1: hostname: domain.com（有空格）
+    # 格式2: hostname:domain.com（无空格）
+    # 格式3:   hostname: domain.com（有缩进）
+    local hostname=$(grep "^\s*hostname:" "$config_file" 2>/dev/null | head -1 | sed 's/^\s*hostname:\s*//' | awk '{print $1}')
+
+    echo "$hostname"
+}
+
 # 从域名提取顶级域名（最后两段）
 # 例如：tunnel1.example.com -> example.com
 extract_top_domain() {
@@ -1822,8 +1839,9 @@ get_cf_auth_tunnels() {
         [[ "$debug_mode" == "debug" ]] && echo "[DEBUG] 检查隧道: $tunnel_name" >&2
 
         # 从配置文件读取 hostname
-        local tunnel_hostname=$(grep "hostname:" "$config_file" 2>/dev/null | head -1 | awk '{print $2}')
-        [[ "$debug_mode" == "debug" ]] && echo "[DEBUG]   hostname: $tunnel_hostname" >&2
+        local tunnel_hostname=$(extract_tunnel_hostname "$config_file")
+        [[ "$debug_mode" == "debug" ]] && echo "[DEBUG]   配置行: $(grep "^\s*hostname:" "$config_file" 2>/dev/null | head -1)" >&2
+        [[ "$debug_mode" == "debug" ]] && echo "[DEBUG]   提取的 hostname: $tunnel_hostname" >&2
 
         if [[ -n "$tunnel_hostname" ]]; then
             # 提取隧道域名的顶级域名
@@ -1878,16 +1896,25 @@ test_tunnel_auth_mapping() {
         IFS='|' read -r name auth_domain <<< "$auth_line"
 
         echo -e "${GREEN}授权: $name${NC}"
-        echo "  授权域名: ${CYAN}$auth_domain${NC}"
+        if [[ -n "$auth_domain" ]]; then
+            echo -e "  授权域名: ${CYAN}${auth_domain}${NC}"
+        else
+            echo -e "  授权域名: ${YELLOW}未设置${NC}"
+        fi
         echo ""
 
         if [[ -n "$auth_domain" ]]; then
             echo "  调试输出："
-            local tunnels=$(get_cf_auth_tunnels "$auth_domain" "debug")
+            local tunnels
+            tunnels=$(get_cf_auth_tunnels "$auth_domain" "debug")
             echo ""
-            echo "  关联隧道: ${CYAN}${tunnels:-无}${NC}"
+            if [[ -n "$tunnels" ]]; then
+                echo -e "  关联隧道: ${CYAN}${tunnels}${NC}"
+            else
+                echo -e "  关联隧道: ${YELLOW}无${NC}"
+            fi
         else
-            echo "  ${YELLOW}未设置授权域名，无法验证${NC}"
+            echo -e "  ${YELLOW}未设置授权域名，无法验证${NC}"
         fi
         echo ""
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

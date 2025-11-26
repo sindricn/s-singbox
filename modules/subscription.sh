@@ -249,6 +249,52 @@ get_admin_user_info() {
     echo "$admin_uuid|$admin_password|$admin_username"
 }
 
+# 获取指定节点绑定的admin用户信息
+# 参数: port - 节点端口
+# 返回: JSON格式的用户信息，包含 id, username, password 字段
+get_admin_user_for_node() {
+    local port=$1
+
+    if [[ ! -f "$NODE_USERS_FILE" ]]; then
+        echo "null"
+        return 1
+    fi
+
+    # 从绑定关系中获取该节点的用户列表
+    local user_ids=$(jq -r --arg port "$port" '.bindings[] | select(.port == $port) | .users[]' "$NODE_USERS_FILE" 2>/dev/null)
+
+    if [[ -z "$user_ids" ]]; then
+        echo "null"
+        return 1
+    fi
+
+    # 查找admin用户的UUID
+    local admin_user=$(jq -r '.users[] | select(.username == "admin")' "$USERS_FILE" 2>/dev/null)
+    if [[ -z "$admin_user" || "$admin_user" == "null" ]]; then
+        echo "null"
+        return 1
+    fi
+
+    local admin_uuid=$(echo "$admin_user" | jq -r '.id')
+
+    # 检查admin用户是否在该节点的用户列表中
+    local found=false
+    while IFS= read -r user_id; do
+        if [[ "$user_id" == "$admin_uuid" ]]; then
+            found=true
+            break
+        fi
+    done <<< "$user_ids"
+
+    if [[ "$found" == true ]]; then
+        # 返回admin用户完整信息（修改字段名以匹配调用方期望）
+        echo "$admin_user" | jq '{uuid: .id, username: .username, password: .password}'
+    else
+        echo "null"
+        return 1
+    fi
+}
+
 # 获取公网IP
 get_public_ip() {
     local ip=""

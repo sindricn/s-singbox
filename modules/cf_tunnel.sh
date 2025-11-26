@@ -493,15 +493,16 @@ create_dedicated_argo_tunnel() {
         # 有已保存的授权，列出供选择
         echo -e "${YELLOW}已保存的授权：${NC}"
         local index=1
-        jq -r '.auths[] | "\(.name)|\(.cert_file)|\(.domains | join(", "))|\(.note)"' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null | \
-        while IFS='|' read -r name cert_file domains note; do
-            if [[ -n "$note" ]]; then
+        jq -r '.auths[] | "\(.name)|\(.cert_file)|\(.auth_domain // "")|\(.note)"' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null | \
+        while IFS='|' read -r name cert_file auth_domain note; do
+            if [[ -n "$note" && -n "$auth_domain" ]]; then
+                echo -e "${GREEN}$index.${NC} $name - $note (${CYAN}$auth_domain${NC})"
+            elif [[ -n "$note" ]]; then
                 echo -e "${GREEN}$index.${NC} $name - $note"
+            elif [[ -n "$auth_domain" ]]; then
+                echo -e "${GREEN}$index.${NC} $name (${CYAN}$auth_domain${NC})"
             else
                 echo -e "${GREEN}$index.${NC} $name"
-            fi
-            if [[ -n "$domains" ]]; then
-                echo "    域名: $domains"
             fi
             ((index++))
         done
@@ -1692,8 +1693,8 @@ init_cf_auth_file() {
     fi
 }
 
-# 获取授权账号的域名列表
-get_cf_auth_domains() {
+# 获取授权账号下的隧道列表（用于动态显示）
+get_cf_auth_tunnels() {
     local cert_file=$1
 
     if [[ ! -f "$cert_file" ]]; then
@@ -1701,17 +1702,31 @@ get_cf_auth_domains() {
         return 1
     fi
 
-    # 使用 cloudflared 临时使用此证书查询域名
-    # cloudflared 会读取 ~/.cloudflared/cert.pem，所以需要临时链接
-    local temp_cert_dir="/tmp/cf-auth-check-$$"
-    mkdir -p "$temp_cert_dir"
-    cp "$cert_file" "$temp_cert_dir/cert.pem"
+    # cloudflared 会读取 ~/.cloudflared/cert.pem
+    # 我们需要临时创建一个 HOME 目录并复制证书
+    local temp_home="/tmp/cf-auth-check-$$"
+    mkdir -p "$temp_home/.cloudflared"
 
-    local domains=$(HOME="$temp_cert_dir" "$CLOUDFLARED_BIN" tunnel list 2>/dev/null | tail -n +2 | awk '{print $3}' | sort -u | tr '\n' ',' | sed 's/,$//')
+    # 复制证书到临时目录
+    cp "$cert_file" "$temp_home/.cloudflared/cert.pem" 2>/dev/null || {
+        rm -rf "$temp_home"
+        echo ""
+        return 1
+    }
 
-    rm -rf "$temp_cert_dir"
+    # 使用临时 HOME 执行 cloudflared tunnel list
+    local tunnel_info=$(HOME="$temp_home" "$CLOUDFLARED_BIN" tunnel list 2>/dev/null)
 
-    echo "$domains"
+    # 清理临时目录
+    rm -rf "$temp_home"
+
+    # 提取隧道名称列表
+    local tunnels=""
+    if [[ -n "$tunnel_info" ]]; then
+        tunnels=$(echo "$tunnel_info" | tail -n +2 | awk '{print $2}' | sort -u | tr '\n' ',' | sed 's/,$//')
+    fi
+
+    echo "$tunnels"
 }
 
 # 新增 Cloudflare 授权
@@ -1742,7 +1757,20 @@ add_cf_auth() {
         return 1
     fi
 
+    # 输入授权的顶级域名（用于识别授权）
+    echo ""
+    print_info "授权域名："
+    echo -e "${YELLOW}提示：请输入该 Cloudflare 账号的顶级域名（如: example.com）${NC}"
+    echo -e "${YELLOW}      这个域名用于识别和区分不同的授权${NC}"
+    read -p "请输入授权顶级域名: " auth_domain
+
+    # 验证域名格式（简单验证）
+    if [[ -n "$auth_domain" ]] && ! [[ "$auth_domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
+        print_warning "域名格式可能不正确，但将继续"
+    fi
+
     # 可选：添加备注
+    echo ""
     read -p "请输入备注（可选，如: 主账号）: " auth_note
 
     # 定义证书保存路径
@@ -1752,6 +1780,7 @@ add_cf_auth() {
     local temp_home="/tmp/cf-login-$$"
     mkdir -p "$temp_home/.cloudflared"
 
+    echo ""
     print_info "准备授权登录..."
     print_warning "将打开浏览器进行授权，请完成登录后返回终端"
     echo ""
@@ -1769,29 +1798,17 @@ add_cf_auth() {
             print_success "✅ 授权登录成功"
             echo ""
 
-            # 尝试获取关联的域名
-            print_info "正在获取授权关联的域名..."
-            local domains=$(get_cf_auth_domains "$cert_file")
-
-            if [[ -n "$domains" ]]; then
-                print_success "检测到域名: $domains"
-            else
-                print_info "未检测到已有隧道，域名列表为空"
-                domains=""
-            fi
-            echo ""
-
             # 保存到授权数据文件
             local created_at=$(date +%Y-%m-%d)
             jq --arg name "$auth_name" \
                --arg cert "$cert_file" \
-               --arg domains "$domains" \
+               --arg domain "${auth_domain:-}" \
                --arg note "$auth_note" \
                --arg created "$created_at" \
                '.auths += [{
                    name: $name,
                    cert_file: $cert,
-                   domains: ($domains | split(",") | map(select(length > 0))),
+                   auth_domain: $domain,
                    note: $note,
                    created_at: $created
                }]' \
@@ -1803,8 +1820,24 @@ add_cf_auth() {
             echo -e "${CYAN}授权信息：${NC}"
             echo -e "  名称: ${GREEN}$auth_name${NC}"
             echo -e "  证书: $cert_file"
-            echo -e "  域名: ${domains:-无}"
-            echo -e "  备注: ${auth_note:-无}"
+            if [[ -n "$auth_domain" ]]; then
+                echo -e "  授权域名: ${GREEN}$auth_domain${NC}"
+            else
+                echo -e "  授权域名: ${YELLOW}未设置${NC}"
+            fi
+            if [[ -n "$auth_note" ]]; then
+                echo -e "  备注: $auth_note"
+            fi
+
+            # 查询并显示已有隧道
+            echo ""
+            print_info "正在查询该授权下的隧道..."
+            local tunnel_list=$(get_cf_auth_tunnels "$cert_file")
+            if [[ -n "$tunnel_list" ]]; then
+                print_success "检测到隧道: $tunnel_list"
+            else
+                print_info "未检测到已有隧道"
+            fi
         else
             print_error "未找到授权证书文件"
             rm -rf "$temp_home"
@@ -1842,8 +1875,8 @@ list_cf_auths() {
     echo ""
 
     local index=1
-    jq -r '.auths[] | "\(.name)|\(.cert_file)|\(.domains | join(", "))|\(.note)|\(.created_at)"' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null | \
-    while IFS='|' read -r name cert_file domains note created_at; do
+    jq -r '.auths[] | "\(.name)|\(.cert_file)|\(.auth_domain // "")|\(.note)|\(.created_at)"' "$CLOUDFLARED_AUTH_FILE" 2>/dev/null | \
+    while IFS='|' read -r name cert_file auth_domain note created_at; do
         echo -e "${GREEN}[$index]${NC} ${CYAN}$name${NC}"
         echo "    证书文件: $cert_file"
 
@@ -1854,10 +1887,11 @@ list_cf_auths() {
             echo -e "    文件状态: ${RED}✗ 缺失${NC}"
         fi
 
-        if [[ -n "$domains" ]]; then
-            echo "    关联域名: $domains"
+        # 显示授权域名
+        if [[ -n "$auth_domain" ]]; then
+            echo -e "    授权域名: ${GREEN}$auth_domain${NC}"
         else
-            echo "    关联域名: 无"
+            echo -e "    授权域名: ${YELLOW}未设置${NC}"
         fi
 
         if [[ -n "$note" ]]; then
@@ -1865,6 +1899,17 @@ list_cf_auths() {
         fi
 
         echo "    创建时间: $created_at"
+
+        # 动态查询并显示该授权下的隧道列表
+        if [[ -f "$cert_file" ]]; then
+            local tunnels=$(get_cf_auth_tunnels "$cert_file")
+            if [[ -n "$tunnels" ]]; then
+                echo -e "    关联隧道: ${CYAN}$tunnels${NC}"
+            else
+                echo "    关联隧道: ${YELLOW}无${NC}"
+            fi
+        fi
+
         echo ""
         ((index++))
     done

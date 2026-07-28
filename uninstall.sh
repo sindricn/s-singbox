@@ -90,6 +90,8 @@ stop_service() {
         print_success "服务已禁用"
     fi
     systemctl disable --now sing-box-user-limits.timer 2>/dev/null || true
+    systemctl disable --now sing-box-subscription-health.timer 2>/dev/null || true
+    systemctl disable --now sing-box-subscription.service 2>/dev/null || true
 }
 
 # =============================================================================
@@ -104,6 +106,8 @@ remove_service() {
         "/etc/systemd/system/sing-box-user-limits.service"
         "/etc/systemd/system/sing-box-user-limits.timer"
         "/etc/systemd/system/sing-box-subscription.service"
+        "/etc/systemd/system/sing-box-subscription-health.service"
+        "/etc/systemd/system/sing-box-subscription-health.timer"
         "/usr/lib/systemd/system/sing-box.service"
         "/lib/systemd/system/sing-box.service"
     )

@@ -1156,6 +1156,14 @@ main() {
         ensure_user_limits_timer || print_warning "用户限制定时器初始化失败"
     fi
 
+    if [[ "$run_mode" != "--enforce-limits" ]] && command -v ensure_subscription_server_runtime >/dev/null 2>&1; then
+        ensure_subscription_server_runtime || print_warning "订阅服务自动恢复失败，请在订阅管理中手动重启"
+    fi
+
+    if [[ "$run_mode" != "--enforce-limits" ]] && command -v warn_if_stats_capability_missing >/dev/null 2>&1; then
+        warn_if_stats_capability_missing || true
+    fi
+
     if [[ "$run_mode" == "--enforce-limits" ]]; then
         check_all_user_limits
         return $?

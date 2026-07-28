@@ -23,6 +23,17 @@ get_singbox_bin() {
     fi
 }
 
+warn_if_stats_capability_missing() {
+    local bin
+    bin=$(get_singbox_bin)
+    [[ -x "$bin" ]] || return 0
+    if ! "$bin" version 2>/dev/null | grep -q 'with_v2ray_api'; then
+        print_warning "当前 sing-box 内核缺少 with_v2ray_api，用户流量与最近活跃状态不可用"
+        print_info "请进入【sing-box 管理 → 更新 sing-box】安装定制内核"
+        return 1
+    fi
+}
+
 atomic_write_json() {
     local target=$1
     local content=$2
@@ -406,10 +417,18 @@ _generate_singbox_config_114() (
     printf '%s\n' "$full" | jq . > "$candidate" || { rm -f "$candidate"; return 1; }
     chmod 600 "$candidate"
     bin=$(get_singbox_bin)
-    if [[ -x "$bin" ]] && ! "$bin" check -c "$candidate"; then
-        print_error "sing-box check 未通过，保留当前配置"
-        rm -f "$candidate"
-        return 1
+    if [[ -x "$bin" ]]; then
+        if ! "$bin" version 2>/dev/null | grep -q 'with_v2ray_api'; then
+            print_error "当前 sing-box 内核缺少 with_v2ray_api，无法采集用户流量"
+            print_info "请先通过管理菜单更新 sing-box 定制内核"
+            rm -f "$candidate"
+            return 1
+        fi
+        if ! "$bin" check -c "$candidate"; then
+            print_error "sing-box check 未通过，保留当前配置"
+            rm -f "$candidate"
+            return 1
+        fi
     fi
     mv -f "$candidate" "$SINGBOX_CONFIG"
     chmod 600 "$SINGBOX_CONFIG" "$USERS_FILE" "$NODES_FILE" "$NODE_USERS_FILE" "$outbounds_file" 2>/dev/null || true

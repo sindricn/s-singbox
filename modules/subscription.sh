@@ -2957,6 +2957,54 @@ regenerate_subscription() {
 }
 
 # 订阅配置
+subscription_server_is_healthy() {
+    local port="${1:-$(cat "${DATA_DIR}/subscription_port.txt" 2>/dev/null || echo 8080)}"
+    [[ "$port" =~ ^[0-9]+$ && "$port" -ge 1 && "$port" -le 65535 ]] || return 1
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsS --max-time 3 "http://127.0.0.1:${port}/healthz" 2>/dev/null | grep -q '"status":"ok"'
+        return $?
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - "$port" <<'PYEOF'
+import sys
+import urllib.request
+
+with urllib.request.urlopen(f"http://127.0.0.1:{sys.argv[1]}/healthz", timeout=3) as response:
+    body = response.read().decode("utf-8")
+    if response.status != 200 or '"status":"ok"' not in body:
+        raise SystemExit(1)
+PYEOF
+        return $?
+    fi
+
+    return 1
+}
+
+ensure_subscription_server_runtime() {
+    local port_file="${DATA_DIR}/subscription_port.txt"
+    local port
+    [[ -f "$port_file" ]] || return 0
+    port=$(cat "$port_file" 2>/dev/null)
+    [[ "$port" =~ ^[0-9]+$ && "$port" -ge 1 && "$port" -le 65535 ]] || {
+        print_warning "订阅端口记录无效，跳过自动恢复: ${port:-空}"
+        return 1
+    }
+
+    if subscription_server_is_healthy "$port"; then
+        if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]] \
+            && [[ ! -f /etc/systemd/system/sing-box-subscription-health.timer ]]; then
+            print_warning "订阅服务健康巡检单元缺失，正在重新部署"
+            setup_subscription_server "$port"
+        fi
+        return 0
+    fi
+
+    print_warning "检测到订阅服务未运行或处于假活状态，正在自动恢复"
+    setup_subscription_server "$port"
+}
+
 config_subscription() {
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
@@ -2998,10 +3046,15 @@ config_subscription() {
             print_success "订阅服务重启成功"
             ;;
         3)
-            if { command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet sing-box-subscription.service; } || pgrep -f "python.*subscription_server" > /dev/null 2>&1; then
-                local sub_port=$(cat "${DATA_DIR}/subscription_port.txt" 2>/dev/null || echo "8080")
+            local sub_port=$(cat "${DATA_DIR}/subscription_port.txt" 2>/dev/null || echo "8080")
+            if subscription_server_is_healthy "$sub_port"; then
                 print_success "订阅服务运行中"
                 print_info "监听端口: $sub_port"
+                print_info "健康检查: http://127.0.0.1:${sub_port}/healthz"
+            elif { command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet sing-box-subscription.service; } \
+                || pgrep -f "python.*subscription_server" > /dev/null 2>&1; then
+                print_error "订阅服务进程存在，但 HTTP 健康检查失败"
+                print_info "建议执行“重启订阅服务”，并查看 journalctl -u sing-box-subscription"
             else
                 print_warning "订阅服务未运行"
             fi
@@ -3026,6 +3079,7 @@ setup_subscription_server() {
 
     # 停止已有服务
     if command -v systemctl >/dev/null 2>&1; then
+        systemctl stop sing-box-subscription-health.timer >/dev/null 2>&1 || true
         systemctl stop sing-box-subscription.service >/dev/null 2>&1 || true
     fi
     pkill -f "python.*subscription_server" 2>/dev/null
@@ -3038,7 +3092,7 @@ setup_subscription_server() {
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import http.server
-import socketserver
+import socket
 import os
 import re
 import sys
@@ -3052,8 +3106,24 @@ DIRECTORY = Path(sys.argv[2] if len(sys.argv) > 2 else '.').resolve()
 DATA_DIR = Path(sys.argv[3] if len(sys.argv) > 3 else DIRECTORY.parent).resolve()
 
 class SubscriptionHandler(http.server.SimpleHTTPRequestHandler):
+    protocol_version = 'HTTP/1.1'
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(DIRECTORY), **kwargs)
+
+    def send_bytes(self, status, content_type, payload):
+        self.close_connection = True
+        self.send_response(status)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', str(len(payload)))
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        if self.command != 'HEAD':
+            try:
+                self.wfile.write(payload)
+            except (BrokenPipeError, ConnectionResetError, TimeoutError, socket.timeout, OSError):
+                pass
 
     def resolve_subscription_path(self):
         raw_path = urlsplit(self.path).path
@@ -3136,9 +3206,13 @@ class SubscriptionHandler(http.server.SimpleHTTPRequestHandler):
             return None
 
     def do_GET(self):
-        if urlsplit(self.path).path.startswith('/sub/'):
+        request_path = urlsplit(self.path).path
+        if request_path == '/healthz':
+            self.send_bytes(200, 'application/json; charset=utf-8', b'{"status":"ok"}\n')
+        elif request_path.startswith('/sub/'):
             filename, filepath = self.resolve_subscription_path()
             if filepath is not None:
+                self.close_connection = True
                 self.send_response(200)
 
                 # 根据文件扩展名设置正确的Content-Type
@@ -3153,6 +3227,7 @@ class SubscriptionHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.send_header('Cache-Control', 'no-cache')
+                self.send_header('Connection', 'close')
 
                 # 获取文件大小并发送Content-Length
                 file_size = filepath.stat().st_size
@@ -3169,25 +3244,45 @@ class SubscriptionHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
 
                 # 分块读取文件，避免大文件内存问题和超时
-                with filepath.open('rb') as f:
-                    chunk_size = 8192
-                    while True:
-                        chunk = f.read(chunk_size)
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
+                try:
+                    with filepath.open('rb') as f:
+                        chunk_size = 8192
+                        while True:
+                            chunk = f.read(chunk_size)
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError, TimeoutError, socket.timeout, OSError):
+                    pass
             else:
                 self.send_error(404, 'Subscription not found')
         else:
             self.send_error(403, 'Access denied')
 
+    def do_HEAD(self):
+        if urlsplit(self.path).path == '/healthz':
+            self.send_bytes(200, 'application/json; charset=utf-8', b'{"status":"ok"}\n')
+        else:
+            self.send_error(404, 'Not found')
+
     def log_message(self, format, *args):
         pass
 
+class SubscriptionHTTPServer(http.server.ThreadingHTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+    block_on_close = False
+    request_queue_size = 128
+
+    def get_request(self):
+        request, client_address = super().get_request()
+        request.settimeout(15)
+        return request, client_address
+
+
 if __name__ == '__main__':
     try:
-        socketserver.TCPServer.allow_reuse_address = True
-        with socketserver.TCPServer(("", PORT), SubscriptionHandler) as httpd:
+        with SubscriptionHTTPServer(("", PORT), SubscriptionHandler) as httpd:
             print(f"[订阅服务] 运行在端口 {PORT}")
             print(f"[订阅服务] 文件目录: {DIRECTORY}")
             httpd.serve_forever()
@@ -3206,6 +3301,13 @@ PYEOF
     }
 
     if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+        local curl_bin systemctl_bin
+        curl_bin=$(command -v curl) || {
+            print_error "未找到 curl，无法配置订阅服务健康巡检"
+            return 1
+        }
+        systemctl_bin=$(command -v systemctl) || return 1
+
         cat > /etc/systemd/system/sing-box-subscription.service <<EOF
 [Unit]
 Description=sing-box Subscription Server
@@ -3216,8 +3318,9 @@ Type=simple
 User=root
 UMask=0077
 ExecStart=${python_bin} ${DATA_DIR}/subscription_server.py ${port} ${SUBSCRIPTION_DIR} ${DATA_DIR}
-Restart=on-failure
+Restart=always
 RestartSec=3s
+TimeoutStopSec=10s
 PrivateTmp=true
 ProtectHome=true
 NoNewPrivileges=true
@@ -3225,8 +3328,34 @@ NoNewPrivileges=true
 [Install]
 WantedBy=multi-user.target
 EOF
-        chmod 600 /etc/systemd/system/sing-box-subscription.service
-        if ! systemctl daemon-reload || ! systemctl enable --now sing-box-subscription.service; then
+        cat > /etc/systemd/system/sing-box-subscription-health.service <<EOF
+[Unit]
+Description=Health check for sing-box subscription server
+After=sing-box-subscription.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '${curl_bin} -fsS --max-time 5 http://127.0.0.1:${port}/healthz >/dev/null || ${systemctl_bin} restart sing-box-subscription.service'
+EOF
+        cat > /etc/systemd/system/sing-box-subscription-health.timer <<'EOF'
+[Unit]
+Description=Periodically verify sing-box subscription server health
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+        chmod 600 /etc/systemd/system/sing-box-subscription.service \
+            /etc/systemd/system/sing-box-subscription-health.service \
+            /etc/systemd/system/sing-box-subscription-health.timer
+        if ! systemctl daemon-reload \
+            || ! systemctl enable --now sing-box-subscription.service \
+            || ! systemctl enable --now sing-box-subscription-health.timer; then
             print_error "订阅服务注册或启动失败"
             return 1
         fi
@@ -3248,7 +3377,17 @@ EOF
         print_warning "当前环境没有 systemd，订阅服务仅以临时后台进程运行"
     fi
 
-    print_success "订阅服务已启动"
+    if ! wait_for_condition 10 1 subscription_server_is_healthy "$port"; then
+        print_error "订阅服务进程已启动，但 HTTP 健康检查未通过"
+        if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+            systemctl status sing-box-subscription.service --no-pager 2>/dev/null || true
+        elif [[ -f "${DATA_DIR}/subscription_server.pid" ]]; then
+            kill "$(cat "${DATA_DIR}/subscription_server.pid")" 2>/dev/null || true
+        fi
+        return 1
+    fi
+
+    print_success "订阅服务已启动并通过健康检查"
     print_info "监听端口: $port"
     return 0
 }

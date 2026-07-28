@@ -117,6 +117,7 @@ jq -e '.inbounds[] | select(.type=="hysteria2") | .masquerade == "https://exampl
 jq -e '.inbounds[] | select(.type=="hysteria") | (.up_mbps == 100 and .down_mbps == 100 and .users[0].auth_str == "fixture-p@ss:#?/+")' "$SINGBOX_CONFIG" >/dev/null
 jq -e '.inbounds[] | select(.type=="shadowtls") | (.version == 3 and .handshake.server == "example.com" and .users[0].password == "fixture-p@ss:#?/+")' "$SINGBOX_CONFIG" >/dev/null
 jq -e '.inbounds[] | select(.type=="snell") | (.version == 6 and .psk == "fixture-snell-psk" and .users[0].userkey == "fixture-p@ss:#?/+")' "$SINGBOX_CONFIG" >/dev/null
+jq -e '.inbounds[] | select(.type=="socks") | (.users[0].username == "fixture" and .users[0].password == "fixture-p@ss:#?/+")' "$SINGBOX_CONFIG" >/dev/null
 jq -e '.type == "http" and .path == "/legacy-h2"' <<< "$(generate_114_transport h2 '{"http_path":"/legacy-h2"}')" >/dev/null
 jq -e '[.outbounds[].tag] | (index("strategy-main") != null and index("strategy-auto") != null and index("strategy-leaf") != null)' "$SINGBOX_CONFIG" >/dev/null
 jq -e '[.outbounds[].tag] | (index("fixture-shadowtls") != null and index("fixture-hysteria") == null and index("fixture-ssh") == null and index("fixture-snell") == null and index("fixture-tor") == null)' "$SINGBOX_CONFIG" >/dev/null
@@ -155,6 +156,9 @@ echo "[5/8] 管理调用链检查"
 ! grep -RInE '(curl|wget)[^|]*\|[[:space:]]*(ba)?sh' "$ROOT_DIR/modules" "$ROOT_DIR/scripts" "$ROOT_DIR/install.sh" "$ROOT_DIR/singbox-manager.sh" --include='*.sh' --exclude='*.bak' --exclude='*.backup*' --exclude='*_backup*' --exclude='validate_all.sh'
 grep -q 'os.path.commonpath' "$ROOT_DIR/modules/subscription.sh"
 grep -q 'sing-box-subscription.service' "$ROOT_DIR/modules/subscription.sh"
+grep -q 'sing-box-subscription-health.timer' "$ROOT_DIR/modules/subscription.sh"
+grep -q 'subscription_server_is_healthy' "$ROOT_DIR/modules/subscription.sh"
+grep -q 'ThreadingHTTPServer' "$ROOT_DIR/modules/subscription.sh"
 grep -q 'ProtectHome=true' "$ROOT_DIR/modules/subscription.sh"
 grep -q 'list_cf_http_compatible_nodes' "$ROOT_DIR/modules/cf_tunnel.sh"
 grep -q 'and (.transport == "ws")' "$ROOT_DIR/modules/cf_tunnel.sh"
@@ -173,6 +177,9 @@ grep -q 'persist_port_hopping_rules' "$ROOT_DIR/modules/node.sh"
 grep -q 'sync_runtime_subscriptions' "$ROOT_DIR/modules/zz_singbox_114.sh"
 grep -q 'api statsquery' "$ROOT_DIR/modules/monitor.sh"
 ! grep -q 'http://.*\/stats' "$ROOT_DIR/modules/monitor.sh"
+grep -q '当前 sing-box 内核缺少 with_v2ray_api' "$ROOT_DIR/modules/zz_singbox_114.sh"
+grep -q 'warn_if_stats_capability_missing' "$ROOT_DIR/singbox-manager.sh"
+grep -q 'ensure_subscription_server_runtime' "$ROOT_DIR/singbox-manager.sh"
 (
     NODES_FILE="$TMP_DIR/empty-nodes.json"
     echo '{"nodes":[]}' > "$NODES_FILE"
@@ -195,6 +202,24 @@ grep -q 'api statsquery' "$ROOT_DIR/modules/monitor.sh"
 tunnel_node='{"port":"21001","tunnel_domain":"https://[2001:db8::8]:8443/proxy?token=test"}'
 [[ "$(resolve_subscription_host "$tunnel_node")" == '2001:db8::8' ]]
 [[ "$(resolve_subscription_port "$tunnel_node")" == '8443' ]]
+
+(
+    TRAFFIC_COUNTERS_FILE="$TMP_DIR/activity-counters.json"
+    printf '%s\n' '{"users":{}}' > "$TRAFFIC_COUNTERS_FILE"
+    : > "$TMP_DIR/traffic-updated-users"
+    update_user_traffic_usage() {
+        printf '%s\n' "$1" >> "$TMP_DIR/traffic-updated-users"
+        echo "0.001"
+    }
+    USER_LIMITS_CHANGED=false
+    check_traffic_limits >/dev/null
+    grep -q '059032a9-7d40-4a96-9bb1-36823d848068' "$TMP_DIR/traffic-updated-users"
+
+    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    jq -n --arg id '059032a9-7d40-4a96-9bb1-36823d848068' --arg now "$now" \
+        '{users:{($id):{last_raw:1024,total_bytes:1024,last_change:$now}}}' > "$TRAFFIC_COUNTERS_FILE"
+    [[ "$(get_user_recent_activity_status '059032a9-7d40-4a96-9bb1-36823d848068')" == online ]]
+)
 
 stale_file="$SUBSCRIPTION_DIR/stale_ghost_raw.txt"
 printf 'stale\n' > "$stale_file"
@@ -243,6 +268,11 @@ grep -q 'OnUnitActiveSec=1min' "$TMP_DIR/sing-box-user-limits.timer"
 
 echo "[6/8] UI 交互回归检查"
 bash "$ROOT_DIR/scripts/validate_ui.sh" "$TMP_DIR"
+if command -v python3 >/dev/null 2>&1; then
+    bash "$ROOT_DIR/scripts/validate_subscription_server.sh"
+else
+    echo "跳过订阅服务并发检查：未安装 Python 3。"
+fi
 
 echo "[7/8] sing-box check"
 if command -v sing-box >/dev/null 2>&1; then

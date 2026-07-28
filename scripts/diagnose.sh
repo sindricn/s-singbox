@@ -138,6 +138,11 @@ check_singbox() {
 
         local version=$(/usr/local/bin/sing-box version 2>/dev/null | grep -oP 'version \K[0-9.]+' | head -1)
         echo -e "  ${CYAN}版本:${NC} $version"
+        if /usr/local/bin/sing-box version 2>/dev/null | grep -q 'with_v2ray_api'; then
+            check_item "with_v2ray_api 流量统计能力" "ok"
+        else
+            check_item "缺少 with_v2ray_api，用户流量统计不可用" "fail"
+        fi
     else
         check_item "二进制文件不存在" "fail"
     fi
@@ -175,11 +180,51 @@ check_singbox() {
 
         if systemctl is-active sing-box &>/dev/null; then
             check_item "服务正在运行" "ok"
+            if stats_json=$(/usr/local/bin/sing-box api statsquery --server=127.0.0.1:10085 -pattern 'user>>>' 2>/dev/null) \
+                && echo "$stats_json" | jq -e '.stat | type == "array"' >/dev/null 2>&1; then
+                check_item "Stats API 可查询" "ok"
+            else
+                check_item "Stats API 无法查询" "fail"
+            fi
         else
             check_item "服务未运行" "warn"
         fi
     else
         check_item "systemd 服务未安装" "fail"
+    fi
+}
+
+check_subscription_service() {
+    print_section "订阅服务"
+    local port_file="${SINGBOX_DATA_DIR}/subscription_port.txt"
+    if [[ ! -f "$port_file" ]]; then
+        check_item "未配置订阅服务" "warn"
+        return
+    fi
+
+    local port
+    port=$(cat "$port_file" 2>/dev/null)
+    if [[ ! "$port" =~ ^[0-9]+$ || "$port" -lt 1 || "$port" -gt 65535 ]]; then
+        check_item "订阅端口记录无效" "fail"
+        return
+    fi
+
+    if systemctl is-active --quiet sing-box-subscription.service 2>/dev/null; then
+        check_item "订阅服务进程运行中" "ok"
+    else
+        check_item "订阅服务进程未运行" "fail"
+    fi
+
+    if curl -fsS --max-time 3 "http://127.0.0.1:${port}/healthz" 2>/dev/null | grep -q '"status":"ok"'; then
+        check_item "订阅 HTTP 健康检查" "ok"
+    else
+        check_item "订阅进程可能假活，HTTP 健康检查失败" "fail"
+    fi
+
+    if systemctl is-enabled --quiet sing-box-subscription-health.timer 2>/dev/null; then
+        check_item "订阅健康巡检定时器" "ok"
+    else
+        check_item "订阅健康巡检定时器未启用" "warn"
     fi
 }
 
@@ -364,6 +409,7 @@ generate_report() {
     check_system_environment
     check_dependencies
     check_singbox
+    check_subscription_service
     check_project_files
     check_data_files
     check_network

@@ -10,8 +10,8 @@
 check_port_exists() {
     local port=$1
 
-    if [[ -z "$port" ]]; then
-        return 1
+    if ! validate_port "$port"; then
+        return 0
     fi
 
     # 检查nodes.json中是否已存在该端口
@@ -22,18 +22,43 @@ check_port_exists() {
         fi
     fi
 
-    # 检查系统端口占用（使用ss或netstat）
+    # 同时检查 TCP/UDP，并精确匹配本地监听端口。
     if command -v ss &>/dev/null; then
-        if ss -tlnp 2>/dev/null | grep -q ":$port "; then
+        if { ss -H -ltn 2>/dev/null; ss -H -lun 2>/dev/null; } |
+            awk -v port="$port" '{ address=$4; sub(/^.*:/, "", address); if (address == port) found=1 } END { exit !found }'; then
             return 0  # 端口已被占用
         fi
     elif command -v netstat &>/dev/null; then
-        if netstat -tlnp 2>/dev/null | grep -q ":$port "; then
+        if netstat -tuln 2>/dev/null |
+            awk -v port="$port" 'NR > 2 { address=$4; sub(/^.*:/, "", address); if (address == port) found=1 } END { exit !found }'; then
             return 0  # 端口已被占用
         fi
     fi
 
     return 1  # 端口可用
+}
+
+# 持久化端口跳跃规则。没有可靠持久化后端时返回失败，避免重启后规则静默丢失。
+persist_port_hopping_rules() {
+    if command -v netfilter-persistent >/dev/null 2>&1; then
+        netfilter-persistent save >/dev/null 2>&1
+        return $?
+    fi
+    if [[ -d /etc/iptables ]] && command -v iptables-save >/dev/null 2>&1; then
+        iptables-save > /etc/iptables/rules.v4 2>/dev/null || return 1
+        if command -v ip6tables-save >/dev/null 2>&1; then
+            ip6tables-save > /etc/iptables/rules.v6 2>/dev/null || return 1
+        fi
+        return 0
+    fi
+    if [[ -d /etc/sysconfig ]] && command -v iptables-save >/dev/null 2>&1; then
+        iptables-save > /etc/sysconfig/iptables 2>/dev/null || return 1
+        if command -v ip6tables-save >/dev/null 2>&1; then
+            ip6tables-save > /etc/sysconfig/ip6tables 2>/dev/null || return 1
+        fi
+        return 0
+    fi
+    return 1
 }
 
 # 清理端口跳跃的iptables规则
@@ -45,44 +70,47 @@ cleanup_port_hopping_rules() {
         return 0
     fi
 
-    # 提取端口范围的起始和结束端口（冒号分隔）
-    local start_port=$(echo "$port_range" | cut -d':' -f1)
-    local end_port=$(echo "$port_range" | cut -d':' -f2)
+    local start_port="${port_range%%:*}"
+    local end_port="${port_range##*:}"
+    validate_port "$target_port" || return 1
+    validate_port "$start_port" || return 1
+    validate_port "$end_port" || return 1
 
     # 获取主网络接口
-    local main_interface=$(ip route | grep default | head -n1 | awk '{print $5}')
+    local main_interface=""
+    command -v ip >/dev/null 2>&1 && main_interface=$(ip route 2>/dev/null | awk '$1 == "default" {print $5; exit}')
     if [[ -z "$main_interface" ]]; then
         main_interface="eth0"
     fi
 
-    # 删除IPv4规则
-    iptables -t nat -D PREROUTING -i "$main_interface" -p udp --dport ${start_port}:${end_port} -j REDIRECT --to-ports $target_port 2>/dev/null
-    if [[ $? -eq 0 ]]; then
-        echo "    ✓ IPv4端口跳跃规则已删除"
-    fi
-
-    # 删除IPv6规则
-    ip6tables -t nat -D PREROUTING -i "$main_interface" -p udp --dport ${start_port}:${end_port} -j REDIRECT --to-ports $target_port 2>/dev/null
-    if [[ $? -eq 0 ]]; then
-        echo "    ✓ IPv6端口跳跃规则已删除"
-    fi
-
-    # 保存iptables规则（持久化）
-    if command -v iptables-save >/dev/null 2>&1; then
-        if [[ -d /etc/iptables ]]; then
-            iptables-save > /etc/iptables/rules.v4 2>/dev/null
-        elif [[ -d /etc/sysconfig ]]; then
-            iptables-save > /etc/sysconfig/iptables 2>/dev/null
+    local cleanup_ok=true rules_changed=false
+    if command -v iptables >/dev/null 2>&1; then
+        if iptables -t nat -C PREROUTING -i "$main_interface" -p udp --dport "${start_port}:${end_port}" -j REDIRECT --to-ports "$target_port" 2>/dev/null; then
+            if iptables -t nat -D PREROUTING -i "$main_interface" -p udp --dport "${start_port}:${end_port}" -j REDIRECT --to-ports "$target_port" 2>/dev/null; then
+                echo "    ✓ IPv4端口跳跃规则已删除"
+                rules_changed=true
+            else
+                cleanup_ok=false
+            fi
         fi
     fi
 
-    if command -v ip6tables-save >/dev/null 2>&1; then
-        if [[ -d /etc/iptables ]]; then
-            ip6tables-save > /etc/iptables/rules.v6 2>/dev/null
-        elif [[ -d /etc/sysconfig ]]; then
-            ip6tables-save > /etc/sysconfig/ip6tables 2>/dev/null
+    if command -v ip6tables >/dev/null 2>&1; then
+        if ip6tables -t nat -C PREROUTING -i "$main_interface" -p udp --dport "${start_port}:${end_port}" -j REDIRECT --to-ports "$target_port" 2>/dev/null; then
+            if ip6tables -t nat -D PREROUTING -i "$main_interface" -p udp --dport "${start_port}:${end_port}" -j REDIRECT --to-ports "$target_port" 2>/dev/null; then
+                echo "    ✓ IPv6端口跳跃规则已删除"
+                rules_changed=true
+            else
+                cleanup_ok=false
+            fi
         fi
     fi
+
+    if [[ "$rules_changed" == true ]] && ! persist_port_hopping_rules; then
+        cleanup_ok=false
+    fi
+
+    [[ "$cleanup_ok" == true ]]
 }
 
 # 检查端口跳跃范围是否已被占用
@@ -137,6 +165,65 @@ check_port_hopping_conflict() {
     return 1  # 没有冲突
 }
 
+# 验证 Hysteria2 端口跳跃范围。
+validate_port_hopping_range() {
+    local range=$1 current_port=${2:-}
+    local start_port end_port
+    [[ "$range" =~ ^[0-9]+:[0-9]+$ ]] || return 1
+    start_port="${range%%:*}"
+    end_port="${range##*:}"
+    validate_port "$start_port" && validate_port "$end_port" || return 1
+    [[ "$start_port" -lt "$end_port" ]] || return 1
+    if [[ "$current_port" =~ ^[0-9]+$ ]] && [[ "$current_port" -ge "$start_port" && "$current_port" -le "$end_port" ]]; then
+        return 1
+    fi
+    ! check_port_hopping_conflict "$range" "$current_port"
+}
+
+# 安装 Hysteria2 UDP 端口跳跃规则。IPv4 为必需项，IPv6 尽力配置。
+apply_port_hopping_rules() {
+    local target_port=$1 port_range=$2
+    local start_port="${port_range%%:*}" end_port="${port_range##*:}" main_interface=""
+    validate_port_hopping_range "$port_range" "$target_port" || {
+        print_error "无效或冲突的端口跳跃范围: $port_range"
+        return 1
+    }
+    command -v iptables >/dev/null 2>&1 || {
+        print_error "启用端口跳跃需要 iptables"
+        return 1
+    }
+    command -v ip >/dev/null 2>&1 && main_interface=$(ip route 2>/dev/null | awk '$1 == "default" {print $5; exit}')
+    main_interface=${main_interface:-eth0}
+
+    local ipv4_added=false ipv6_added=false
+    if ! iptables -t nat -C PREROUTING -i "$main_interface" -p udp --dport "${start_port}:${end_port}" -j REDIRECT --to-ports "$target_port" 2>/dev/null; then
+        if ! iptables -t nat -A PREROUTING -i "$main_interface" -p udp --dport "${start_port}:${end_port}" -j REDIRECT --to-ports "$target_port"; then
+            print_error "IPv4端口跳跃规则添加失败"
+            return 1
+        fi
+        ipv4_added=true
+    fi
+    print_success "IPv4端口跳跃规则已添加: $port_range → $target_port"
+
+    if command -v ip6tables >/dev/null 2>&1; then
+        if ! ip6tables -t nat -C PREROUTING -i "$main_interface" -p udp --dport "${start_port}:${end_port}" -j REDIRECT --to-ports "$target_port" 2>/dev/null; then
+            if ip6tables -t nat -A PREROUTING -i "$main_interface" -p udp --dport "${start_port}:${end_port}" -j REDIRECT --to-ports "$target_port" 2>/dev/null; then
+                ipv6_added=true
+            else
+                print_info "IPv6端口跳跃规则未启用"
+            fi
+        fi
+    fi
+
+    if ! persist_port_hopping_rules; then
+        [[ "$ipv6_added" == true ]] && ip6tables -t nat -D PREROUTING -i "$main_interface" -p udp --dport "${start_port}:${end_port}" -j REDIRECT --to-ports "$target_port" 2>/dev/null || true
+        [[ "$ipv4_added" == true ]] && iptables -t nat -D PREROUTING -i "$main_interface" -p udp --dport "${start_port}:${end_port}" -j REDIRECT --to-ports "$target_port" 2>/dev/null || true
+        persist_port_hopping_rules >/dev/null 2>&1 || true
+        print_error "端口跳跃规则持久化失败，已回滚本次添加"
+        return 1
+    fi
+}
+
 # 绑定admin用户到节点（通用函数）
 # 参数: $1=port, $2=protocol
 # 返回: admin用户信息（通过echo）
@@ -159,6 +246,7 @@ bind_admin_to_node() {
     local admin_user=$(jq -r '.users[] | select(.username == "admin")' "$USERS_FILE" 2>/dev/null)
     if [[ -z "$admin_user" || "$admin_user" == "null" ]]; then
         print_error "admin用户不存在，请先初始化系统"
+        command -v rollback_data_transaction >/dev/null 2>&1 && rollback_data_transaction
         return 1
     fi
 
@@ -172,7 +260,7 @@ bind_admin_to_node() {
     fi
 
     # 检查绑定是否已存在
-    local existing_binding=$(jq -r ".bindings[] | select(.port == \"$port\") | .port" "$NODE_USERS_FILE" 2>/dev/null)
+    local existing_binding=$(jq -r --arg port "$port" '.bindings[] | select((.port|tostring) == $port) | .port' "$NODE_USERS_FILE" 2>/dev/null)
     if [[ -z "$existing_binding" ]]; then
         # 创建新绑定
         local binding_data=$(jq -n \
@@ -183,18 +271,43 @@ bind_admin_to_node() {
 
         if [[ -z "$binding_data" ]]; then
             print_error "绑定数据生成失败"
+            command -v rollback_data_transaction >/dev/null 2>&1 && rollback_data_transaction
             return 1
         fi
 
         # 添加绑定
-        jq --argjson binding "$binding_data" '.bindings += [$binding]' "$NODE_USERS_FILE" > "${NODE_USERS_FILE}.tmp" && \
-        mv "${NODE_USERS_FILE}.tmp" "$NODE_USERS_FILE"
+        if ! jq --argjson binding "$binding_data" '.bindings += [$binding]' "$NODE_USERS_FILE" > "${NODE_USERS_FILE}.tmp" || ! mv "${NODE_USERS_FILE}.tmp" "$NODE_USERS_FILE"; then
+            rm -f "${NODE_USERS_FILE}.tmp"
+            command -v rollback_data_transaction >/dev/null 2>&1 && rollback_data_transaction
+            return 1
+        fi
     fi
 
     # 返回admin用户信息（用于后续生成分享链接）
     # 格式: UUID|password|username
     echo "$admin_uuid|$admin_password|$admin_username"
     return 0
+}
+
+# 原子保存节点并绑定默认管理员。结果通过 ADMIN_BIND_RESULT 返回，
+# 避免 `local value=$(command)` 掩盖 command 的失败状态。
+ADMIN_BIND_RESULT=""
+save_node_and_bind_admin() {
+    local protocol=$1 port=$2 transport=$3 security=$4 extra_config=$5 name=$6
+    local bind_result=""
+    ADMIN_BIND_RESULT=""
+
+    if ! save_node_info "$protocol" "$port" "$transport" "$security" "$extra_config" "$name"; then
+        print_error "保存节点信息失败"
+        command -v rollback_data_transaction >/dev/null 2>&1 && rollback_data_transaction
+        return 1
+    fi
+    if ! bind_result=$(bind_admin_to_node "$port" "$protocol"); then
+        print_error "绑定默认用户失败，节点数据已回滚"
+        command -v rollback_data_transaction >/dev/null 2>&1 && rollback_data_transaction
+        return 1
+    fi
+    ADMIN_BIND_RESULT="$bind_result"
 }
 
 # 测试 Reality 密钥生成（调试用）
@@ -586,22 +699,17 @@ quick_add_vless_reality() {
             flow: "xtls-rprx-vision"
         }')
 
-    # 保存节点信息（新架构：只保存节点技术参数）
-    save_node_info "vless" "$port" "tcp" "reality" "$reality_config" "$node_name"
-
-    # 绑定admin用户到节点
-    local admin_info=$(bind_admin_to_node "$port" "vless")
-    if [[ $? -ne 0 ]]; then
+    if ! save_node_and_bind_admin "vless" "$port" "tcp" "reality" "$reality_config" "$node_name"; then
         return 1
     fi
+    local admin_info="$ADMIN_BIND_RESULT"
 
     IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
 
-    # 重新生成sing-box配置文件
-    generate_singbox_config
-
-    # 重启服务
-    restart_sing-box
+    if ! generate_singbox_config || ! restart_sing-box; then
+        print_error "Reality 节点应用失败，数据和配置已回滚"
+        return 1
+    fi
 
     echo ""
     echo -e "${GREEN}=====================================${NC}"
@@ -621,14 +729,6 @@ quick_add_vless_reality() {
     echo -e "  公钥: ${YELLOW}$public_key${NC}"
     echo -e "  ShortId: ${YELLOW}$short_id${NC}"
     echo ""
-
-    # 调试：在调用前检查变量
-    echo "  admin_uuid: [$admin_uuid] (长度: ${#admin_uuid})"
-    echo "  admin_remark: [$admin_remark] (长度: ${#admin_remark})"
-    echo "  port: [$port] (长度: ${#port})"
-    echo "  server_names: [$server_names] (长度: ${#server_names})"
-    echo "  public_key: [$public_key] (长度: ${#public_key})"
-    echo "  short_id: [$short_id] (长度: ${#short_id})"
 
     # 生成并显示分享链接
     generate_vless_reality_share "$admin_uuid" "$admin_remark" "$port" "$server_names" "$public_key" "$short_id"
@@ -688,7 +788,7 @@ add_vless_node() {
         1) transport="tcp" ;;
         2) transport="ws" ;;
         3) transport="grpc" ;;
-        4) transport="h2" ;;
+        4) transport="http" ;;
         *) transport="tcp" ;;
     esac
 
@@ -704,6 +804,15 @@ add_vless_node() {
     if [[ "$transport" == "grpc" ]]; then
         read -p "gRPC 服务名 [默认: GunService]: " grpc_service
         grpc_service=${grpc_service:-GunService}
+    fi
+
+    local ws_host="" http_path="" http_host=""
+    if [[ "$transport" == "ws" ]]; then
+        read -p "WebSocket Host [可留空]: " ws_host
+    elif [[ "$transport" == "http" ]]; then
+        read -p "HTTP 路径 [默认: /]: " http_path
+        http_path=${http_path:-/}
+        read -p "HTTP Host [可留空]: " http_host
     fi
 
     # TLS 配置
@@ -726,13 +835,19 @@ add_vless_node() {
             tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.pem"
             tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
         fi
+        if [[ -z "$tls_domain" || ! -f "$tls_cert" || ! -f "$tls_key" ]]; then
+            print_error "TLS 域名、证书或密钥无效"
+            return 1
+        fi
     fi
 
     # 构建extra_config JSON (包含VLESS特定参数)
     local extra_config=$(jq -n \
         --arg ws_path "$ws_path" \
-        --arg ws_host "$tls_domain" \
+        --arg ws_host "$ws_host" \
         --arg grpc_service "$grpc_service" \
+        --arg http_path "$http_path" \
+        --arg http_host "$http_host" \
         --arg tls_domain "$tls_domain" \
         --arg tls_cert "$tls_cert" \
         --arg tls_key "$tls_key" \
@@ -740,25 +855,25 @@ add_vless_node() {
             ws_path: $ws_path,
             ws_host: $ws_host,
             grpc_service: $grpc_service,
+            http_path: $http_path,
+            http_host: $http_host,
             tls_domain: $tls_domain,
             tls_cert: $tls_cert,
             tls_key: $tls_key
         }')
 
-    # 保存节点信息(只保存技术参数,不包含用户)
-    save_node_info "vless" "$port" "$transport" "$security" "$extra_config" "vless-$port"
-
-    # 绑定admin用户到节点
-    local admin_info=$(bind_admin_to_node "$port" "vless")
-    if [[ $? -ne 0 ]]; then
+    if ! save_node_and_bind_admin "vless" "$port" "$transport" "$security" "$extra_config" "vless-$port"; then
         return 1
     fi
+    local admin_info="$ADMIN_BIND_RESULT"
 
     IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
 
     # 重新生成完整配置
-    generate_singbox_config
-    restart_sing-box
+    if ! generate_singbox_config || ! restart_sing-box; then
+        print_error "配置校验或服务重启失败，本次操作未生效"
+        return 1
+    fi
 
     print_success "VLESS 节点创建成功！"
     print_info "端口: $port"
@@ -794,6 +909,10 @@ add_vmess_node() {
 
     read -p "请输入 alterId [默认: 0]: " alter_id
     alter_id=${alter_id:-0}
+    if [[ ! "$alter_id" =~ ^[0-9]+$ || "$alter_id" -gt 65535 ]]; then
+        print_error "alterId 必须是 0-65535 之间的整数"
+        return 1
+    fi
 
     # 选择加密方式
     echo -e "\n${CYAN}加密方式：${NC}"
@@ -815,20 +934,49 @@ add_vmess_node() {
     echo -e "\n${CYAN}传输协议：${NC}"
     echo "1. TCP"
     echo "2. WebSocket"
-    echo "3. mKCP"
-    read -p "请选择 [1-3]: " transport_choice
+    echo "3. gRPC"
+    echo "4. HTTP"
+    read -p "请选择 [1-4]: " transport_choice
 
     case $transport_choice in
         1) transport="tcp" ;;
         2) transport="ws" ;;
-        3) transport="mkcp" ;;
+        3) transport="grpc" ;;
+        4) transport="http" ;;
         *) transport="tcp" ;;
     esac
 
-    local ws_path=""
+    local ws_path="" ws_host="" grpc_service="" http_path="" http_host=""
     if [[ "$transport" == "ws" ]]; then
         read -p "WebSocket 路径 [默认: /vmess]: " ws_path
         ws_path=${ws_path:-/vmess}
+        read -p "WebSocket Host [可留空]: " ws_host
+    elif [[ "$transport" == "grpc" ]]; then
+        read -p "gRPC 服务名 [默认: vmess-grpc]: " grpc_service
+        grpc_service=${grpc_service:-vmess-grpc}
+    elif [[ "$transport" == "http" ]]; then
+        read -p "HTTP 路径 [默认: /vmess]: " http_path
+        http_path=${http_path:-/vmess}
+        read -p "HTTP Host [可留空]: " http_host
+    fi
+
+    local security="none" tls_domain="" tls_cert="" tls_key=""
+    read -p "是否启用 TLS? [y/N]: " enable_tls
+    if [[ "$enable_tls" =~ ^[Yy]$ ]]; then
+        security="tls"
+        read -p "请输入域名: " tls_domain
+        read -p "请输入证书路径 [留空使用自签名]: " tls_cert
+        if [[ -n "$tls_cert" ]]; then
+            read -p "请输入密钥路径: " tls_key
+        else
+            generate_self_signed_cert "$tls_domain"
+            tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.pem"
+            tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
+        fi
+        if [[ -z "$tls_domain" || ! -f "$tls_cert" || ! -f "$tls_key" ]]; then
+            print_error "TLS 域名、证书或密钥无效"
+            return 1
+        fi
     fi
 
     # 构建extra_config JSON (包含VMess特定参数)
@@ -836,26 +984,38 @@ add_vmess_node() {
         --argjson alter_id "$alter_id" \
         --arg cipher "$cipher" \
         --arg ws_path "$ws_path" \
+        --arg ws_host "$ws_host" \
+        --arg grpc_service "$grpc_service" \
+        --arg http_path "$http_path" \
+        --arg http_host "$http_host" \
+        --arg tls_domain "$tls_domain" \
+        --arg tls_cert "$tls_cert" \
+        --arg tls_key "$tls_key" \
         '{
             alter_id: $alter_id,
             cipher: $cipher,
-            ws_path: $ws_path
+            ws_path: $ws_path,
+            ws_host: $ws_host,
+            grpc_service: $grpc_service,
+            http_path: $http_path,
+            http_host: $http_host,
+            tls_domain: $tls_domain,
+            tls_cert: $tls_cert,
+            tls_key: $tls_key
         }')
 
-    # 保存节点信息(只保存技术参数,不包含用户)
-    save_node_info "vmess" "$port" "$transport" "none" "$extra_config" "vmess-$port"
-
-    # 绑定admin用户到节点
-    local admin_info=$(bind_admin_to_node "$port" "vmess")
-    if [[ $? -ne 0 ]]; then
+    if ! save_node_and_bind_admin "vmess" "$port" "$transport" "$security" "$extra_config" "vmess-$port"; then
         return 1
     fi
+    local admin_info="$ADMIN_BIND_RESULT"
 
     IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
 
     # 重新生成完整配置
-    generate_singbox_config
-    restart_sing-box
+    if ! generate_singbox_config || ! restart_sing-box; then
+        print_error "配置校验或服务重启失败，本次操作未生效"
+        return 1
+    fi
 
     print_success "VMess 节点创建成功！"
     print_info "端口: $port"
@@ -906,6 +1066,10 @@ add_trojan_node() {
         tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.pem"
         tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
     fi
+    if [[ ! -f "$tls_cert" || ! -f "$tls_key" ]]; then
+        print_error "证书或密钥文件不存在"
+        return 1
+    fi
 
     # 回落配置
     read -p "是否配置回落? [y/N]: " enable_fallback
@@ -916,6 +1080,10 @@ add_trojan_node() {
         fallback_dest=${fallback_dest:-127.0.0.1}
         read -p "回落端口 [默认: 80]: " fallback_port
         fallback_port=${fallback_port:-80}
+        if ! validate_port "$fallback_port"; then
+            print_error "回落端口必须是 1-65535 之间的整数"
+            return 1
+        fi
     fi
 
     # 构建extra_config JSON (包含Trojan特定参数)
@@ -933,20 +1101,18 @@ add_trojan_node() {
             fallback_port: $fallback_port
         }')
 
-    # 保存节点信息(只保存技点参数,不包含用户密码)
-    save_node_info "trojan" "$port" "tcp" "tls" "$extra_config" "trojan-$port"
-
-    # 绑定admin用户到节点
-    local admin_info=$(bind_admin_to_node "$port" "trojan")
-    if [[ $? -ne 0 ]]; then
+    if ! save_node_and_bind_admin "trojan" "$port" "tcp" "tls" "$extra_config" "trojan-$port"; then
         return 1
     fi
+    local admin_info="$ADMIN_BIND_RESULT"
 
     IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
 
     # 重新生成完整配置
-    generate_singbox_config
-    restart_sing-box
+    if ! generate_singbox_config || ! restart_sing-box; then
+        print_error "配置校验或服务重启失败，本次操作未生效"
+        return 1
+    fi
 
     print_success "Trojan 节点创建成功！"
     print_info "端口: $port"
@@ -984,41 +1150,43 @@ add_shadowsocks_node() {
 
     # 选择加密方式
     echo -e "\n${CYAN}加密方式：${NC}"
-    echo "1. aes-256-gcm (推荐)"
-    echo "2. aes-128-gcm"
-    echo "3. chacha20-poly1305"
-    echo "4. chacha20-ietf-poly1305"
-    read -p "请选择 [1-4]: " cipher_choice
+    echo "1. 2022-blake3-aes-128-gcm (推荐，多用户)"
+    echo "2. 2022-blake3-aes-256-gcm"
+    echo "3. 2022-blake3-chacha20-poly1305"
+    read -p "请选择 [1-3]: " cipher_choice
 
     case $cipher_choice in
-        1) cipher="aes-256-gcm" ;;
-        2) cipher="aes-128-gcm" ;;
-        3) cipher="chacha20-poly1305" ;;
-        4) cipher="chacha20-ietf-poly1305" ;;
-        *) cipher="aes-256-gcm" ;;
+        2) cipher="2022-blake3-aes-256-gcm" ;;
+        3) cipher="2022-blake3-chacha20-poly1305" ;;
+        *) cipher="2022-blake3-aes-128-gcm" ;;
     esac
+
+    local key_length=16
+    [[ "$cipher" != "2022-blake3-aes-128-gcm" ]] && key_length=32
+    local master_password
+    master_password=$(openssl rand -base64 "$key_length" | tr -d '\r\n')
 
     # 构建extra_config JSON (包含Shadowsocks特定参数)
     local extra_config=$(jq -n \
-        --arg cipher "$cipher" \
+        --arg method "$cipher" \
+        --arg master_password "$master_password" \
         '{
-            cipher: $cipher
+            method: $method,
+            master_password: $master_password
         }')
 
-    # 保存节点信息(只保存技术参数,不包含用户密码)
-    save_node_info "shadowsocks" "$port" "tcp" "none" "$extra_config" "shadowsocks-$port"
-
-    # 绑定admin用户到节点
-    local admin_info=$(bind_admin_to_node "$port" "shadowsocks")
-    if [[ $? -ne 0 ]]; then
+    if ! save_node_and_bind_admin "shadowsocks" "$port" "tcp" "none" "$extra_config" "shadowsocks-$port"; then
         return 1
     fi
+    local admin_info="$ADMIN_BIND_RESULT"
 
     IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
 
     # 重新生成完整配置
-    generate_singbox_config
-    restart_sing-box
+    if ! generate_singbox_config || ! restart_sing-box; then
+        print_error "配置校验或服务重启失败，本次操作未生效"
+        return 1
+    fi
 
     print_success "Shadowsocks 节点创建成功！"
     print_info "端口: $port"
@@ -1055,6 +1223,8 @@ delete_node() {
 
     # 收集要删除的节点（支持序号和端口两种方式）
     local nodes_to_delete=()  # 存储格式: "index:port" 或 "index:" (port为空时)
+    local current_total_nodes
+    current_total_nodes=$(jq -r '.nodes | length' "$NODES_FILE" 2>/dev/null || echo 0)
 
     # 检查是否删除所有节点
     if [[ "$input" == "all" || "$input" == "*" ]]; then
@@ -1076,7 +1246,7 @@ delete_node() {
 
         for item in "${inputs[@]}"; do
             # 判断是序号还是端口
-            if [[ "$item" =~ ^[0-9]+$ ]] && [[ "$item" -le 100 ]]; then
+            if [[ "$item" =~ ^[0-9]+$ ]] && [[ "$item" -ge 1 ]] && [[ "$item" -le "$current_total_nodes" ]]; then
                 # 当作序号处理
                 local index=$((item - 1))
 
@@ -1090,7 +1260,7 @@ delete_node() {
                     print_warning "序号 $item 不存在，已跳过"
                 fi
             else
-                # 当作端口处理（大于100或非纯数字）
+                # 不在当前序号范围内时按端口处理
                 local port="$item"
 
                 # 查找该端口对应的索引
@@ -1103,6 +1273,17 @@ delete_node() {
             fi
         done
     fi
+
+    # 去重，避免重复序号在倒序删除时误删索引已经移动后的其他节点。
+    local unique_nodes_to_delete=() node_entry node_index
+    declare -A seen_delete_indices=()
+    for node_entry in "${nodes_to_delete[@]}"; do
+        node_index="${node_entry%%:*}"
+        [[ -n "${seen_delete_indices[$node_index]:-}" ]] && continue
+        seen_delete_indices[$node_index]=1
+        unique_nodes_to_delete+=("$node_entry")
+    done
+    nodes_to_delete=("${unique_nodes_to_delete[@]}")
 
     if [[ ${#nodes_to_delete[@]} -eq 0 ]]; then
         print_error "没有有效的节点可删除"
@@ -1142,8 +1323,14 @@ delete_node() {
         return 0
     fi
 
+    if command -v begin_data_transaction >/dev/null 2>&1 && ! begin_data_transaction; then
+        print_error "无法创建删除事务快照"
+        return 1
+    fi
+
     # 执行删除（从后往前删除，避免索引错位）
     local success_count=0
+    local hopping_rules_to_cleanup=()
     local sorted_indices=($(for node_entry in "${nodes_to_delete[@]}"; do
         echo "${node_entry%%:*}"
     done | sort -rn))
@@ -1154,35 +1341,52 @@ delete_node() {
         local protocol=$(jq -r ".nodes[$index].protocol" "$NODES_FILE" 2>/dev/null)
         local port_hopping=$(jq -r ".nodes[$index].extra.port_hopping // \"\"" "$NODES_FILE" 2>/dev/null)
 
-        # 如果是Hysteria2且有端口跳跃，清理iptables规则
+        # 防火墙规则在配置成功激活后再清理，避免数据回滚但规则无法恢复。
         if [[ "$protocol" == "hysteria2" && -n "$port_hopping" && "$port_hopping" != "null" ]]; then
-            echo "  清理端口跳跃规则: $port_hopping → $port"
-            cleanup_port_hopping_rules "$port" "$port_hopping"
+            hopping_rules_to_cleanup+=("$port|$port_hopping")
         fi
 
         # 如果有端口，清理端口相关的绑定关系
         if [[ -n "$port" && "$port" != "null" ]]; then
             # 1. 从节点绑定关系中删除该端口
             if [[ -f "$NODE_USERS_FILE" ]]; then
-                update_json_file --arg port "$port" '.bindings = [.bindings[] | select(.port != $port)]' "$NODE_USERS_FILE" 2>/dev/null
+                if ! update_json_file --arg port "$port" '.bindings = [.bindings[] | select((.port|tostring) != $port)]' "$NODE_USERS_FILE"; then
+                    rollback_data_transaction
+                    print_error "清理节点绑定失败，删除操作已回滚"
+                    return 1
+                fi
             fi
 
             # 2. 从数据库删除节点（通过端口）
-            remove_node_info "$port"
-
-            # 3. 从配置删除（通过端口）
-            remove_inbound_from_config "$port"
+            if ! remove_node_info "$port"; then
+                rollback_data_transaction
+                return 1
+            fi
+        else
+            # 仅无端口的异常节点才按索引删除，不能与按端口删除重复执行。
+            if ! update_json_file --argjson index "$index" '.nodes = [.nodes | to_entries | .[] | select(.key != $index) | .value]' "$NODES_FILE"; then
+                rollback_data_transaction
+                print_error "删除无端口节点失败，删除操作已回滚"
+                return 1
+            fi
         fi
-
-        # 4. 通过索引从nodes.json中删除节点（无论端口是否存在）
-        update_json_file --argjson index "$index" '.nodes = [.nodes | to_entries | .[] | select(.key != $index) | .value]' "$NODES_FILE" 2>/dev/null
 
         ((success_count++))
     done
 
     # 4. 重新生成配置并重启服务
-    generate_singbox_config
-    restart_sing-box
+    if ! generate_singbox_config || ! restart_sing-box; then
+        print_error "配置校验或服务重启失败，本次操作未生效"
+        return 1
+    fi
+
+    local hopping_entry hopping_port hopping_range
+    for hopping_entry in "${hopping_rules_to_cleanup[@]}"; do
+        hopping_port="${hopping_entry%%|*}"
+        hopping_range="${hopping_entry#*|}"
+        echo "  清理端口跳跃规则: $hopping_range → $hopping_port"
+        cleanup_port_hopping_rules "$hopping_port" "$hopping_range" || print_warning "端口跳跃规则清理失败，请在防火墙菜单中手动清理"
+    done
 
     echo ""
     if [[ $success_count -eq 1 ]]; then
@@ -1388,8 +1592,9 @@ modify_node_config() {
     echo ""
 
     print_nav_options "true" "true"
-    local choice=$(read_menu_choice "请选择")
-    local ret=$?
+    local choice ret
+    choice=$(read_menu_choice "请选择")
+    ret=$?
 
     # 处理导航
     [[ $ret -eq 99 ]] && return 0  # 返回上级
@@ -1406,24 +1611,52 @@ modify_node_config() {
                     return 1
                 fi
 
+                if command -v begin_data_transaction >/dev/null 2>&1 && ! begin_data_transaction; then
+                    print_error "无法创建端口修改事务快照"
+                    return 1
+                fi
+                local node_protocol port_hopping hopping_rules_changed=false
+                node_protocol=$(jq -r --arg port "$port" '.nodes[] | select((.port|tostring) == $port) | .protocol // ""' "$NODES_FILE")
+                port_hopping=$(jq -r --arg port "$port" '.nodes[] | select((.port|tostring) == $port) | .extra.port_hopping // ""' "$NODES_FILE")
+
                 # 更新节点信息
-                if ! update_json_file ".nodes |= map(if .port == \"$port\" then .port = \"$new_port\" else . end)" "$NODES_FILE"; then
+                if ! update_json_file --arg port "$port" --arg new_port "$new_port" '.nodes |= map(if (.port|tostring) == $port then .port = $new_port else . end)' "$NODES_FILE"; then
+                    rollback_data_transaction
                     print_error "更新节点端口失败"
                     return 1
                 fi
 
                 # 更新绑定信息
                 if [[ -f "$NODE_USERS_FILE" ]]; then
-                    if ! update_json_file --arg port "$port" --arg new_port "$new_port" '.bindings |= map(if .port == $port then .port = $new_port else . end)' "$NODE_USERS_FILE"; then
+                    if ! update_json_file --arg port "$port" --arg new_port "$new_port" '.bindings |= map(if (.port|tostring) == $port then .port = $new_port else . end)' "$NODE_USERS_FILE"; then
+                        rollback_data_transaction
                         print_error "更新绑定端口失败"
                         return 1
                     fi
                 fi
 
-                # 更新配置文件
-                remove_inbound_from_config "$port"
-                generate_singbox_config
-                restart_sing-box
+                if ! generate_singbox_config; then
+                    print_error "配置校验或服务重启失败"
+                    return 1
+                fi
+                if [[ "$node_protocol" == "hysteria2" && -n "$port_hopping" ]]; then
+                    cleanup_port_hopping_rules "$port" "$port_hopping"
+                    if ! apply_port_hopping_rules "$new_port" "$port_hopping"; then
+                        rollback_data_transaction
+                        apply_port_hopping_rules "$port" "$port_hopping" || true
+                        print_error "更新端口跳跃规则失败，端口修改已回滚"
+                        return 1
+                    fi
+                    hopping_rules_changed=true
+                fi
+                if ! restart_sing-box; then
+                    if [[ "$hopping_rules_changed" == true ]]; then
+                        cleanup_port_hopping_rules "$new_port" "$port_hopping"
+                        apply_port_hopping_rules "$port" "$port_hopping" || true
+                    fi
+                    print_error "配置校验或服务重启失败"
+                    return 1
+                fi
 
                 print_success "端口已修改为 $new_port"
             fi
@@ -1458,8 +1691,10 @@ modify_node_config() {
                                 return 1
                             fi
                         fi
-                        generate_singbox_config
-                        restart_sing-box
+                        if ! generate_singbox_config || ! restart_sing-box; then
+                            print_error "配置校验或服务重启失败"
+                            return 1
+                        fi
                         print_success "用户已绑定"
                     fi
                 fi
@@ -1488,8 +1723,10 @@ modify_node_config() {
                             print_error "解绑用户失败"
                             return 1
                         fi
-                        generate_singbox_config
-                        restart_sing-box
+                        if ! generate_singbox_config || ! restart_sing-box; then
+                            print_error "配置校验或服务重启失败"
+                            return 1
+                        fi
                         print_success "用户已解绑"
                     fi
                 fi
@@ -1533,21 +1770,30 @@ delete_single_node() {
         return 0
     fi
 
-    # 从配置文件中删除
-    remove_inbound_from_config "$port"
+    local protocol port_hopping
+    protocol=$(jq -r --arg port "$port" '.nodes[] | select((.port|tostring) == $port) | .protocol // ""' "$NODES_FILE")
+    port_hopping=$(jq -r --arg port "$port" '.nodes[] | select((.port|tostring) == $port) | .extra.port_hopping // ""' "$NODES_FILE")
+    command -v begin_data_transaction >/dev/null 2>&1 && begin_data_transaction || return 1
 
     # 从节点数据库中删除
-    remove_node_info "$port"
+    remove_node_info "$port" || { rollback_data_transaction; return 1; }
 
     # 清理节点绑定
     if [[ -f "$NODE_USERS_FILE" ]]; then
-        if ! update_json_file --arg port "$port" '.bindings = [.bindings[] | select(.port != $port)]' "$NODE_USERS_FILE"; then
+        if ! update_json_file --arg port "$port" '.bindings = [.bindings[] | select((.port|tostring) != $port)]' "$NODE_USERS_FILE"; then
+            rollback_data_transaction
             print_error "清理节点绑定失败"
             return 1
         fi
     fi
 
-    restart_sing-box
+    if ! generate_singbox_config || ! restart_sing-box; then
+        print_error "节点删除失败，数据和配置已回滚"
+        return 1
+    fi
+    if [[ "$protocol" == "hysteria2" && -n "$port_hopping" ]]; then
+        cleanup_port_hopping_rules "$port" "$port_hopping" || print_warning "端口跳跃规则清理失败"
+    fi
     print_success "节点删除成功！"
 }
 
@@ -1593,7 +1839,7 @@ save_node_info() {
 # 从数据库删除节点
 remove_node_info() {
     local port=$1
-    if ! update_json_file ".nodes = [.nodes[] | select(.port != \"$port\")]" "$NODES_FILE"; then
+    if ! update_json_file --arg port "$port" '.nodes = [.nodes[] | select((.port|tostring) != $port)]' "$NODES_FILE"; then
         print_error "删除节点信息失败"
         return 1
     fi
@@ -1612,7 +1858,7 @@ add_inbound_to_config() {
 # 从配置文件删除入站
 remove_inbound_from_config() {
     local port=$1
-    if ! update_json_file ".inbounds = [.inbounds[] | select(.port != $port)]" "$SINGBOX_CONFIG"; then
+    if ! update_json_file --argjson port "$port" '.inbounds = [.inbounds[] | select((.listen_port // .port) != $port)]' "$SINGBOX_CONFIG"; then
         print_error "移除入站信息失败"
         return 1
     fi
@@ -1652,8 +1898,15 @@ batch_delete_nodes() {
     done
 
     # 使用统一选择器进行多选
-    local selected_indices=($(select_multiple "请选择要删除的节点" "${node_items[@]}"))
-    if [[ $? -ne 0 ]] || [[ ${#selected_indices[@]} -eq 0 ]]; then
+    local selection_output selector_status
+    selection_output=$(select_multiple "请选择要删除的节点" "${node_items[@]}")
+    selector_status=$?
+    [[ $selector_status -eq ${UI_BACK:-99} || $selector_status -eq ${UI_CANCEL:-97} ]] && return 0
+    [[ $selector_status -eq ${UI_MAIN_MENU:-98} ]] && return "${UI_MAIN_MENU:-98}"
+
+    local selected_indices=()
+    [[ -n "$selection_output" ]] && read -r -a selected_indices <<< "$selection_output"
+    if [[ $selector_status -ne 0 ]] || [[ ${#selected_indices[@]} -eq 0 ]]; then
         print_error "未选择节点或选择无效"
         return 1
     fi
@@ -1685,21 +1938,35 @@ batch_delete_nodes() {
         return 0
     fi
 
-    # 执行批量删除
-    local success_count=0
-    for port in "${ports_to_delete[@]}"; do
-        # 从数据库删除
-        remove_node_info "$port"
-        # 从配置删除
-        remove_inbound_from_config "$port"
-        ((success_count++))
-    done
+    local ports_json hopping_entries
+    ports_json=$(printf '%s\n' "${ports_to_delete[@]}" | jq -R . | jq -s .) || return 1
+    hopping_entries=$(jq -r --argjson ports "$ports_json" \
+        '.nodes[] | select((.port|tostring) as $p | $ports | index($p)) | select(.protocol=="hysteria2" and (.extra.port_hopping // "") != "") | "\(.port)|\(.extra.port_hopping)"' \
+        "$NODES_FILE") || return 1
 
-    # 重启服务
-    systemctl restart sing-box
+    begin_data_transaction || return 1
+    if ! update_json_file --argjson ports "$ports_json" \
+        '.nodes |= map(select((.port|tostring) as $p | ($ports | index($p) | not)))' "$NODES_FILE" \
+        || ! update_json_file --argjson ports "$ports_json" \
+        '.bindings |= map(select((.port|tostring) as $p | ($ports | index($p) | not)))' "$NODE_USERS_FILE"; then
+        rollback_data_transaction
+        print_error "批量删除节点数据失败，操作已回滚"
+        return 1
+    fi
+    if ! generate_singbox_config || ! restart_sing-box; then
+        print_error "批量删除后的配置激活失败，操作已回滚"
+        return 1
+    fi
+
+    local hopping_port hopping_range
+    while IFS='|' read -r hopping_port hopping_range; do
+        [[ -n "$hopping_port" && -n "$hopping_range" ]] || continue
+        cleanup_port_hopping_rules "$hopping_port" "$hopping_range" \
+            || print_warning "端口跳跃规则清理失败: $hopping_range → $hopping_port"
+    done <<< "$hopping_entries"
 
     echo ""
-    print_success "批量删除完成！已删除 $success_count 个节点"
+    print_success "批量删除完成！已删除 ${#ports_to_delete[@]} 个节点"
 }
 
 # 批量启用/禁用节点
@@ -1732,16 +1999,27 @@ batch_toggle_nodes() {
     done
 
     # 使用统一选择器进行多选
-    local selected_indices=($(select_multiple "请选择要操作的节点" "${node_items[@]}"))
-    if [[ $? -ne 0 ]] || [[ ${#selected_indices[@]} -eq 0 ]]; then
+    local selection_output selector_status
+    selection_output=$(select_multiple "请选择要操作的节点" "${node_items[@]}")
+    selector_status=$?
+    [[ $selector_status -eq ${UI_BACK:-99} || $selector_status -eq ${UI_CANCEL:-97} ]] && return 0
+    [[ $selector_status -eq ${UI_MAIN_MENU:-98} ]] && return "${UI_MAIN_MENU:-98}"
+
+    local selected_indices=()
+    [[ -n "$selection_output" ]] && read -r -a selected_indices <<< "$selection_output"
+    if [[ $selector_status -ne 0 ]] || [[ ${#selected_indices[@]} -eq 0 ]]; then
         print_error "未选择节点或选择无效"
         return 1
     fi
 
     # 选择操作类型
     local action_items=("启用节点" "禁用节点")
-    local action_idx=$(select_single "请选择操作" "${action_items[@]}")
-    if [[ $? -ne 0 ]]; then
+    local action_idx
+    action_idx=$(select_single "请选择操作" "${action_items[@]}")
+    selector_status=$?
+    [[ $selector_status -eq ${UI_BACK:-99} || $selector_status -eq ${UI_CANCEL:-97} ]] && return 0
+    [[ $selector_status -eq ${UI_MAIN_MENU:-98} ]] && return "${UI_MAIN_MENU:-98}"
+    if [[ $selector_status -ne 0 ]]; then
         print_error "未选择操作"
         return 1
     fi
@@ -1777,16 +2055,21 @@ batch_toggle_nodes() {
         return 0
     fi
 
-    # 执行批量操作（简化处理）
-    local success_count=0
-    for port in "${ports_to_toggle[@]}"; do
-        # 这里简化处理，实际应该修改配置中的enabled字段
-        echo "  ${action_text}节点: 端口 $port"
-        ((success_count++))
-    done
-
-    echo ""
-    print_success "批量${action_text}完成！已${action_text} $success_count 个节点"
+    local ports_json
+    ports_json=$(printf '%s\n' "${ports_to_toggle[@]}" | jq -R . | jq -s .) || return 1
+    begin_data_transaction || return 1
+    if ! update_json_file --argjson ports "$ports_json" --argjson enabled "$enabled" \
+        '.nodes |= map((.port|tostring) as $p | if ($ports | index($p)) != null then .enabled=$enabled else . end)' "$NODES_FILE"; then
+        rollback_data_transaction
+        print_error "批量${action_text}节点写入失败"
+        return 1
+    fi
+    if ! generate_singbox_config; then
+        print_error "批量${action_text}后的配置生成失败，已回滚"
+        return 1
+    fi
+    restart_sing-box || return 1
+    print_success "批量${action_text}完成！已${action_text} ${#ports_to_toggle[@]} 个节点"
 }
 
 # 批量修改端口
@@ -1797,11 +2080,93 @@ batch_modify_ports() {
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
-    print_warning "批量修改端口功能暂未实现"
+    list_nodes
     echo ""
-    echo -e "${YELLOW}建议操作：${NC}"
-    echo -e "  1. 逐个修改节点端口"
-    echo -e "  2. 或删除节点后重新创建"
+    echo -e "${YELLOW}格式：旧端口:新端口，多个映射用空格分隔${NC}"
+    echo -e "示例：443:8443 8444:9443"
+    read -p "请输入端口映射: " mappings_input
+    [[ -n "$mappings_input" ]] || { print_error "端口映射不能为空"; return 1; }
+
+    local mapping old_port new_port mapping_json='{}' old_ports_json='[]' new_ports_json='[]'
+    for mapping in $mappings_input; do
+        [[ "$mapping" =~ ^([0-9]+):([0-9]+)$ ]] || { print_error "映射格式错误: $mapping"; return 1; }
+        old_port="${BASH_REMATCH[1]}"; new_port="${BASH_REMATCH[2]}"
+        validate_port "$old_port" && validate_port "$new_port" || { print_error "端口范围无效: $mapping"; return 1; }
+        [[ "$old_port" != "$new_port" ]] || { print_error "新旧端口不能相同: $mapping"; return 1; }
+        jq -e --arg port "$old_port" '.nodes[] | select((.port|tostring) == $port)' "$NODES_FILE" >/dev/null 2>&1 \
+            || { print_error "旧端口不存在: $old_port"; return 1; }
+        jq -e --arg port "$old_port" 'has($port)' <<< "$mapping_json" >/dev/null 2>&1 \
+            && { print_error "旧端口重复: $old_port"; return 1; }
+        jq -e --arg port "$new_port" 'index($port)' <<< "$new_ports_json" >/dev/null 2>&1 \
+            && { print_error "多个节点不能使用同一新端口: $new_port"; return 1; }
+        mapping_json=$(jq --arg old "$old_port" --arg new "$new_port" '. + {($old):$new}' <<< "$mapping_json") || return 1
+        old_ports_json=$(jq --arg port "$old_port" '. + [$port]' <<< "$old_ports_json") || return 1
+        new_ports_json=$(jq --arg port "$new_port" '. + [$port]' <<< "$new_ports_json") || return 1
+    done
+
+    while IFS= read -r new_port; do
+        if jq -e --arg port "$new_port" --argjson old "$old_ports_json" \
+            '.nodes[] | select((.port|tostring) == $port and (($old | index($port)) | not))' "$NODES_FILE" >/dev/null 2>&1; then
+            print_error "新端口已被其他节点使用: $new_port"; return 1
+        fi
+        if ! jq -e --arg port "$new_port" 'index($port)' <<< "$old_ports_json" >/dev/null 2>&1 && command -v ss >/dev/null 2>&1; then
+            if { ss -H -ltn 2>/dev/null; ss -H -lun 2>/dev/null; } | awk -v port="$new_port" '{a=$4; sub(/^.*:/,"",a); if(a==port) found=1} END{exit !found}'; then
+                print_error "新端口被其他进程占用: $new_port"; return 1
+            fi
+        fi
+    done < <(jq -r '.[]' <<< "$new_ports_json")
+
+    echo ""
+    echo "$mapping_json" | jq -r 'to_entries[] | "  \(.key) → \(.value)"'
+    confirm "确认批量修改端口" || return 0
+
+    begin_data_transaction || return 1
+    local old_hopping
+    old_hopping=$(jq -c --argjson ports "$old_ports_json" '[.nodes[] | select((.port|tostring) as $p | $ports | index($p)) | select(.protocol=="hysteria2" and (.extra.port_hopping // "") != "") | {port:(.port|tostring),range:.extra.port_hopping}]' "$NODES_FILE") || {
+        rollback_data_transaction; return 1
+    }
+    if ! update_json_file --argjson mappings "$mapping_json" \
+        '.nodes |= map((.port|tostring) as $p | if $mappings[$p] != null then .port=$mappings[$p] else . end)' "$NODES_FILE" \
+        || ! update_json_file --argjson mappings "$mapping_json" \
+        '.bindings |= map((.port|tostring) as $p | if $mappings[$p] != null then .port=$mappings[$p] else . end)' "$NODE_USERS_FILE"; then
+        rollback_data_transaction; print_error "批量端口数据写入失败"; return 1
+    fi
+    if ! generate_singbox_config; then
+        print_error "新端口配置生成失败，已回滚"; return 1
+    fi
+
+    local hopping_changed=false range
+    while IFS='|' read -r old_port new_port range; do
+        [[ -n "$old_port" ]] || continue
+        if ! cleanup_port_hopping_rules "$old_port" "$range"; then
+            rollback_data_transaction
+            apply_port_hopping_rules "$old_port" "$range" >/dev/null 2>&1 || true
+            print_error "旧端口跳跃规则清理失败，端口修改已回滚"
+            return 1
+        fi
+        if ! apply_port_hopping_rules "$new_port" "$range"; then
+            rollback_data_transaction
+            while IFS='|' read -r restore_old restore_new restore_range; do
+                [[ -n "$restore_old" ]] || continue
+                cleanup_port_hopping_rules "$restore_new" "$restore_range" || true
+                apply_port_hopping_rules "$restore_old" "$restore_range" || true
+            done < <(jq -r --argjson mappings "$mapping_json" '.[] | "\(.port)|\($mappings[.port])|\(.range)"' <<< "$old_hopping")
+            print_error "端口跳跃规则更新失败，已回滚"; return 1
+        fi
+        hopping_changed=true
+    done < <(jq -r --argjson mappings "$mapping_json" '.[] | "\(.port)|\($mappings[.port])|\(.range)"' <<< "$old_hopping")
+
+    if ! restart_sing-box; then
+        if [[ "$hopping_changed" == true ]]; then
+            while IFS='|' read -r restore_old restore_new restore_range; do
+                cleanup_port_hopping_rules "$restore_new" "$restore_range" || true
+                apply_port_hopping_rules "$restore_old" "$restore_range" || true
+            done < <(jq -r --argjson mappings "$mapping_json" '.[] | "\(.port)|\($mappings[.port])|\(.range)"' <<< "$old_hopping")
+        fi
+        print_error "服务激活失败，端口修改已回滚"
+        return 1
+    fi
+    print_success "批量端口修改完成"
 }
 
 # 添加 HTTP 入站节点
@@ -1826,20 +2191,36 @@ add_http_inbound_node() {
         return 1
     fi
 
-    # 保存节点基本信息（先不绑定用户）
-    local extra_config='{"allowTransparent": false}'
-    save_node_info "http" "$port" "tcp" "none" "$extra_config" "http-$port"
-
-    # 绑定admin用户到节点
-    local admin_info=$(bind_admin_to_node "$port" "http")
-    if [[ $? -ne 0 ]]; then
-        print_error "绑定默认用户失败"
+    local security="none" tls_domain="" tls_cert="" tls_key=""
+    read -p "是否启用 HTTPS/TLS? [y/N]: " enable_tls
+    if [[ "$enable_tls" =~ ^[Yy]$ ]]; then
+        security="tls"
+        read -p "请输入域名: " tls_domain
+        read -p "请输入证书路径 [留空使用自签名]: " tls_cert
+        if [[ -n "$tls_cert" ]]; then
+            read -p "请输入密钥路径: " tls_key
+        else
+            generate_self_signed_cert "$tls_domain"
+            tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.pem"
+            tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
+        fi
+        if [[ -z "$tls_domain" || ! -f "$tls_cert" || ! -f "$tls_key" ]]; then
+            print_error "TLS 域名、证书或密钥无效"
+            return 1
+        fi
+    fi
+    local extra_config
+    extra_config=$(jq -n --arg tls_domain "$tls_domain" --arg tls_cert "$tls_cert" --arg tls_key "$tls_key" \
+        '{tls_domain:$tls_domain,tls_cert:$tls_cert,tls_key:$tls_key}') || return 1
+    if ! save_node_and_bind_admin "http" "$port" "tcp" "$security" "$extra_config" "http-$port"; then
         return 1
     fi
 
     # 生成配置并重启
-    generate_singbox_config
-    restart_sing-box
+    if ! generate_singbox_config || ! restart_sing-box; then
+        print_error "配置校验或服务重启失败，本次操作未生效"
+        return 1
+    fi
 
     print_success "HTTP 入站节点添加成功！"
     echo ""
@@ -1874,39 +2255,24 @@ add_socks_inbound_node() {
         return 1
     fi
 
-    # 是否启用UDP
-    echo ""
-    read -p "是否启用 UDP 支持? [Y/n]: " enable_udp
-    local udp_config="true"
-    if [[ "$enable_udp" == "n" || "$enable_udp" == "N" ]]; then
-        udp_config="false"
-    fi
-
-    # 生成额外配置
-    local extra_config=$(jq -n \
-        --argjson udp "$udp_config" \
-        '{udp: $udp}')
-
-    # 保存节点基本信息（先不绑定用户）
-    save_node_info "socks" "$port" "tcp" "none" "$extra_config" "socks-$port"
-
-    # 绑定admin用户到节点
-    local admin_info=$(bind_admin_to_node "$port" "socks")
-    if [[ $? -ne 0 ]]; then
-        print_error "绑定默认用户失败"
+    # sing-box SOCKS 入站按协议原生处理 UDP，没有独立开关。
+    local extra_config='{}'
+    if ! save_node_and_bind_admin "socks" "$port" "tcp" "none" "$extra_config" "socks-$port"; then
         return 1
     fi
 
     # 生成配置并重启
-    generate_singbox_config
-    restart_sing-box
+    if ! generate_singbox_config || ! restart_sing-box; then
+        print_error "配置校验或服务重启失败，本次操作未生效"
+        return 1
+    fi
 
     print_success "SOCKS 入站节点添加成功！"
     echo ""
     echo -e "${CYAN}节点信息：${NC}"
     echo -e "  协议: SOCKS"
     echo -e "  端口: $port"
-    echo -e "  UDP: $([[ "$udp_config" == "true" ]] && echo "已启用" || echo "未启用")"
+    echo -e "  UDP: 协议原生支持"
     echo -e "  已绑定用户: admin"
     echo ""
     print_info "提示：可在【用户管理】中添加更多用户到此节点"
@@ -1950,6 +2316,106 @@ generate_and_show_node_link() {
     else
         print_warning "链接生成失败，请在【订阅管理】中查看节点链接"
     fi
+}
+
+# 收集必须的 TLS 证书，结果写入 NODE_TLS_DOMAIN/NODE_TLS_CERT/NODE_TLS_KEY。
+collect_required_tls_material() {
+    local protocol_name="$1"
+    NODE_TLS_DOMAIN="" NODE_TLS_CERT="" NODE_TLS_KEY=""
+    read -p "请输入 ${protocol_name} TLS 域名: " NODE_TLS_DOMAIN
+    if ! validate_domain "$NODE_TLS_DOMAIN"; then
+        print_error "TLS 域名格式不正确"
+        return 1
+    fi
+    read -p "请输入证书路径 [留空生成自签名证书]: " NODE_TLS_CERT
+    if [[ -n "$NODE_TLS_CERT" ]]; then
+        read -p "请输入密钥路径: " NODE_TLS_KEY
+    else
+        declare -f generate_self_signed_cert >/dev/null 2>&1 || {
+            print_error "证书生成函数不可用"
+            return 1
+        }
+        generate_self_signed_cert "$NODE_TLS_DOMAIN" || return 1
+        NODE_TLS_CERT="${SINGBOX_DIR}/certs/${NODE_TLS_DOMAIN}/fullchain.pem"
+        NODE_TLS_KEY="${SINGBOX_DIR}/certs/${NODE_TLS_DOMAIN}/${NODE_TLS_DOMAIN}.key"
+    fi
+    [[ -f "$NODE_TLS_CERT" && -f "$NODE_TLS_KEY" ]] || {
+        print_error "证书或密钥文件不存在"
+        return 1
+    }
+}
+
+# 添加 Hysteria v1 节点。
+add_hysteria_node() {
+    clear
+    print_header "添加 Hysteria v1 节点"
+    local port up_mbps down_mbps obfs extra_config
+    read -p "请输入端口 [443]: " port; port=${port:-443}
+    validate_port "$port" && ! check_port_exists "$port" || { print_error "端口无效、已占用或已存在"; return 1; }
+    collect_required_tls_material "Hysteria" || return 1
+    read -p "上行速率 Mbps [100]: " up_mbps; up_mbps=${up_mbps:-100}
+    read -p "下行速率 Mbps [100]: " down_mbps; down_mbps=${down_mbps:-100}
+    [[ "$up_mbps" =~ ^[1-9][0-9]*$ && "$down_mbps" =~ ^[1-9][0-9]*$ ]] || {
+        print_error "上下行速率必须为正整数"; return 1
+    }
+    read -p "混淆密码 [留空禁用]: " obfs
+    extra_config=$(jq -n --arg tls_domain "$NODE_TLS_DOMAIN" --arg tls_cert "$NODE_TLS_CERT" --arg tls_key "$NODE_TLS_KEY" \
+        --argjson up "$up_mbps" --argjson down "$down_mbps" --arg obfs "$obfs" \
+        '{tls_domain:$tls_domain,tls_cert:$tls_cert,tls_key:$tls_key,up_mbps:$up,down_mbps:$down} + (if $obfs != "" then {obfs:$obfs} else {} end)') || return 1
+    save_node_and_bind_admin "hysteria" "$port" "udp" "tls" "$extra_config" "hysteria-$port" || return 1
+    generate_singbox_config && restart_sing-box || return 1
+    print_success "Hysteria v1 节点添加成功"
+}
+
+# ShadowTLS v3 多用户入站。
+add_shadowtls_node() {
+    clear
+    print_header "添加 ShadowTLS v3 节点"
+    local port handshake_server handshake_port strict_mode=true wildcard_sni extra_config
+    read -p "请输入监听端口 [443]: " port; port=${port:-443}
+    validate_port "$port" && ! check_port_exists "$port" || { print_error "端口无效、已占用或已存在"; return 1; }
+    read -p "请输入握手服务器 [www.microsoft.com]: " handshake_server; handshake_server=${handshake_server:-www.microsoft.com}
+    if ! validate_domain "$handshake_server" && ! validate_ip "$handshake_server"; then
+        print_error "握手服务器地址无效"; return 1
+    fi
+    read -p "握手服务器端口 [443]: " handshake_port; handshake_port=${handshake_port:-443}
+    validate_port "$handshake_port" || { print_error "握手服务器端口无效"; return 1; }
+    read -p "启用严格模式? [Y/n]: " answer; [[ "$answer" =~ ^[Nn]$ ]] && strict_mode=false
+    read -p "通配符 SNI [off/authed/all，默认 off]: " wildcard_sni; wildcard_sni=${wildcard_sni:-off}
+    case "$wildcard_sni" in off|authed|all) ;; *) print_error "通配符 SNI 选项无效"; return 1 ;; esac
+    extra_config=$(jq -n --arg server "$handshake_server" --argjson server_port "$handshake_port" --argjson strict "$strict_mode" --arg wildcard "$wildcard_sni" \
+        '{version:3,handshake_server:$server,handshake_port:$server_port,strict_mode:$strict,wildcard_sni:$wildcard,tls_domain:$server}') || return 1
+    save_node_and_bind_admin "shadowtls" "$port" "tcp" "none" "$extra_config" "shadowtls-$port" || return 1
+    generate_singbox_config && restart_sing-box || return 1
+    print_success "ShadowTLS v3 节点添加成功"
+}
+
+# Snell 服务器在 sing-box 1.14+ 支持入站 v5/v6；v5 客户端使用线路兼容的 v4。
+add_snell_node() {
+    clear
+    print_header "添加 Snell 节点"
+    local port version psk mode extra_config
+    read -p "请输入监听端口 [8010]: " port; port=${port:-8010}
+    validate_port "$port" && ! check_port_exists "$port" || { print_error "端口无效、已占用或已存在"; return 1; }
+    read -p "Snell 服务端版本 [5/6，默认 5]: " version; version=${version:-5}
+    [[ "$version" == "5" || "$version" == "6" ]] || { print_error "版本只能是 5 或 6"; return 1; }
+    read -p "服务器 PSK [留空自动生成]: " psk; psk=${psk:-$(openssl rand -hex 16)}
+    [[ -n "$psk" ]] || return 1
+    if [[ "$version" == "6" && ( ${#psk} -lt 12 || ${#psk} -gt 255 ) ]]; then
+        print_error "Snell v6 PSK 长度必须为 12-255 字节"; return 1
+    fi
+    if [[ "$version" == "5" ]]; then
+        read -p "HTTP 混淆 [none/http，默认 none]: " mode; mode=${mode:-none}
+        case "$mode" in none|http) ;; *) print_error "混淆模式无效"; return 1 ;; esac
+        extra_config=$(jq -n --argjson version 5 --arg psk "$psk" --arg mode "$mode" '{version:$version,psk:$psk,obfs_mode:$mode}')
+    else
+        read -p "流量整形 [default/unshaped/unsafe-raw，默认 default]: " mode; mode=${mode:-default}
+        case "$mode" in default|unshaped|unsafe-raw) ;; *) print_error "流量整形模式无效"; return 1 ;; esac
+        extra_config=$(jq -n --argjson version 6 --arg psk "$psk" --arg mode "$mode" '{version:$version,psk:$psk,mode:$mode}')
+    fi
+    save_node_and_bind_admin "snell" "$port" "tcp" "none" "$extra_config" "snell-$port" || return 1
+    generate_singbox_config && restart_sing-box || return 1
+    print_success "Snell v${version} 节点添加成功"
 }
 
 # ============================================================================
@@ -2005,12 +2471,21 @@ add_hysteria2_node() {
         tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
     fi
 
+    if [[ ! -f "$tls_cert" || ! -f "$tls_key" ]]; then
+        print_error "证书或密钥文件不存在"
+        return 1
+    fi
+
     # 速率限制
     echo -e "\n${CYAN}速率限制配置：${NC}"
     read -p "上行速率 (Mbps) [默认: 100]: " up_mbps
     up_mbps=${up_mbps:-100}
     read -p "下行速率 (Mbps) [默认: 100]: " down_mbps
     down_mbps=${down_mbps:-100}
+    if [[ ! "$up_mbps" =~ ^[0-9]+$ || ! "$down_mbps" =~ ^[0-9]+$ ]]; then
+        print_error "上下行速率必须是非负整数"
+        return 1
+    fi
 
     # 混淆配置
     echo -e "\n${CYAN}混淆配置：${NC}"
@@ -2040,6 +2515,10 @@ ${CYAN}端口跳跃配置（可选）：${NC}"
             else
                 print_warning "格式错误，跳过端口跳跃配置"
             fi
+            if [[ -n "$port_hopping" ]] && ! validate_port_hopping_range "$port_hopping" "$port"; then
+                print_error "端口跳跃范围无效、顺序错误或与现有节点冲突"
+                return 1
+            fi
         fi
     fi
 
@@ -2061,21 +2540,27 @@ ${CYAN}端口跳跃配置（可选）：${NC}"
             obfs_password: $obfs_password
         } + (if $port_hopping != "" then {port_hopping: $port_hopping} else {} end)')
 
-    # 保存节点信息
-    save_node_info "hysteria2" "$port" "udp" "tls" "$extra_config" "hy2-$port"
-
-    # 绑定admin用户
-    local admin_info=$(bind_admin_to_node "$port" "hysteria2")
-    if [[ $? -ne 0 ]]; then
-        print_error "绑定默认用户失败"
+    if ! save_node_and_bind_admin "hysteria2" "$port" "udp" "tls" "$extra_config" "hy2-$port"; then
         return 1
     fi
+    local admin_info="$ADMIN_BIND_RESULT"
 
     IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
 
-    # 生成配置并重启
-    generate_singbox_config
-    restart_sing-box
+    if ! generate_singbox_config; then
+        print_error "配置校验或服务重启失败，本次操作未生效"
+        return 1
+    fi
+    if [[ -n "$port_hopping" ]] && ! apply_port_hopping_rules "$port" "$port_hopping"; then
+        rollback_data_transaction
+        print_error "端口跳跃规则安装失败，本次操作已回滚"
+        return 1
+    fi
+    if ! restart_sing-box; then
+        [[ -n "$port_hopping" ]] && cleanup_port_hopping_rules "$port" "$port_hopping"
+        print_error "配置校验或服务重启失败，本次操作未生效"
+        return 1
+    fi
 
     print_success "Hysteria2 节点添加成功！"
     echo -e "${CYAN}节点信息：${NC}"
@@ -2139,6 +2624,11 @@ add_tuic_node() {
         tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
     fi
 
+    if [[ ! -f "$tls_cert" || ! -f "$tls_key" ]]; then
+        print_error "证书或密钥文件不存在"
+        return 1
+    fi
+
     # 拥塞控制
     echo -e "\n${CYAN}拥塞控制算法：${NC}"
     echo "1. cubic (默认)"
@@ -2178,18 +2668,15 @@ add_tuic_node() {
             heartbeat: "10s"
         }')
 
-    # 保存节点
-    save_node_info "tuic" "$port" "udp" "tls" "$extra_config" "tuic-$port"
-
-    # 绑定admin用户
-    local admin_info=$(bind_admin_to_node "$port" "tuic")
-    if [[ $? -ne 0 ]]; then
+    if ! save_node_and_bind_admin "tuic" "$port" "udp" "tls" "$extra_config" "tuic-$port"; then
         return 1
     fi
 
     # 生成配置
-    generate_singbox_config
-    restart_sing-box
+    if ! generate_singbox_config || ! restart_sing-box; then
+        print_error "配置校验或服务重启失败，本次操作未生效"
+        return 1
+    fi
 
     print_success "TUIC 节点添加成功！"
     echo -e "${CYAN}节点信息：${NC}"
@@ -2214,7 +2701,7 @@ add_naive_node() {
     echo -e "  • 强抗审查代理协议"
     echo -e "  • 伪装成普通 HTTPS 流量"
     echo -e "  • 必须启用 TLS"
-    echo -e "  • 不支持 UDP"
+    echo -e "  • 支持 TCP 与 QUIC 监听模式"
     echo ""
 
     # 输入端口
@@ -2249,6 +2736,11 @@ add_naive_node() {
         tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
     fi
 
+    if [[ ! -f "$tls_cert" || ! -f "$tls_key" ]]; then
+        print_error "证书或密钥文件不存在"
+        return 1
+    fi
+
     # 构建 extra_config
     local extra_config=$(jq -n \
         --arg tls_domain "$tls_domain" \
@@ -2260,15 +2752,15 @@ add_naive_node() {
             tls_key: $tls_key
         }')
 
-    # 保存节点
-    save_node_info "naive" "$port" "tcp" "tls" "$extra_config" "naive-$port"
-
-    # 绑定admin用户
-    bind_admin_to_node "$port" "naive"
+    if ! save_node_and_bind_admin "naive" "$port" "tcp" "tls" "$extra_config" "naive-$port"; then
+        return 1
+    fi
 
     # 生成配置
-    generate_singbox_config
-    restart_sing-box
+    if ! generate_singbox_config || ! restart_sing-box; then
+        print_error "配置校验或服务重启失败，本次操作未生效"
+        return 1
+    fi
 
     print_success "Naive 节点添加成功！"
     echo -e "${CYAN}节点信息：${NC}"
@@ -2304,33 +2796,23 @@ add_mixed_node() {
         return 1
     fi
 
-    # 是否启用UDP
-    read -p "是否启用 UDP 支持? [Y/n]: " enable_udp
-    local udp_enabled="true"
-    if [[ "$enable_udp" == "n" || "$enable_udp" == "N" ]]; then
-        udp_enabled="false"
+    # sing-box Mixed 入站没有独立 UDP 开关。
+    local extra_config='{}'
+    if ! save_node_and_bind_admin "mixed" "$port" "tcp" "none" "$extra_config" "mixed-$port"; then
+        return 1
     fi
 
-    # 构建 extra_config
-    local extra_config=$(jq -n \
-        --arg udp "$udp_enabled" \
-        '{udp: ($udp == "true")}')
-
-    # 保存节点
-    save_node_info "mixed" "$port" "tcp" "none" "$extra_config" "mixed-$port"
-
-    # 绑定admin用户
-    bind_admin_to_node "$port" "mixed"
-
     # 生成配置
-    generate_singbox_config
-    restart_sing-box
+    if ! generate_singbox_config || ! restart_sing-box; then
+        print_error "配置校验或服务重启失败，本次操作未生效"
+        return 1
+    fi
 
     print_success "Mixed 代理节点添加成功！"
     echo -e "${CYAN}节点信息：${NC}"
     echo "  端口: $port"
     echo "  协议: HTTP + SOCKS5"
-    echo "  UDP: $udp_enabled"
+    echo "  UDP: SOCKS 协议原生支持"
     echo ""
 }
 
@@ -2347,7 +2829,7 @@ add_anytls_node() {
     echo -e "${YELLOW}AnyTLS 说明：${NC}"
     echo -e "  • sing-box 1.12.0+ 新协议"
     echo -e "  • 支持流量填充混淆"
-    echo -e "  • 可选 TLS 加密"
+    echo -e "  • 强制 TLS 加密"
     echo -e "  • 基于密码认证"
     echo ""
 
@@ -2361,38 +2843,34 @@ add_anytls_node() {
         return 1
     fi
 
-    # TLS 配置（可选）
+    # AnyTLS 必须使用 TLS
     echo -e "\n${CYAN}TLS 配置：${NC}"
-    read -p "是否启用 TLS? [Y/n]: " enable_tls
-    local security="none"
+    local security="tls"
     local tls_domain=""
     local tls_cert=""
     local tls_key=""
 
-    if [[ "$enable_tls" != "n" && "$enable_tls" != "N" ]]; then
-        security="tls"
-        read -p "请输入域名: " tls_domain
-        if [[ -z "$tls_domain" ]]; then
-            print_error "启用 TLS 必须配置域名"
-            return 1
-        fi
+    read -p "请输入域名: " tls_domain
+    if [[ -z "$tls_domain" ]]; then
+        print_error "AnyTLS 必须配置域名"
+        return 1
+    fi
 
-        read -p "请输入证书路径 [留空使用自签名]: " tls_cert
+    read -p "请输入证书路径 [留空使用自签名]: " tls_cert
 
-        if [[ -n "$tls_cert" ]]; then
-            read -p "请输入密钥路径: " tls_key
-            if [[ ! -f "$tls_cert" ]] || [[ ! -f "$tls_key" ]]; then
-                print_error "证书或密钥文件不存在"
-                return 1
-            fi
-        else
-            print_info "使用自签名证书"
-            if declare -f generate_self_signed_cert &>/dev/null; then
-                generate_self_signed_cert "$tls_domain"
-            fi
-            tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.pem"
-            tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
+    if [[ -n "$tls_cert" ]]; then
+        read -p "请输入密钥路径: " tls_key
+    else
+        print_info "使用自签名证书"
+        if declare -f generate_self_signed_cert &>/dev/null; then
+            generate_self_signed_cert "$tls_domain"
         fi
+        tls_cert="${SINGBOX_DIR}/certs/${tls_domain}/fullchain.pem"
+        tls_key="${SINGBOX_DIR}/certs/${tls_domain}/${tls_domain}.key"
+    fi
+    if [[ ! -f "$tls_cert" || ! -f "$tls_key" ]]; then
+        print_error "证书或密钥文件不存在"
+        return 1
     fi
 
     # 填充方案配置
@@ -2419,7 +2897,7 @@ add_anytls_node() {
         3)
             use_padding="true"
             custom_padding="true"
-            print_info "请查阅官方文档配置自定义填充方案"
+            print_info "请输入 JSON 数组，例如：[\"stop=8\",\"0=30-30\"]"
             ;;
         *)
             use_padding="true"
@@ -2428,56 +2906,37 @@ add_anytls_node() {
     esac
 
     # 构建 extra_config
-    local extra_config
-    if [[ "$security" == "tls" ]]; then
-        extra_config=$(jq -n \
-            --arg tls_domain "$tls_domain" \
-            --arg tls_cert "$tls_cert" \
-            --arg tls_key "$tls_key" \
-            --arg use_padding "$use_padding" \
-            --arg custom_padding "$custom_padding" \
-            '{
-                tls_domain: $tls_domain,
-                tls_cert: $tls_cert,
-                tls_key: $tls_key,
-                use_padding: ($use_padding == "true"),
-                custom_padding: ($custom_padding == "true")
-            }')
-    else
-        extra_config=$(jq -n \
-            --arg use_padding "$use_padding" \
-            --arg custom_padding "$custom_padding" \
-            '{
-                use_padding: ($use_padding == "true"),
-                custom_padding: ($custom_padding == "true")
-            }')
+    local padding_scheme='[]'
+    if [[ "$custom_padding" == "true" ]]; then
+        read -r -p "自定义填充方案: " padding_scheme
+        if ! echo "$padding_scheme" | jq -e 'type == "array" and all(.[]; type == "string")' >/dev/null 2>&1; then
+            print_error "自定义填充方案必须是字符串组成的 JSON 数组"
+            return 1
+        fi
+    elif [[ "$use_padding" == "true" ]]; then
+        padding_scheme='["stop=8","0=30-30","1=100-400","2=400-500,c,500-1000,c,500-1000,c,500-1000,c,500-1000","3=9-9,500-1000","4=500-1000","5=500-1000","6=500-1000","7=500-1000"]'
     fi
+    local extra_config=$(jq -n --arg tls_domain "$tls_domain" --arg tls_cert "$tls_cert" --arg tls_key "$tls_key" --argjson padding "$padding_scheme" \
+        '{tls_domain:$tls_domain,tls_cert:$tls_cert,tls_key:$tls_key,padding_scheme:$padding}')
 
-    # 保存节点
-    save_node_info "anytls" "$port" "tcp" "$security" "$extra_config" "anytls-$port"
-
-    # 绑定admin用户
-    local admin_info=$(bind_admin_to_node "$port" "anytls")
-    if [[ $? -ne 0 ]]; then
-        print_error "绑定默认用户失败"
+    if ! save_node_and_bind_admin "anytls" "$port" "tcp" "$security" "$extra_config" "anytls-$port"; then
         return 1
     fi
 
     # 生成配置
-    generate_singbox_config
-    restart_sing-box
+    if ! generate_singbox_config || ! restart_sing-box; then
+        print_error "配置校验或服务重启失败，本次操作未生效"
+        return 1
+    fi
 
     print_success "AnyTLS 节点添加成功！"
     echo -e "${CYAN}节点信息：${NC}"
     echo "  端口: $port"
-    [[ "$security" == "tls" ]] && echo "  域名: $tls_domain"
-    echo "  TLS: $([[ "$security" == "tls" ]] && echo "已启用" || echo "未启用")"
+    echo "  域名: $tls_domain"
+    echo "  TLS: 已启用"
     echo "  填充: $([[ "$use_padding" == "true" ]] && echo "已启用" || echo "未启用")"
     echo ""
 
-    if [[ "$security" != "tls" ]]; then
-        echo -e "${YELLOW}提示：未启用 TLS 可能降低安全性${NC}"
-    fi
 }
 
 # ============================================================================
@@ -2709,41 +3168,16 @@ quick_setup_vless_reality() {
             flow: $flow
         }')
 
-    # 6. 保存节点信息
-    save_node_info "vless" "$port" "tcp" "reality" "$reality_config" "vless-reality-$port"
-    if [[ $? -ne 0 ]]; then
-        print_error "保存节点信息失败"
+    if ! save_node_and_bind_admin "vless" "$port" "tcp" "reality" "$reality_config" "vless-reality-$port"; then
         return 1
     fi
-
-    # 7. 绑定 admin 用户到节点
-    local admin_info=$(bind_admin_to_node "$port" "vless")
-    if [[ $? -ne 0 ]]; then
-        print_error "绑定默认用户失败，正在回滚..."
-        # 删除刚创建的节点
-        jq --arg port "$port" '.nodes = [.nodes[] | select(.port != $port)]' "$DATA_DIR/nodes.json" > "$DATA_DIR/nodes.json.tmp"
-        mv "$DATA_DIR/nodes.json.tmp" "$DATA_DIR/nodes.json"
-        return 1
-    fi
+    local admin_info="$ADMIN_BIND_RESULT"
 
     IFS='|' read -r admin_uuid admin_password admin_remark <<< "$admin_info"
 
     # 8. 重新生成sing-box配置文件
-    generate_singbox_config
-    if [[ $? -ne 0 ]]; then
-        print_error "生成配置文件失败，正在回滚..."
-        # 删除节点和绑定
-        jq --arg port "$port" '.nodes = [.nodes[] | select(.port != $port)]' "$DATA_DIR/nodes.json" > "$DATA_DIR/nodes.json.tmp"
-        mv "$DATA_DIR/nodes.json.tmp" "$DATA_DIR/nodes.json"
-        jq --arg port "$port" '.bindings = [.bindings[] | select(.port != $port)]' "$DATA_DIR/node_users.json" > "$DATA_DIR/node_users.json.tmp"
-        mv "$DATA_DIR/node_users.json.tmp" "$DATA_DIR/node_users.json"
-        return 1
-    fi
-
-    # 9. 重启服务
-    restart_sing-box
-    if [[ $? -ne 0 ]]; then
-        print_error "sing-box 启动失败"
+    if ! generate_singbox_config || ! restart_sing-box; then
+        print_error "Reality 节点应用失败，数据和配置已回滚"
         return 1
     fi
 
@@ -2993,39 +3427,18 @@ quick_setup_hysteria2() {
         extra_config="$extra_config_base"
     fi
 
-    # 保存节点信息
-    save_node_info "hysteria2" "$port" "udp" "tls" "$extra_config" "hy2-$port"
-    if [[ $? -ne 0 ]]; then
-        print_error "保存节点信息失败"
+    if ! save_node_and_bind_admin "hysteria2" "$port" "udp" "tls" "$extra_config" "hy2-$port"; then
         # 清理证书文件
         rm -f "$tls_cert" "$tls_key"
         return 1
     fi
-
-    # 绑定 admin 用户到节点
-    local admin_info=$(bind_admin_to_node "$port" "hysteria2")
-    if [[ $? -ne 0 ]]; then
-        print_error "绑定默认用户失败，正在回滚..."
-        # 删除刚创建的节点
-        jq --arg port "$port" '.nodes = [.nodes[] | select(.port != $port)]' "$DATA_DIR/nodes.json" > "$DATA_DIR/nodes.json.tmp"
-        mv "$DATA_DIR/nodes.json.tmp" "$DATA_DIR/nodes.json"
-        # 清理证书文件
-        rm -f "$tls_cert" "$tls_key"
-        return 1
-    fi
+    local admin_info="$ADMIN_BIND_RESULT"
 
     IFS='|' read -r admin_uuid admin_password admin_username <<< "$admin_info"
 
     # 重新生成sing-box配置文件
-    generate_singbox_config
-    if [[ $? -ne 0 ]]; then
-        print_error "生成配置文件失败，正在回滚..."
-        # 删除节点和绑定
-        jq --arg port "$port" '.nodes = [.nodes[] | select(.port != $port)]' "$DATA_DIR/nodes.json" > "$DATA_DIR/nodes.json.tmp"
-        mv "$DATA_DIR/nodes.json.tmp" "$DATA_DIR/nodes.json"
-        jq --arg port "$port" '.bindings = [.bindings[] | select(.port != $port)]' "$DATA_DIR/node_users.json" > "$DATA_DIR/node_users.json.tmp"
-        mv "$DATA_DIR/node_users.json.tmp" "$DATA_DIR/node_users.json"
-        # 清理证书文件
+    if ! generate_singbox_config; then
+        print_error "生成配置文件失败，数据和配置已回滚"
         rm -f "$tls_cert" "$tls_key"
         return 1
     fi
@@ -3034,68 +3447,20 @@ quick_setup_hysteria2() {
     if [[ -n "$port_hopping" ]]; then
         echo ""
         echo -e "${BLUE}配置端口跳跃iptables规则...${NC}"
-
-        # 提取端口范围的起始和结束端口（冒号分隔）
-        local start_port=$(echo "$port_hopping" | cut -d':' -f1)
-        local end_port=$(echo "$port_hopping" | cut -d':' -f2)
-
-        # 获取主网络接口
-        local main_interface=$(ip route | grep default | head -n1 | awk '{print $5}')
-        if [[ -z "$main_interface" ]]; then
-            main_interface="eth0"  # 默认值
-        fi
-
-        # 删除旧规则（如果存在）
-        iptables -t nat -D PREROUTING -i "$main_interface" -p udp --dport ${start_port}:${end_port} -j REDIRECT --to-ports $port 2>/dev/null
-        ip6tables -t nat -D PREROUTING -i "$main_interface" -p udp --dport ${start_port}:${end_port} -j REDIRECT --to-ports $port 2>/dev/null
-
-        # 添加新规则
-        # IPv4
-        iptables -t nat -A PREROUTING -i "$main_interface" -p udp --dport ${start_port}:${end_port} -j REDIRECT --to-ports $port
-        if [[ $? -eq 0 ]]; then
-            print_success "IPv4端口跳跃规则已添加: $port_hopping → $port"
-        else
-            print_warning "IPv4端口跳跃规则添加失败"
-        fi
-
-        # IPv6
-        ip6tables -t nat -A PREROUTING -i "$main_interface" -p udp --dport ${start_port}:${end_port} -j REDIRECT --to-ports $port 2>/dev/null
-        if [[ $? -eq 0 ]]; then
-            print_success "IPv6端口跳跃规则已添加: $port_hopping → $port"
-        else
-            print_info "IPv6端口跳跃规则添加失败（可能不支持IPv6）"
-        fi
-
-        # 保存iptables规则（持久化）
-        if command -v iptables-save >/dev/null 2>&1; then
-            local saved=false
-            if command -v netfilter-persistent >/dev/null 2>&1; then
-                netfilter-persistent save >/dev/null 2>&1 && saved=true
-            elif [[ -f /etc/debian_version ]]; then
-                # 确保目录存在
-                mkdir -p /etc/iptables 2>/dev/null
-                if iptables-save > /etc/iptables/rules.v4 2>/dev/null && \
-                   ip6tables-save > /etc/iptables/rules.v6 2>/dev/null; then
-                    saved=true
-                fi
-            elif [[ -f /etc/redhat-release ]]; then
-                service iptables save >/dev/null 2>&1 && \
-                service ip6tables save >/dev/null 2>&1 && saved=true
-            fi
-
-            if [[ "$saved" == "true" ]]; then
-                print_success "iptables规则已持久化"
-            else
-                print_warning "iptables规则持久化失败（规则仍生效但重启后会丢失）"
-            fi
+        if ! apply_port_hopping_rules "$port" "$port_hopping"; then
+            rollback_data_transaction
+            rm -f "$tls_cert" "$tls_key"
+            print_error "端口跳跃规则安装失败，节点配置已回滚"
+            return 1
         fi
         echo ""
     fi
 
     # 重启服务
-    restart_sing-box
-    if [[ $? -ne 0 ]]; then
-        print_error "sing-box 启动失败"
+    if ! restart_sing-box; then
+        [[ -n "$port_hopping" ]] && cleanup_port_hopping_rules "$port" "$port_hopping"
+        rm -f "$tls_cert" "$tls_key"
+        print_error "sing-box 启动失败，节点、配置和端口跳跃规则已回滚"
         return 1
     fi
 
@@ -3289,39 +3654,16 @@ quick_setup_argo_vless_ws() {
             ws_host: $ws_host
         }')
 
-    # 保存节点信息（security 为 none，不使用 TLS）
-    save_node_info "vless" "$port" "ws" "none" "$extra_config" "vless-ws-$port"
-    if [[ $? -ne 0 ]]; then
-        print_error "保存节点信息失败"
+    if ! save_node_and_bind_admin "vless" "$port" "ws" "none" "$extra_config" "vless-ws-$port"; then
         return 1
     fi
-
-    # 绑定 admin 用户到节点
-    local admin_info=$(bind_admin_to_node "$port" "vless")
-    if [[ $? -ne 0 ]]; then
-        print_error "绑定默认用户失败，正在回滚..."
-        jq --arg port "$port" '.nodes = [.nodes[] | select(.port != $port)]' "$DATA_DIR/nodes.json" > "$DATA_DIR/nodes.json.tmp"
-        mv "$DATA_DIR/nodes.json.tmp" "$DATA_DIR/nodes.json"
-        return 1
-    fi
+    local admin_info="$ADMIN_BIND_RESULT"
 
     IFS='|' read -r admin_uuid admin_password admin_username <<< "$admin_info"
 
     # 重新生成sing-box配置文件
-    generate_singbox_config
-    if [[ $? -ne 0 ]]; then
-        print_error "生成配置文件失败，正在回滚..."
-        jq --arg port "$port" '.nodes = [.nodes[] | select(.port != $port)]' "$DATA_DIR/nodes.json" > "$DATA_DIR/nodes.json.tmp"
-        mv "$DATA_DIR/nodes.json.tmp" "$DATA_DIR/nodes.json"
-        jq --arg port "$port" '.bindings = [.bindings[] | select(.port != $port)]' "$DATA_DIR/node_users.json" > "$DATA_DIR/node_users.json.tmp"
-        mv "$DATA_DIR/node_users.json.tmp" "$DATA_DIR/node_users.json"
-        return 1
-    fi
-
-    # 重启服务
-    restart_sing-box
-    if [[ $? -ne 0 ]]; then
-        print_error "sing-box 启动失败"
+    if ! generate_singbox_config || ! restart_sing-box; then
+        print_error "节点应用失败，数据和配置已回滚"
         return 1
     fi
 

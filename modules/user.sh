@@ -220,10 +220,14 @@ add_global_user() {
         print_error "用户名不能为空"
         read -p "请输入用户名: " username
     done
+    if [[ ! "$username" =~ ^[A-Za-z0-9._@-]+$ ]]; then
+        print_error "用户名只能包含字母、数字、点、下划线、@ 和连字符"
+        return 1
+    fi
 
     # 检查用户名是否已存在
     if [[ -f "$USERS_FILE" ]]; then
-        local existing_username=$(jq -r ".users[] | select(.username == \"$username\") | .username" "$USERS_FILE" 2>/dev/null)
+        local existing_username=$(jq -r --arg username "$username" '.users[] | select(.username == $username) | .username' "$USERS_FILE" 2>/dev/null)
         if [[ -n "$existing_username" ]]; then
             print_error "用户名 '$username' 已存在"
             return 1
@@ -235,6 +239,10 @@ add_global_user() {
     if [[ -z "$password" ]]; then
         password=$(openssl rand -base64 16 | tr -d '/+=' | cut -c1-16)
         print_info "自动生成密码: $password"
+    fi
+    if [[ "$password" == *$'\n'* || "$password" == *$'\r'* ]]; then
+        print_error "密码不能包含换行符"
+        return 1
     fi
 
     # 生成UUID（自动，不再询问用户）
@@ -249,14 +257,17 @@ add_global_user() {
     # 设置用户等级
     read -p "请输入用户等级 [默认: 0]: " level
     level=${level:-0}
+    [[ "$level" =~ ^[0-9]+$ ]] || { print_error "用户等级必须是非负整数"; return 1; }
 
     # 设置流量限制
     read -p "请输入流量限制(GB) [留空表示无限制]: " traffic_limit_gb
     traffic_limit_gb=${traffic_limit_gb:-unlimited}
+    [[ "$traffic_limit_gb" == unlimited || "$traffic_limit_gb" =~ ^[0-9]+([.][0-9]+)?$ ]] || { print_error "流量限制必须是数字或 unlimited"; return 1; }
 
     # 设置有效期
     read -p "请输入有效期(天数) [留空表示无限制]: " expire_days
     if [[ -n "$expire_days" && "$expire_days" != "unlimited" ]]; then
+        [[ "$expire_days" =~ ^[1-9][0-9]*$ ]] || { print_error "有效期必须是正整数天数"; return 1; }
         expire_date=$(date -d "+${expire_days} days" '+%Y-%m-%d' 2>/dev/null || date -v+${expire_days}d '+%Y-%m-%d')
     else
         expire_date="unlimited"
@@ -279,8 +290,14 @@ add_global_user() {
         --arg expire "$expire_date" \
         '{id: $id, username: $username, password: $password, email: $email, level: ($level|tonumber), traffic_limit_gb: $traffic_limit, traffic_used_gb: $traffic_used, expire_date: $expire, created: (now|todate), enabled: true}')
 
-    jq --argjson user_data "$user_data" '.users += [$user_data]' "$USERS_FILE" > "${USERS_FILE}.tmp"
-    mv "${USERS_FILE}.tmp" "$USERS_FILE"
+    local users_data
+    users_data=$(jq --argjson user_data "$user_data" '.users += [$user_data]' "$USERS_FILE") || return 1
+    atomic_write_json "$USERS_FILE" "$users_data" || return 1
+    if ! commit_data_transaction; then
+        rollback_data_transaction
+        print_error "用户已写入但运行时快照提交失败，新增操作已回滚"
+        return 1
+    fi
 
     print_success "全局用户添加成功！"
     echo ""
@@ -333,6 +350,7 @@ show_user_detail() {
     local updated_gb=$(update_user_traffic_usage "$uuid" 2>/dev/null)
     if [[ $? -eq 0 && -n "$updated_gb" ]]; then
         traffic_used="$updated_gb"
+        commit_data_transaction || print_warning "流量账本已更新，但最后可用快照同步失败"
     else
         # 如果无法更新，使用文件中的旧值
         traffic_used=$(echo "$user" | jq -r '.traffic_used_gb // "0"')
@@ -431,57 +449,36 @@ delete_single_user() {
         return 0
     fi
 
-    # 1. 删除该用户的所有订阅
-    if [[ -f "$SUBSCRIPTION_META_FILE" ]]; then
-        # 获取该用户的所有订阅名称
-        local sub_names=$(jq -r ".subscriptions[] | select(.user_id == \"$uuid\") | .name" "$SUBSCRIPTION_META_FILE" 2>/dev/null)
-        if [[ -n "$sub_names" ]]; then
-            while IFS= read -r sub_name; do
-                # 删除订阅文件
-                find "$SUBSCRIPTION_DIR" -name "${sub_name}.*" -type f -delete 2>/dev/null
-                print_info "已删除订阅: $sub_name"
-            done <<< "$sub_names"
-
-            # 从元数据中删除
-            local tmp_file="${SUBSCRIPTION_META_FILE}.tmp"
-            if ! jq --arg uuid "$uuid" '.subscriptions = [.subscriptions[] | select(.user_id != $uuid)]' "$SUBSCRIPTION_META_FILE" > "$tmp_file"; then
-                print_error "清理订阅元数据失败"
-                rm -f "$tmp_file"
-                return 1
-            fi
-            mv "$tmp_file" "$SUBSCRIPTION_META_FILE"
-            print_info "已清理订阅元数据"
-        fi
-    fi
+    begin_data_transaction || return 1
+    remove_user_subscriptions_by_id "$uuid" || { rollback_data_transaction; print_error "清理订阅失败"; return 1; }
 
     # 2. 从所有节点解绑
     if [[ -f "$NODE_USERS_FILE" ]]; then
         local tmp_file="${NODE_USERS_FILE}.tmp"
-        if ! jq --arg uuid "$uuid" '(.bindings[].users) |= map(select(. != $uuid))' "$NODE_USERS_FILE" > "$tmp_file"; then
+        if ! jq --arg uuid "$uuid" '(.bindings[].users) |= map(select(. != $uuid))' "$NODE_USERS_FILE" > "$tmp_file" || ! mv "$tmp_file" "$NODE_USERS_FILE"; then
             print_error "清理节点绑定关系失败"
             rm -f "$tmp_file"
+            rollback_data_transaction
             return 1
         fi
-        mv "$tmp_file" "$NODE_USERS_FILE"
         print_info "已清理节点绑定关系"
     fi
 
     # 3. 从全局用户列表删除
     local tmp_file="${USERS_FILE}.tmp"
-    if ! jq --arg uuid "$uuid" '.users = [.users[] | select(.id != $uuid)]' "$USERS_FILE" > "$tmp_file"; then
+    if ! jq --arg uuid "$uuid" '.users = [.users[] | select(.id != $uuid)]' "$USERS_FILE" > "$tmp_file" || ! mv "$tmp_file" "$USERS_FILE"; then
         print_error "删除用户失败"
         rm -f "$tmp_file"
+        rollback_data_transaction
         return 1
     fi
-    mv "$tmp_file" "$USERS_FILE"
 
     print_success "用户删除成功"
 
-    # 重新生成配置
-    generate_sing-box_config
-
-    # 重启服务
-    restart_sing-box
+    if ! generate_singbox_config || ! restart_sing-box; then
+        print_error "删除用户后的配置应用失败，数据和订阅已回滚"
+        return 1
+    fi
 
     print_success "配置已更新并重启服务"
 }
@@ -519,54 +516,36 @@ delete_global_user() {
         return 0
     fi
 
-    # 1. 删除该用户的所有订阅
-    if [[ -f "$SUBSCRIPTION_META_FILE" ]]; then
-        local sub_names=$(jq -r ".subscriptions[] | select(.user_id == \"$uuid\") | .name" "$SUBSCRIPTION_META_FILE" 2>/dev/null)
-        if [[ -n "$sub_names" ]]; then
-            while IFS= read -r sub_name; do
-                find "$SUBSCRIPTION_DIR" -name "${sub_name}.*" -type f -delete 2>/dev/null
-                print_info "已删除订阅文件: $sub_name"
-            done <<< "$sub_names"
-
-            local tmp_file="${SUBSCRIPTION_META_FILE}.tmp"
-            if ! jq --arg uuid "$uuid" '.subscriptions = [.subscriptions[] | select(.user_id != $uuid)]' "$SUBSCRIPTION_META_FILE" > "$tmp_file"; then
-                print_error "清理订阅元数据失败"
-                rm -f "$tmp_file"
-                return 1
-            fi
-            mv "$tmp_file" "$SUBSCRIPTION_META_FILE"
-            print_info "已清理订阅元数据"
-        fi
-    fi
+    begin_data_transaction || return 1
+    remove_user_subscriptions_by_id "$uuid" || { rollback_data_transaction; print_error "清理订阅失败"; return 1; }
 
     # 2. 从所有节点解绑
     if [[ -f "$NODE_USERS_FILE" ]]; then
         local tmp_file="${NODE_USERS_FILE}.tmp"
-        if ! jq --arg uuid "$uuid" '(.bindings[].users) |= map(select(. != $uuid))' "$NODE_USERS_FILE" > "$tmp_file"; then
+        if ! jq --arg uuid "$uuid" '(.bindings[].users) |= map(select(. != $uuid))' "$NODE_USERS_FILE" > "$tmp_file" || ! mv "$tmp_file" "$NODE_USERS_FILE"; then
             print_error "清理节点绑定关系失败"
             rm -f "$tmp_file"
+            rollback_data_transaction
             return 1
         fi
-        mv "$tmp_file" "$NODE_USERS_FILE"
         print_info "已清理节点绑定关系"
     fi
 
     # 3. 从全局用户列表删除
     local tmp_file="${USERS_FILE}.tmp"
-    if ! jq --arg uuid "$uuid" '.users = [.users[] | select(.id != $uuid)]' "$USERS_FILE" > "$tmp_file"; then
+    if ! jq --arg uuid "$uuid" '.users = [.users[] | select(.id != $uuid)]' "$USERS_FILE" > "$tmp_file" || ! mv "$tmp_file" "$USERS_FILE"; then
         print_error "删除用户失败"
         rm -f "$tmp_file"
+        rollback_data_transaction
         return 1
     fi
-    mv "$tmp_file" "$USERS_FILE"
 
     print_success "用户删除成功"
 
-    # 重新生成配置
-    generate_sing-box_config
-
-    # 重启服务
-    restart_sing-box
+    if ! generate_singbox_config || ! restart_sing-box; then
+        print_error "删除用户后的配置应用失败，数据和订阅已回滚"
+        return 1
+    fi
 
     print_success "配置已更新并重启服务"
 }
@@ -655,56 +634,8 @@ add_user_to_node() {
     local email=$4
     local level=$5
 
-    # 构建用户配置
-    local user_config=""
-
-    case $protocol in
-        vless)
-            user_config=$(jq -n \
-                --arg id "$id" \
-                --arg email "$email" \
-                --argjson level "$level" \
-                '{id: $id, email: $email, level: $level, flow: "xtls-rprx-vision"}')
-            ;;
-
-        vmess)
-            user_config=$(jq -n \
-                --arg id "$id" \
-                --arg email "$email" \
-                --argjson level "$level" \
-                '{id: $id, email: $email, level: $level, alterId: 0}')
-            ;;
-
-        trojan)
-            user_config=$(jq -n \
-                --arg password "$id" \
-                --arg email "$email" \
-                --argjson level "$level" \
-                '{password: $password, email: $email, level: $level}')
-            ;;
-
-        shadowsocks)
-            # Shadowsocks 不支持多用户，需要重新配置密码
-            print_warning "Shadowsocks 节点需要更新密码配置"
-            if ! jq "(.inbounds[] | select(.port == $port) | .settings.password) = \"$id\"" "$SINGBOX_CONFIG" > "${SINGBOX_CONFIG}.tmp"; then
-                print_error "更新Shadowsocks密码失败"
-                rm -f "${SINGBOX_CONFIG}.tmp"
-                return 1
-            fi
-            mv "${SINGBOX_CONFIG}.tmp" "$SINGBOX_CONFIG"
-            return 0
-            ;;
-    esac
-
-    # 添加到配置文件
-    if [[ -n "$user_config" ]]; then
-        if ! jq "(.inbounds[] | select(.port == $port) | .settings.clients) += [$user_config]" "$SINGBOX_CONFIG" > "${SINGBOX_CONFIG}.tmp"; then
-            print_error "添加用户配置失败"
-            rm -f "${SINGBOX_CONFIG}.tmp"
-            return 1
-        fi
-        mv "${SINGBOX_CONFIG}.tmp" "$SINGBOX_CONFIG"
-    fi
+    # sing-box 用户由 users.json + node_users.json 单一数据源生成，禁止直接修改 config.json。
+    generate_singbox_config
 }
 
 
@@ -733,14 +664,6 @@ update_user_email() {
     local old_email=$2
     local new_email=$3
 
-    # 更新配置文件
-    if ! jq "(.inbounds[] | select(.port == $port) | .settings.clients[] | select(.email == \"$old_email\") | .email) = \"$new_email\"" "$SINGBOX_CONFIG" > "${SINGBOX_CONFIG}.tmp"; then
-        print_error "更新配置文件邮箱失败"
-        rm -f "${SINGBOX_CONFIG}.tmp"
-        return 1
-    fi
-    mv "${SINGBOX_CONFIG}.tmp" "$SINGBOX_CONFIG"
-
     # 更新数据库
     if ! jq "(.users[] | select(.port == \"$port\" and .email == \"$old_email\") | .email) = \"$new_email\"" "$USERS_FILE" > "${USERS_FILE}.tmp"; then
         print_error "更新数据库邮箱失败"
@@ -748,6 +671,7 @@ update_user_email() {
         return 1
     fi
     mv "${USERS_FILE}.tmp" "$USERS_FILE"
+    generate_singbox_config
 }
 
 # 更新用户ID
@@ -756,35 +680,6 @@ update_user_id() {
     local email=$2
     local new_id=$3
 
-    # 获取协议
-    local protocol=$(jq -r ".users[] | select(.port == \"$port\" and .email == \"$email\") | .protocol" "$USERS_FILE")
-
-    # 更新配置文件
-    case $protocol in
-        vless|vmess)
-            if ! jq "(.inbounds[] | select(.port == $port) | .settings.clients[] | select(.email == \"$email\") | .id) = \"$new_id\"" "$SINGBOX_CONFIG" > "${SINGBOX_CONFIG}.tmp"; then
-                print_error "更新配置文件ID失败"
-                rm -f "${SINGBOX_CONFIG}.tmp"
-                return 1
-            fi
-            ;;
-        trojan)
-            if ! jq "(.inbounds[] | select(.port == $port) | .settings.clients[] | select(.email == \"$email\") | .password) = \"$new_id\"" "$SINGBOX_CONFIG" > "${SINGBOX_CONFIG}.tmp"; then
-                print_error "更新配置文件密码失败"
-                rm -f "${SINGBOX_CONFIG}.tmp"
-                return 1
-            fi
-            ;;
-        shadowsocks)
-            if ! jq "(.inbounds[] | select(.port == $port) | .settings.password) = \"$new_id\"" "$SINGBOX_CONFIG" > "${SINGBOX_CONFIG}.tmp"; then
-                print_error "更新配置文件密码失败"
-                rm -f "${SINGBOX_CONFIG}.tmp"
-                return 1
-            fi
-            ;;
-    esac
-    mv "${SINGBOX_CONFIG}.tmp" "$SINGBOX_CONFIG"
-
     # 更新数据库
     if ! jq "(.users[] | select(.port == \"$port\" and .email == \"$email\") | .id) = \"$new_id\"" "$USERS_FILE" > "${USERS_FILE}.tmp"; then
         print_error "更新数据库ID失败"
@@ -792,6 +687,7 @@ update_user_id() {
         return 1
     fi
     mv "${USERS_FILE}.tmp" "$USERS_FILE"
+    generate_singbox_config
 }
 
 # 更新用户等级
@@ -800,13 +696,9 @@ update_user_level() {
     local email=$2
     local new_level=$3
 
-    # 更新配置文件
-    if ! jq "(.inbounds[] | select(.port == $port) | .settings.clients[] | select(.email == \"$email\") | .level) = $new_level" "$SINGBOX_CONFIG" > "${SINGBOX_CONFIG}.tmp"; then
-        print_error "更新用户等级失败"
-        rm -f "${SINGBOX_CONFIG}.tmp"
-        return 1
-    fi
-    mv "${SINGBOX_CONFIG}.tmp" "$SINGBOX_CONFIG"
+    local data
+    data=$(jq --arg email "$email" --argjson level "$new_level" '(.users[] | select((.email // .username)==$email) | .level)=$level' "$USERS_FILE") || return 1
+    atomic_write_json "$USERS_FILE" "$data" && generate_singbox_config
 }
 
 #================================================================
@@ -817,7 +709,7 @@ update_user_level() {
 check_user_has_traffic() {
     local email=$1
     local api_addr="127.0.0.1:10085"
-    local singbox_bin="/usr/local/sing-box/sing-box"
+    local singbox_bin="$(command -v sing-box 2>/dev/null || echo /usr/local/bin/sing-box)"
 
     # 检查 API 端口是否在监听
     if ! ss -lnt 2>/dev/null | grep -q ":10085 " && ! netstat -lnt 2>/dev/null | grep -q ":10085 "; then
@@ -985,20 +877,7 @@ get_user_email_from_config() {
     fi
 
     # 首先尝试用UUID查找(适用于vless/vmess)
-    local email=$(jq -r ".inbounds[].settings.clients[]? | select(.id == \"$uuid\") | .email" "$SINGBOX_CONFIG" 2>/dev/null | head -n 1)
-
-    # 如果没找到,可能是trojan/shadowsocks,需要用password查找
-    if [[ -z "$email" || "$email" == "null" ]]; then
-        # 从用户文件中获取该UUID对应的password
-        if [[ -f "$USERS_FILE" ]]; then
-            local password=$(jq -r ".users[] | select(.id == \"$uuid\") | .password" "$USERS_FILE" 2>/dev/null)
-
-            if [[ -n "$password" && "$password" != "null" ]]; then
-                # 用password查找email
-                email=$(jq -r ".inbounds[].settings.clients[]? | select(.password == \"$password\") | .email" "$SINGBOX_CONFIG" 2>/dev/null | head -n 1)
-            fi
-        fi
-    fi
+    local email=$(jq -r --arg uuid "$uuid" '.users[] | select(.id==$uuid) | (.username // .id)' "$USERS_FILE" 2>/dev/null | head -n 1)
 
     echo "$email"
 }
@@ -1007,7 +886,7 @@ get_user_email_from_config() {
 get_user_traffic_summary() {
     local email=$1
     local api_addr="127.0.0.1:10085"
-    local singbox_bin="/usr/local/sing-box/sing-box"
+    local singbox_bin="$(command -v sing-box 2>/dev/null || echo /usr/local/bin/sing-box)"
 
     # 检查 API 端口是否在监听
     if ! ss -lnt 2>/dev/null | grep -q ":10085 " && ! netstat -lnt 2>/dev/null | grep -q ":10085 "; then
@@ -1055,7 +934,7 @@ update_user_traffic_usage() {
 
     # 从 Stats API 获取流量
     local api_addr="127.0.0.1:10085"
-    local singbox_bin="/usr/local/sing-box/sing-box"
+    local singbox_bin="$(command -v sing-box 2>/dev/null || echo /usr/local/bin/sing-box)"
 
     # 检查 API 和 sing-box 可用性
     if ! ss -lnt 2>/dev/null | grep -q ":10085 " && ! netstat -lnt 2>/dev/null | grep -q ":10085 "; then
@@ -1160,13 +1039,9 @@ check_user_expiration() {
             local users_json=$(cat "$USERS_FILE")
             users_json=$(echo "$users_json" | jq --arg uuid "$uuid" \
                 '(.users[] | select(.id == $uuid) | .enabled) = false')
-            echo "$users_json" | jq '.' > "$USERS_FILE"
+            atomic_write_json "$USERS_FILE" "$users_json" || return 1
 
-            # 通过 API 动态禁用用户（无需重启）
-            if command -v api_disable_user &>/dev/null; then
-                api_disable_user "$uuid" 2>&1 | sed 's/^/    /'
-            fi
-
+            USER_LIMITS_CHANGED=true
             ((disabled_count++))
         else
             # 计算剩余天数
@@ -1183,7 +1058,7 @@ check_user_expiration() {
     echo ""
     if [[ $disabled_count -gt 0 ]]; then
         echo -e "${RED}共禁用 $disabled_count 个过期用户${NC}"
-        echo -e "${YELLOW}提示: 需要重新生成配置并重启 sing-box 才能生效${NC}"
+        echo -e "${YELLOW}将在本轮检查结束后统一应用配置${NC}"
     else
         echo -e "${GREEN}所有用户有效期正常${NC}"
     fi
@@ -1226,13 +1101,9 @@ check_traffic_limits() {
             local users_json=$(cat "$USERS_FILE")
             users_json=$(echo "$users_json" | jq --arg uuid "$uuid" \
                 '(.users[] | select(.id == $uuid) | .enabled) = false')
-            echo "$users_json" | jq '.' > "$USERS_FILE"
+            atomic_write_json "$USERS_FILE" "$users_json" || return 1
 
-            # 通过 API 动态禁用用户（无需重启）
-            if command -v api_disable_user &>/dev/null; then
-                api_disable_user "$uuid" 2>&1 | sed 's/^/    /'
-            fi
-
+            USER_LIMITS_CHANGED=true
             ((disabled_count++))
         else
             local percent=$(awk -v used="$used_gb" -v limit="$traffic_limit" 'BEGIN {printf "%.1f", (used/limit)*100}')
@@ -1248,7 +1119,7 @@ check_traffic_limits() {
     echo ""
     if [[ $disabled_count -gt 0 ]]; then
         echo -e "${RED}共禁用 $disabled_count 个超限用户${NC}"
-        echo -e "${YELLOW}提示: 需要重新生成配置并重启 sing-box 才能生效${NC}"
+        echo -e "${YELLOW}将在本轮检查结束后统一应用配置${NC}"
     else
         echo -e "${GREEN}所有用户流量正常${NC}"
     fi
@@ -1256,22 +1127,45 @@ check_traffic_limits() {
 
 # 综合检查用户限制（流量 + 有效期）
 check_all_user_limits() {
-    clear
+    [[ -t 1 ]] && clear
+    USER_LIMITS_CHANGED=false
+    begin_data_transaction || return 1
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║${NC}      用户限制综合检查"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
     # 先检查有效期
-    check_user_expiration
+    if ! check_user_expiration; then
+        rollback_data_transaction
+        print_error "用户有效期检查失败，已回滚本轮变更"
+        return 1
+    fi
     echo ""
 
     # 再检查流量限制
-    check_traffic_limits
+    if ! check_traffic_limits; then
+        rollback_data_transaction
+        print_error "用户流量检查失败，已回滚本轮变更"
+        return 1
+    fi
     echo ""
 
+    if [[ "$USER_LIMITS_CHANGED" == true ]]; then
+        if ! generate_singbox_config || ! restart_sing-box; then
+            print_error "应用用户限制失败，数据与配置已回滚"
+            return 1
+        fi
+    else
+        commit_data_transaction || {
+            rollback_data_transaction
+            print_error "用户限制检查结果无法提交"
+            return 1
+        }
+    fi
+
     echo -e "${CYAN}═══════════════════════════════════════${NC}"
-    echo -e "${GREEN}提示: 用户已通过 API 动态禁用，立即生效，无需重启 sing-box${NC}"
+    echo -e "${GREEN}提示: 用户状态已写入数据文件，并通过配置重载或服务重启生效${NC}"
 }
 
 # 查看在线用户
@@ -1805,6 +1699,7 @@ add_user_node_bindings() {
 
     local success_count=0
     local fail_count=0
+    begin_data_transaction || return 1
 
     for port in $ports; do
         # 检查节点是否存在
@@ -1821,8 +1716,9 @@ add_user_node_bindings() {
         local tmp_file="${NODE_USERS_FILE}.tmp"
         if [[ -z "$binding_exists" ]]; then
             # 创建新绑定
-            if ! jq --arg port "$port" --arg uuid "$uuid" \
-                '.bindings += [{port: $port, users: [$uuid]}]' \
+            local protocol=$(jq -r --arg port "$port" '.nodes[] | select((.port|tostring)==$port) | .protocol' "$NODES_FILE")
+            if ! jq --arg port "$port" --arg protocol "$protocol" --arg uuid "$uuid" \
+                '.bindings += [{port: $port, protocol: $protocol, users: [$uuid]}]' \
                 "$NODE_USERS_FILE" > "$tmp_file"; then
                 print_error "添加绑定失败: $port"
                 rm -f "$tmp_file"
@@ -1852,13 +1748,30 @@ add_user_node_bindings() {
     echo -e "  失败: ${RED}$fail_count${NC}"
 
     if [[ $success_count -gt 0 ]]; then
-        # 重新生成配置
-        generate_singbox_config
-        if [[ $? -eq 0 ]]; then
-            restart_sing-box
-            print_success "配置已更新并重启服务"
+        if ! generate_singbox_config || ! restart_sing-box; then
+            print_error "批量绑定应用失败，数据和配置已回滚"
+            return 1
         fi
+        print_success "配置已更新并重启服务"
+    else
+        rollback_data_transaction
     fi
+}
+
+remove_user_subscriptions_by_id() {
+    local user_id="$1" meta_file="${DATA_DIR}/subscription_metadata.json" sub_db="${DATA_DIR}/subscriptions.json"
+    [[ -f "$meta_file" ]] || return 0
+    local names
+    names=$(jq -c --arg id "$user_id" '[.subscriptions[] | select(.user_id==$id) | .name]' "$meta_file") || return 1
+    if [[ -f "$sub_db" ]]; then
+        while IFS= read -r file; do
+            [[ -z "$file" ]] || safe_remove_subscription_file "$file" || true
+        done < <(jq -r --argjson names "$names" '.subscriptions[] | select(.name as $n | $names | index($n)) | .file // empty' "$sub_db")
+        jq --argjson names "$names" '.subscriptions |= map(select(.name as $n | ($names | index($n) | not)))' "$sub_db" > "${sub_db}.tmp" \
+            && mv "${sub_db}.tmp" "$sub_db" || { rm -f "${sub_db}.tmp"; return 1; }
+    fi
+    jq --arg id "$user_id" '.subscriptions |= map(select(.user_id != $id))' "$meta_file" > "${meta_file}.tmp" \
+        && mv "${meta_file}.tmp" "$meta_file" || { rm -f "${meta_file}.tmp"; return 1; }
 }
 
 # 移除用户绑定节点（支持多个）
@@ -1905,6 +1818,7 @@ remove_user_node_bindings() {
 
     local success_count=0
     local fail_count=0
+    begin_data_transaction || return 1
 
     for port in $ports; do
         local tmp_file="${NODE_USERS_FILE}.tmp"
@@ -1928,12 +1842,13 @@ remove_user_node_bindings() {
     echo -e "  失败: ${RED}$fail_count${NC}"
 
     if [[ $success_count -gt 0 ]]; then
-        # 重新生成配置
-        generate_singbox_config
-        if [[ $? -eq 0 ]]; then
-            restart_sing-box
-            print_success "配置已更新并重启服务"
+        if ! generate_singbox_config || ! restart_sing-box; then
+            print_error "批量解绑应用失败，数据和配置已回滚"
+            return 1
         fi
+        print_success "配置已更新并重启服务"
+    else
+        rollback_data_transaction
     fi
 }
 
@@ -1977,6 +1892,7 @@ delete_users_batch() {
 
     local success_count=0
     local fail_count=0
+    begin_data_transaction || return 1
 
     for username in $usernames; do
         # 检查用户是否存在
@@ -1989,15 +1905,39 @@ delete_users_batch() {
 
         # 1. 删除订阅
         if [[ -f "$SUBSCRIPTION_META_FILE" ]]; then
-            local sub_names=$(jq -r ".subscriptions[] | select(.user_id == \"$uuid\") | .name" "$SUBSCRIPTION_META_FILE" 2>/dev/null)
-            if [[ -n "$sub_names" ]]; then
-                while IFS= read -r sub_name; do
-                    find "$SUBSCRIPTION_DIR" -name "${sub_name}.*" -type f -delete 2>/dev/null
-                done <<< "$sub_names"
+            local sub_names_json
+            sub_names_json=$(jq -c --arg uuid "$uuid" '[.subscriptions[] | select(.user_id == $uuid) | .name]' "$SUBSCRIPTION_META_FILE") || {
+                print_error "读取用户订阅元数据失败: $username"
+                rollback_data_transaction
+                return 1
+            }
+            if [[ "$(jq 'length' <<< "$sub_names_json")" -gt 0 ]]; then
+                local sub_db="${DATA_DIR}/subscriptions.json"
+                if [[ -f "$sub_db" ]]; then
+                    while IFS= read -r sub_file; do
+                        [[ -n "$sub_file" ]] || continue
+                        if declare -f safe_remove_subscription_file >/dev/null 2>&1; then
+                            safe_remove_subscription_file "$sub_file" || true
+                        fi
+                    done < <(jq -r --argjson names "$sub_names_json" '.subscriptions[] | select(.name as $n | $names | index($n)) | .file // empty' "$sub_db")
+
+                    if ! jq --argjson names "$sub_names_json" '.subscriptions |= map(select(.name as $n | ($names | index($n) | not)))' \
+                        "$sub_db" > "${sub_db}.tmp" || ! mv "${sub_db}.tmp" "$sub_db"; then
+                        rm -f "${sub_db}.tmp"
+                        print_error "删除用户订阅记录失败: $username"
+                        rollback_data_transaction
+                        return 1
+                    fi
+                fi
 
                 local tmp_file="${SUBSCRIPTION_META_FILE}.tmp"
-                jq --arg uuid "$uuid" '.subscriptions = [.subscriptions[] | select(.user_id != $uuid)]' "$SUBSCRIPTION_META_FILE" > "$tmp_file"
-                mv "$tmp_file" "$SUBSCRIPTION_META_FILE"
+                if ! jq --arg uuid "$uuid" '.subscriptions |= map(select(.user_id != $uuid))' "$SUBSCRIPTION_META_FILE" > "$tmp_file" \
+                    || ! mv "$tmp_file" "$SUBSCRIPTION_META_FILE"; then
+                    rm -f "$tmp_file"
+                    print_error "删除用户订阅元数据失败: $username"
+                    rollback_data_transaction
+                    return 1
+                fi
             fi
         fi
 
@@ -2028,10 +1968,13 @@ delete_users_batch() {
     echo -e "  失败: ${RED}$fail_count${NC}"
 
     if [[ $success_count -gt 0 ]]; then
-        # 重新生成配置
-        generate_singbox_config
-        restart_sing-box
+        if ! generate_singbox_config || ! restart_sing-box; then
+            print_error "批量删除应用失败，用户、订阅、数据和配置已回滚"
+            return 1
+        fi
         print_success "配置已更新并重启服务"
+    else
+        rollback_data_transaction
     fi
 }
 

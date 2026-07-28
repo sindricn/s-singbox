@@ -10,11 +10,12 @@ PORT_HOPPING_FILE="${DATA_DIR}/port_hopping.json"
 
 # 初始化跳跃端口配置文件
 init_port_hopping_file() {
+    mkdir -p "$DATA_DIR" || return 1
     if [[ ! -f "$PORT_HOPPING_FILE" ]]; then
-        echo '{"configs":[]}' > "$PORT_HOPPING_FILE"
+        printf '%s\n' '{"configs":[]}' > "$PORT_HOPPING_FILE" || return 1
+        chmod 600 "$PORT_HOPPING_FILE"
     fi
 }
-
 # 检测防火墙类型
 detect_firewall() {
     if command -v ufw &>/dev/null && ufw status &>/dev/null 2>&1; then
@@ -48,50 +49,59 @@ open_port() {
 
     read -p "协议类型 [tcp/udp/both, 默认: tcp]: " protocol
     protocol=${protocol:-tcp}
+    case "$protocol" in tcp|udp|both) ;; *) print_error "协议只能是 tcp、udp 或 both"; return 1 ;; esac
 
     local fw_type=$(detect_firewall)
+    local ok=true
 
     case $fw_type in
         ufw)
             if [[ "$protocol" == "both" ]]; then
-                ufw allow "$port" >/dev/null 2>&1
+                ufw allow "$port" >/dev/null 2>&1 || ok=false
             else
-                ufw allow "$port/$protocol" >/dev/null 2>&1
+                ufw allow "$port/$protocol" >/dev/null 2>&1 || ok=false
             fi
-            print_success "端口 $port 已开放 ($protocol)"
             ;;
 
         firewalld)
             if [[ "$protocol" == "both" ]]; then
-                firewall-cmd --permanent --add-port="${port}/tcp" >/dev/null 2>&1
-                firewall-cmd --permanent --add-port="${port}/udp" >/dev/null 2>&1
+                firewall-cmd --permanent --add-port="${port}/tcp" >/dev/null 2>&1 || ok=false
+                firewall-cmd --permanent --add-port="${port}/udp" >/dev/null 2>&1 || ok=false
             else
-                firewall-cmd --permanent --add-port="${port}/${protocol}" >/dev/null 2>&1
+                firewall-cmd --permanent --add-port="${port}/${protocol}" >/dev/null 2>&1 || ok=false
             fi
-            firewall-cmd --reload >/dev/null 2>&1
-            print_success "端口 $port 已开放 ($protocol)"
+            firewall-cmd --reload >/dev/null 2>&1 || ok=false
             ;;
 
         iptables)
             if [[ "$protocol" == "both" || "$protocol" == "tcp" ]]; then
-                iptables -I INPUT -p tcp --dport "$port" -j ACCEPT
+                iptables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null || \
+                    iptables -I INPUT -p tcp --dport "$port" -j ACCEPT || ok=false
             fi
             if [[ "$protocol" == "both" || "$protocol" == "udp" ]]; then
-                iptables -I INPUT -p udp --dport "$port" -j ACCEPT
+                iptables -C INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null || \
+                    iptables -I INPUT -p udp --dport "$port" -j ACCEPT || ok=false
             fi
             # 保存规则
             if command -v netfilter-persistent &>/dev/null; then
-                netfilter-persistent save
+                netfilter-persistent save >/dev/null 2>&1 || ok=false
             elif command -v service &>/dev/null; then
-                service iptables save 2>/dev/null
+                service iptables save >/dev/null 2>&1 || ok=false
             fi
-            print_success "端口 $port 已开放 ($protocol)"
             ;;
 
         none)
             print_warning "未检测到防火墙，端口可能已开放"
+            return 0
             ;;
     esac
+
+    if [[ "$ok" == true ]]; then
+        print_success "端口 $port 已开放 ($protocol)"
+        return 0
+    fi
+    print_error "开放端口 $port ($protocol) 失败或规则未能持久化"
+    return 1
 }
 
 # 关闭端口
@@ -106,52 +116,66 @@ close_port() {
         return 1
     fi
 
+    if ! validate_port "$port"; then
+        print_error "无效的端口号"
+        return 1
+    fi
+
     read -p "协议类型 [tcp/udp/both, 默认: tcp]: " protocol
     protocol=${protocol:-tcp}
+    case "$protocol" in tcp|udp|both) ;; *) print_error "协议只能是 tcp、udp 或 both"; return 1 ;; esac
 
     local fw_type=$(detect_firewall)
+    local ok=true
 
     case $fw_type in
         ufw)
             if [[ "$protocol" == "both" ]]; then
-                ufw delete allow "$port" >/dev/null 2>&1
+                ufw delete allow "$port" >/dev/null 2>&1 || ok=false
             else
-                ufw delete allow "$port/$protocol" >/dev/null 2>&1
+                ufw delete allow "$port/$protocol" >/dev/null 2>&1 || ok=false
             fi
-            print_success "端口 $port 已关闭 ($protocol)"
             ;;
 
         firewalld)
             if [[ "$protocol" == "both" ]]; then
-                firewall-cmd --permanent --remove-port="${port}/tcp" >/dev/null 2>&1
-                firewall-cmd --permanent --remove-port="${port}/udp" >/dev/null 2>&1
+                firewall-cmd --permanent --remove-port="${port}/tcp" >/dev/null 2>&1 || ok=false
+                firewall-cmd --permanent --remove-port="${port}/udp" >/dev/null 2>&1 || ok=false
             else
-                firewall-cmd --permanent --remove-port="${port}/${protocol}" >/dev/null 2>&1
+                firewall-cmd --permanent --remove-port="${port}/${protocol}" >/dev/null 2>&1 || ok=false
             fi
-            firewall-cmd --reload >/dev/null 2>&1
-            print_success "端口 $port 已关闭 ($protocol)"
+            firewall-cmd --reload >/dev/null 2>&1 || ok=false
             ;;
 
         iptables)
             if [[ "$protocol" == "both" || "$protocol" == "tcp" ]]; then
-                iptables -D INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null
+                iptables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null && \
+                    iptables -D INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null || true
             fi
             if [[ "$protocol" == "both" || "$protocol" == "udp" ]]; then
-                iptables -D INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null
+                iptables -C INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null && \
+                    iptables -D INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null || true
             fi
             # 保存规则
             if command -v netfilter-persistent &>/dev/null; then
-                netfilter-persistent save
+                netfilter-persistent save >/dev/null 2>&1 || ok=false
             elif command -v service &>/dev/null; then
-                service iptables save 2>/dev/null
+                service iptables save >/dev/null 2>&1 || ok=false
             fi
-            print_success "端口 $port 已关闭 ($protocol)"
             ;;
 
         none)
             print_warning "未检测到防火墙"
+            return 0
             ;;
     esac
+
+    if [[ "$ok" == true ]]; then
+        print_success "端口 $port 已关闭 ($protocol)"
+        return 0
+    fi
+    print_error "关闭端口 $port ($protocol) 失败或规则未能持久化"
+    return 1
 }
 
 # 查看防火墙规则
@@ -318,21 +342,27 @@ batch_open_ports() {
     print_header "批量开放端口"
     echo ""
 
-    # 获取所有节点端口
     if [[ ! -f "$NODES_FILE" ]]; then
         print_error "暂无节点"
         return 1
     fi
 
-    local ports=$(jq -r '.nodes[].port' "$NODES_FILE" 2>/dev/null | sort -n | uniq)
+    local entries
+    entries=$(jq -r '.nodes[]
+        | (.port | tostring) as $port
+        | (if (.protocol == "hysteria" or .protocol == "hysteria2" or .protocol == "tuic" or .transport == "udp")
+           then "udp" else "tcp" end) as $protocol
+        | "\($port)|\($protocol)"' "$NODES_FILE" 2>/dev/null | sort -u)
 
-    if [[ -z "$ports" ]]; then
+    if [[ -z "$entries" ]]; then
         print_error "暂无端口需要开放"
         return 1
     fi
 
     echo -e "${CYAN}将开放以下端口:${NC}"
-    echo "$ports" | tr '\n' ' '
+    while IFS='|' read -r port protocol; do
+        echo -e "  ${port}/${protocol}"
+    done <<< "$entries"
     echo ""
 
     read -p "确认开放这些端口? [y/N]: " confirm
@@ -345,10 +375,15 @@ batch_open_ports() {
     local success=0
     local failed=0
 
-    for port in $ports; do
+    if [[ "$fw_type" == "none" ]]; then
+        print_warning "未检测到防火墙，未执行批量开放"
+        return 0
+    fi
+
+    while IFS='|' read -r port protocol; do
         case $fw_type in
             ufw)
-                if ufw allow "$port/tcp" >/dev/null 2>&1; then
+                if ufw allow "$port/$protocol" >/dev/null 2>&1; then
                     ((success++))
                 else
                     ((failed++))
@@ -356,7 +391,7 @@ batch_open_ports() {
                 ;;
 
             firewalld)
-                if firewall-cmd --permanent --add-port="${port}/tcp" >/dev/null 2>&1; then
+                if firewall-cmd --permanent --add-port="${port}/${protocol}" >/dev/null 2>&1; then
                     ((success++))
                 else
                     ((failed++))
@@ -364,28 +399,39 @@ batch_open_ports() {
                 ;;
 
             iptables)
-                if iptables -I INPUT -p tcp --dport "$port" -j ACCEPT; then
+                if iptables -C INPUT -p "$protocol" --dport "$port" -j ACCEPT 2>/dev/null \
+                    || iptables -I INPUT -p "$protocol" --dport "$port" -j ACCEPT; then
                     ((success++))
                 else
                     ((failed++))
                 fi
                 ;;
         esac
-    done
+    done <<< "$entries"
 
-    # 重载防火墙
     case $fw_type in
         firewalld)
-            firewall-cmd --reload >/dev/null 2>&1
+            if ! firewall-cmd --reload >/dev/null 2>&1; then
+                failed=$((failed + success))
+                success=0
+            fi
             ;;
         iptables)
             if command -v netfilter-persistent &>/dev/null; then
-                netfilter-persistent save
+                if ! netfilter-persistent save >/dev/null 2>&1; then
+                    failed=$((failed + success))
+                    success=0
+                fi
             fi
             ;;
     esac
 
-    print_success "成功开放 $success 个端口,失败 $failed 个"
+    if [[ "$failed" -eq 0 ]]; then
+        print_success "成功开放 $success 个端口"
+        return 0
+    fi
+    print_error "成功开放 $success 个端口，失败 $failed 个"
+    return 1
 }
 
 #================================================================
@@ -667,6 +713,7 @@ add_port_hopping() {
     print_info "正在添加 iptables 规则..."
 
     local success=true
+    local added_rules=()
 
     # IPv4 规则
     if [[ "$ip_version" == "ipv4" ]] || [[ "$ip_version" == "both" ]]; then
@@ -674,12 +721,16 @@ add_port_hopping() {
             if ! iptables -t nat -A PREROUTING -i "$interface" -p udp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null; then
                 print_error "添加 IPv4 UDP 规则失败"
                 success=false
+            else
+                added_rules+=("ipv4|udp")
             fi
         fi
         if [[ "$protocol" == "tcp" ]] || [[ "$protocol" == "both" ]]; then
             if ! iptables -t nat -A PREROUTING -i "$interface" -p tcp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null; then
                 print_error "添加 IPv4 TCP 规则失败"
                 success=false
+            else
+                added_rules+=("ipv4|tcp")
             fi
         fi
     fi
@@ -688,27 +739,33 @@ add_port_hopping() {
     if [[ "$ip_version" == "ipv6" ]] || [[ "$ip_version" == "both" ]]; then
         if [[ "$protocol" == "udp" ]] || [[ "$protocol" == "both" ]]; then
             if ! ip6tables -t nat -A PREROUTING -i "$interface" -p udp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null; then
-                print_warning "添加 IPv6 UDP 规则失败(可能系统不支持IPv6)"
+                print_error "添加 IPv6 UDP 规则失败"
+                success=false
+            else
+                added_rules+=("ipv6|udp")
             fi
         fi
         if [[ "$protocol" == "tcp" ]] || [[ "$protocol" == "both" ]]; then
             if ! ip6tables -t nat -A PREROUTING -i "$interface" -p tcp --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null; then
-                print_warning "添加 IPv6 TCP 规则失败(可能系统不支持IPv6)"
+                print_error "添加 IPv6 TCP 规则失败"
+                success=false
+            else
+                added_rules+=("ipv6|tcp")
             fi
         fi
     fi
 
     if [[ "$success" == false ]]; then
-        print_error "添加规则失败"
+        local i version added_protocol command_name
+        for ((i=${#added_rules[@]}-1; i>=0; i--)); do
+            IFS='|' read -r version added_protocol <<< "${added_rules[$i]}"
+            command_name="iptables"
+            [[ "$version" == "ipv6" ]] && command_name="ip6tables"
+            "$command_name" -t nat -D PREROUTING -i "$interface" -p "$added_protocol" \
+                --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null || true
+        done
+        print_error "添加规则失败，已回滚本次添加的规则"
         return 1
-    fi
-
-    # 保存 iptables 规则
-    if command -v netfilter-persistent &>/dev/null; then
-        netfilter-persistent save >/dev/null 2>&1
-    elif command -v service &>/dev/null; then
-        service iptables save 2>/dev/null
-        service ip6tables save 2>/dev/null
     fi
 
     # 生成唯一ID
@@ -735,8 +792,45 @@ add_port_hopping() {
         }')
 
     # 添加到配置文件
-    jq --argjson config "$config" '.configs += [$config]' "$PORT_HOPPING_FILE" > "${PORT_HOPPING_FILE}.tmp"
-    mv "${PORT_HOPPING_FILE}.tmp" "$PORT_HOPPING_FILE"
+    if ! jq --argjson config "$config" '.configs += [$config]' "$PORT_HOPPING_FILE" > "${PORT_HOPPING_FILE}.tmp" \
+        || ! mv "${PORT_HOPPING_FILE}.tmp" "$PORT_HOPPING_FILE"; then
+        rm -f "${PORT_HOPPING_FILE}.tmp"
+        local i version added_protocol command_name
+        for ((i=${#added_rules[@]}-1; i>=0; i--)); do
+            IFS='|' read -r version added_protocol <<< "${added_rules[$i]}"
+            command_name="iptables"
+            [[ "$version" == "ipv6" ]] && command_name="ip6tables"
+            "$command_name" -t nat -D PREROUTING -i "$interface" -p "$added_protocol" \
+                --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null || true
+        done
+        print_error "跳跃端口数据库写入失败，已回滚规则"
+        return 1
+    fi
+
+    local persist_ok=true
+    if command -v netfilter-persistent &>/dev/null; then
+        netfilter-persistent save >/dev/null 2>&1 || persist_ok=false
+    elif command -v service &>/dev/null; then
+        service iptables save >/dev/null 2>&1 || persist_ok=false
+        if [[ "$ip_version" == "ipv6" || "$ip_version" == "both" ]]; then
+            service ip6tables save >/dev/null 2>&1 || persist_ok=false
+        fi
+    else
+        persist_ok=false
+    fi
+    if [[ "$persist_ok" == false ]]; then
+        for ((i=${#added_rules[@]}-1; i>=0; i--)); do
+            IFS='|' read -r version added_protocol <<< "${added_rules[$i]}"
+            command_name="iptables"
+            [[ "$version" == "ipv6" ]] && command_name="ip6tables"
+            "$command_name" -t nat -D PREROUTING -i "$interface" -p "$added_protocol" \
+                --dport "$port_range" -j REDIRECT --to-ports "$target_port" 2>/dev/null || true
+        done
+        jq --arg id "$id" '.configs |= map(select(.id != $id))' "$PORT_HOPPING_FILE" > "${PORT_HOPPING_FILE}.tmp" \
+            && mv "${PORT_HOPPING_FILE}.tmp" "$PORT_HOPPING_FILE"
+        print_error "iptables 规则持久化失败，已回滚配置"
+        return 1
+    fi
 
     print_success "跳跃端口配置已添加"
     echo ""
@@ -1199,12 +1293,13 @@ modify_port_hopping() {
     echo ""
 
     print_nav_options "true" "true"
-    local modify_choice=$(read_menu_choice "请选择操作")
-    local ret=$?
+    local modify_choice ret
+    modify_choice=$(read_menu_choice "请选择操作")
+    ret=$?
 
     # 处理导航
     [[ $ret -eq 99 ]] && return 0  # 返回上级
-    [[ $ret -eq 98 ]] && return 0  # 返回主菜单
+    [[ $ret -eq 98 ]] && return 98  # 返回主菜单
 
     case $modify_choice in
         1)
@@ -1421,6 +1516,3 @@ firewall_management_menu() {
         esac
     done
 }
-
-# 初始化端口跳跃数据文件
-init_port_hopping_file

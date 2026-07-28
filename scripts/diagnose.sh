@@ -216,7 +216,7 @@ check_project_files() {
 check_data_files() {
     print_section "数据文件"
 
-    local data_dir="${SCRIPT_DIR}/data"
+    local data_dir="$SINGBOX_DATA_DIR"
 
     if [[ ! -d "$data_dir" ]]; then
         check_item "data 目录不存在" "warn"
@@ -304,7 +304,7 @@ check_ports() {
     print_section "端口检查"
 
     # 从 nodes.json 读取端口
-    local nodes_file="${SCRIPT_DIR}/data/nodes.json"
+    local nodes_file="${SINGBOX_DATA_DIR}/nodes.json"
 
     if [[ ! -f "$nodes_file" ]]; then
         echo "  nodes.json 不存在，跳过端口检查"

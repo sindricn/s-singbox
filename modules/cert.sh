@@ -12,6 +12,13 @@ CERT_DIR="${SINGBOX_DIR:-/etc/sing-box}/certs"
 ACME_DIR="${DATA_DIR:-/var/lib/sing-box}/acme"
 ACME_SH="${ACME_DIR}/acme.sh"
 
+validate_cert_domain() {
+    local domain="$1"
+    if ! validate_domain "$domain"; then
+        print_error "域名格式不正确: $domain"
+        return 1
+    fi
+}
 # =============================================================================
 # acme.sh 安装和初始化
 # =============================================================================
@@ -30,20 +37,29 @@ install_acme() {
     print_info "安装 acme.sh..."
 
     if check_acme_installed; then
-        print_warn "acme.sh 已安装"
+        print_warning "acme.sh 已安装"
         return 0
     fi
 
     # 创建目录
     mkdir -p "$ACME_DIR"
 
-    # 下载并安装 acme.sh
-    curl -sL https://get.acme.sh | sh -s -- --install-online \
+    # 下载后再执行，避免管道隐藏下载失败状态。
+    local installer
+    installer=$(mktemp /tmp/acme-install-XXXXXX.sh) || return 1
+    if ! curl -fsSL https://get.acme.sh -o "$installer"; then
+        rm -f -- "$installer"
+        print_error "下载 acme.sh 安装器失败"
+        return 1
+    fi
+    sh "$installer" --install-online \
         --home "$ACME_DIR" \
         --config-home "${ACME_DIR}/config" \
         --cert-home "$CERT_DIR"
+    local install_status=$?
+    rm -f -- "$installer"
 
-    if [[ $? -eq 0 ]]; then
+    if [[ $install_status -eq 0 ]]; then
         print_success "acme.sh 安装成功"
 
         # 设置自动续期
@@ -65,7 +81,7 @@ uninstall_acme() {
         rm -rf "$ACME_DIR"
         print_success "acme.sh 已卸载"
     else
-        print_warn "acme.sh 未安装"
+        print_warning "acme.sh 未安装"
     fi
 }
 
@@ -77,6 +93,7 @@ uninstall_acme() {
 issue_cert_http() {
     local domain=$1
     local webroot=$2
+    validate_cert_domain "$domain" || return 1
 
     print_info "使用 HTTP-01 验证申请证书: $domain"
 
@@ -106,6 +123,7 @@ issue_cert_http() {
 issue_cert_dns() {
     local domain=$1
     local dns_provider=$2
+    validate_cert_domain "$domain" || return 1
 
     print_info "使用 DNS API 申请证书: $domain"
 
@@ -176,6 +194,8 @@ issue_cert_dns() {
 issue_cert_standalone() {
     local domain=$1
     local port=${2:-80}
+    validate_cert_domain "$domain" || return 1
+    validate_port "$port" || { print_error "无效端口: $port"; return 1; }
 
     print_info "使用 Standalone 模式申请证书: $domain"
 
@@ -208,6 +228,7 @@ issue_cert_standalone() {
 # 安装证书到指定目录
 install_cert() {
     local domain=$1
+    validate_cert_domain "$domain" || return 1
 
     local cert_path="${CERT_DIR}/${domain}/fullchain.pem"
     local key_path="${CERT_DIR}/${domain}/${domain}.key"
@@ -241,6 +262,7 @@ install_cert() {
 # 续期证书
 renew_cert() {
     local domain=$1
+    validate_cert_domain "$domain" || return 1
 
     print_info "续期证书: $domain"
 
@@ -275,7 +297,7 @@ list_certs() {
     print_info "已安装的证书:"
 
     if ! check_acme_installed; then
-        print_warn "acme.sh 未安装"
+        print_warning "acme.sh 未安装"
         return 1
     fi
 
@@ -293,6 +315,7 @@ list_certs() {
 # 删除证书
 remove_cert() {
     local domain=$1
+    validate_cert_domain "$domain" || return 1
 
     print_info "删除证书: $domain"
 
@@ -309,8 +332,11 @@ remove_cert() {
     "${ACME_SH}" --remove -d "$domain" --ecc
 
     # 删除证书文件
-    if [[ -d "${CERT_DIR}/${domain}" ]]; then
-        rm -rf "${CERT_DIR}/${domain}"
+    local cert_target cert_base
+    cert_target=$(readlink -m -- "${CERT_DIR}/${domain}")
+    cert_base=$(readlink -m -- "$CERT_DIR")
+    if [[ -d "$cert_target" && "$cert_target" == "$cert_base"/* ]]; then
+        rm -rf -- "$cert_target"
     fi
 
     print_success "证书已删除"
@@ -324,6 +350,11 @@ remove_cert() {
 generate_self_signed_cert() {
     local domain=$1
     local days=${2:-365}
+    validate_cert_domain "$domain" || return 1
+    [[ "$days" =~ ^[0-9]+$ && "$days" -ge 1 && "$days" -le 3650 ]] || {
+        print_error "证书有效期必须在 1-3650 天之间"
+        return 1
+    }
 
     print_info "生成自签名证书: $domain (有效期: $days 天)"
 
@@ -364,6 +395,7 @@ generate_self_signed_cert() {
 # 查看证书详情
 show_cert_info() {
     local domain=$1
+    validate_cert_domain "$domain" || return 1
 
     local cert_path="${CERT_DIR}/${domain}/fullchain.pem"
 
@@ -386,6 +418,7 @@ show_cert_info() {
 # 检查证书过期时间
 check_cert_expiry() {
     local domain=$1
+    validate_cert_domain "$domain" || return 1
 
     local cert_path="${CERT_DIR}/${domain}/fullchain.pem"
 
@@ -406,7 +439,7 @@ check_cert_expiry() {
     if [[ $days_left -lt 0 ]]; then
         print_error "证书已过期!"
     elif [[ $days_left -lt 30 ]]; then
-        print_warn "证书将在 $days_left 天后过期"
+        print_warning "证书将在 $days_left 天后过期"
     else
         print_success "证书剩余 $days_left 天有效期"
     fi
@@ -506,32 +539,4 @@ cert_management_menu() {
                 ;;
         esac
     done
-}
-
-# =============================================================================
-# 通用打印函数
-# =============================================================================
-
-print_header() {
-    echo ""
-    echo -e "\033[32m======================================\033[0m"
-    echo -e "\033[32m  $1\033[0m"
-    echo -e "\033[32m======================================\033[0m"
-    echo ""
-}
-
-print_info() {
-    echo -e "\033[34m[INFO]\033[0m $1"
-}
-
-print_success() {
-    echo -e "\033[32m[SUCCESS]\033[0m $1"
-}
-
-print_error() {
-    echo -e "\033[31m[ERROR]\033[0m $1"
-}
-
-print_warn() {
-    echo -e "\033[33m[WARN]\033[0m $1"
 }

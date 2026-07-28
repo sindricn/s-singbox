@@ -134,8 +134,8 @@ check_outbound_consistency() {
         [[ -z "$tag" ]] && continue
 
         # 获取该出站规则的详细信息
-        local protocol=$(jq -r --arg tag "$tag" '.outbounds[] | select(.tag == $tag) | .protocol' "$SINGBOX_CONFIG" 2>/dev/null)
-        local address=$(jq -r --arg tag "$tag" '.outbounds[] | select(.tag == $tag) | .settings.servers[0].address // .settings.vnext[0].address // "N/A"' "$SINGBOX_CONFIG" 2>/dev/null)
+        local protocol=$(jq -r --arg tag "$tag" '.outbounds[] | select(.tag == $tag) | .type' "$SINGBOX_CONFIG" 2>/dev/null)
+        local address=$(jq -r --arg tag "$tag" '.outbounds[] | select(.tag == $tag) | .server // "N/A"' "$SINGBOX_CONFIG" 2>/dev/null)
 
         echo -e "${OUTBOUND_YELLOW}[$index]${OUTBOUND_NC} 标签: $tag, 协议: $protocol, 地址: $address"
         ((index++))
@@ -230,7 +230,7 @@ remove_orphan_outbounds_from_config() {
 
     # 重启sing-box服务
     print_info "正在重启sing-box服务..."
-    restart_sing-box
+    restart_sing-box || return 1
 
     return 0
 }
@@ -1130,8 +1130,7 @@ prompt_bind_outbound_to_node() {
     if [[ "$node_indices" == "0" ]]; then
         jq --arg tag "$outbound_tag" '(.nodes[].outbound_tag) = $tag' "$NODES_FILE" > "${NODES_FILE}.tmp"
         mv "${NODES_FILE}.tmp" "$NODES_FILE"
-        generate_singbox_config
-        restart_sing-box
+        apply_outbound_changes || return 1
         print_success "已将出站规则 '$outbound_tag' 应用到所有节点"
         return 0
     fi
@@ -1154,8 +1153,7 @@ prompt_bind_outbound_to_node() {
     done
 
     if [[ $success_count -gt 0 ]]; then
-        generate_singbox_config
-        restart_sing-box
+        apply_outbound_changes || return 1
         print_success "成功将出站规则 '$outbound_tag' 应用到 $success_count 个节点"
     else
         print_error "未能应用出站规则到任何节点"
@@ -1186,7 +1184,7 @@ apply_outbound_to_node() {
     local index=1
     while read -r outbound; do
         local tag=$(echo "$outbound" | jq -r '.tag')
-        local protocol=$(echo "$outbound" | jq -r '.protocol')
+        local protocol=$(echo "$outbound" | jq -r '.type')
         echo -e "${OUTBOUND_GREEN}[$index]${OUTBOUND_NC} 标签: $tag, 协议: $protocol"
         ((index++))
     done < <(jq -c '.outbounds[]' "$OUTBOUND_FILE" 2>/dev/null)
@@ -1256,8 +1254,7 @@ apply_outbound_to_node() {
     done
 
     if [[ $success_count -gt 0 ]]; then
-        generate_singbox_config
-        restart_sing-box
+        apply_outbound_changes || return 1
         print_success "成功将出站规则 '$outbound_tag' 应用到 $success_count 个节点"
     else
         print_error "未能应用出站规则到任何节点"
@@ -1323,8 +1320,7 @@ disable_outbound_from_node() {
     if [[ "$node_indices" == "0" ]]; then
         jq '(.nodes[].outbound_tag) = null' "$NODES_FILE" > "${NODES_FILE}.tmp"
         mv "${NODES_FILE}.tmp" "$NODES_FILE"
-        generate_singbox_config
-        restart_sing-box
+        apply_outbound_changes || return 1
         print_success "已禁用所有节点的出站规则"
         return 0
     fi
@@ -1347,8 +1343,7 @@ disable_outbound_from_node() {
     done
 
     if [[ $success_count -gt 0 ]]; then
-        generate_singbox_config
-        restart_sing-box
+        apply_outbound_changes || return 1
         print_success "成功禁用 $success_count 个节点的出站规则"
     else
         print_error "未能禁用任何节点的出站规则"
@@ -1379,24 +1374,24 @@ list_outbounds() {
     local index=1
     while read -r outbound; do
         local tag=$(echo "$outbound" | jq -r '.tag')
-        local protocol=$(echo "$outbound" | jq -r '.protocol')
+        local protocol=$(echo "$outbound" | jq -r '.type')
 
         # 显示出站规则摘要
         echo -e "${OUTBOUND_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${OUTBOUND_NC}"
         echo -e "${OUTBOUND_GREEN}[$index] $tag${OUTBOUND_NC} ($(get_outbound_type_name "$protocol"))"
 
         # 获取服务器信息
-        local address=$(echo "$outbound" | jq -r '.settings.servers[0].address // .settings.vnext[0].address // "N/A"')
-        local port=$(echo "$outbound" | jq -r '.settings.servers[0].port // .settings.vnext[0].port // "N/A"')
+        local address=$(echo "$outbound" | jq -r '.server // "N/A"')
+        local port=$(echo "$outbound" | jq -r '.server_port // "N/A"')
         echo -e "  ${OUTBOUND_YELLOW}服务器:${OUTBOUND_NC} $address:$port"
 
         # 根据协议显示特定信息
         case "$protocol" in
             http|socks)
                 # 认证信息
-                local has_auth=$(echo "$outbound" | jq -r '.settings.servers[0].users // empty | length > 0')
+                local has_auth=$(echo "$outbound" | jq -r '(.username // "") != ""')
                 if [[ "$has_auth" == "true" ]]; then
-                    local username=$(echo "$outbound" | jq -r '.settings.servers[0].users[0].user')
+                    local username=$(echo "$outbound" | jq -r '.username')
                     echo -e "  ${OUTBOUND_YELLOW}认证:${OUTBOUND_NC} 已启用 (用户: $username)"
                 else
                     echo -e "  ${OUTBOUND_YELLOW}认证:${OUTBOUND_NC} 未启用"
@@ -1404,41 +1399,41 @@ list_outbounds() {
 
                 # HTTP额外显示headers
                 if [[ "$protocol" == "http" ]]; then
-                    local user_agent=$(echo "$outbound" | jq -r '.settings.headers["User-Agent"] // "N/A"')
+                    local user_agent=$(echo "$outbound" | jq -r '.headers["User-Agent"] // "N/A"')
                     if [[ "$user_agent" != "N/A" ]]; then
                         echo -e "  ${OUTBOUND_YELLOW}User-Agent:${OUTBOUND_NC} ${user_agent:0:50}..."
                     fi
                 fi
                 ;;
             vless)
-                local uuid=$(echo "$outbound" | jq -r '.settings.vnext[0].users[0].id // "N/A"')
+                local uuid=$(echo "$outbound" | jq -r '.uuid // "N/A"')
                 echo -e "  ${OUTBOUND_YELLOW}UUID:${OUTBOUND_NC} ${uuid:0:8}...${uuid: -8}"
-                local flow=$(echo "$outbound" | jq -r '.settings.vnext[0].users[0].flow // "无"')
+                local flow=$(echo "$outbound" | jq -r '.flow // "无"')
                 echo -e "  ${OUTBOUND_YELLOW}流控:${OUTBOUND_NC} $flow"
                 ;;
             vmess)
-                local uuid=$(echo "$outbound" | jq -r '.settings.vnext[0].users[0].id // "N/A"')
-                local security=$(echo "$outbound" | jq -r '.settings.vnext[0].users[0].security // "auto"')
+                local uuid=$(echo "$outbound" | jq -r '.uuid // "N/A"')
+                local security=$(echo "$outbound" | jq -r '.security // "auto"')
                 echo -e "  ${OUTBOUND_YELLOW}UUID:${OUTBOUND_NC} ${uuid:0:8}...${uuid: -8}"
                 echo -e "  ${OUTBOUND_YELLOW}加密:${OUTBOUND_NC} $security"
                 ;;
             trojan)
-                local password=$(echo "$outbound" | jq -r '.settings.servers[0].password // "N/A"')
+                local password=$(echo "$outbound" | jq -r '.password // "N/A"')
                 echo -e "  ${OUTBOUND_YELLOW}密码:${OUTBOUND_NC} ${password:0:4}***${password: -4}"
                 ;;
             shadowsocks)
-                local method=$(echo "$outbound" | jq -r '.settings.servers[0].method // "N/A"')
-                local password=$(echo "$outbound" | jq -r '.settings.servers[0].password // "N/A"')
+                local method=$(echo "$outbound" | jq -r '.method // "N/A"')
+                local password=$(echo "$outbound" | jq -r '.password // "N/A"')
                 echo -e "  ${OUTBOUND_YELLOW}加密:${OUTBOUND_NC} $method"
                 echo -e "  ${OUTBOUND_YELLOW}密码:${OUTBOUND_NC} ${password:0:4}***${password: -4}"
                 ;;
         esac
 
         # Mux配置
-        local mux_enabled=$(echo "$outbound" | jq -r '.mux.enabled // false')
+        local mux_enabled=$(echo "$outbound" | jq -r '.multiplex.enabled // false')
         if [[ "$mux_enabled" == "true" ]]; then
-            local mux_concurrency=$(echo "$outbound" | jq -r '.mux.concurrency // 8')
-            echo -e "  ${OUTBOUND_YELLOW}Mux:${OUTBOUND_NC} 已启用 (并发: $mux_concurrency)"
+            local mux_connections=$(echo "$outbound" | jq -r '.multiplex.max_connections // 4')
+            echo -e "  ${OUTBOUND_YELLOW}Mux:${OUTBOUND_NC} 已启用 (最大连接: $mux_connections)"
         else
             echo -e "  ${OUTBOUND_YELLOW}Mux:${OUTBOUND_NC} 未启用"
         fi
@@ -1540,8 +1535,7 @@ delete_outbound() {
 
     # 3. 重新生成 sing-box 配置（无论是否有受影响节点都需要重新生成）
     print_info "正在重新生成配置..."
-    generate_singbox_config
-    restart_sing-box
+    apply_outbound_changes || return 1
     print_success "配置已更新并重启服务"
 }
 
@@ -1570,7 +1564,7 @@ modify_outbound() {
     fi
 
     local tag=$(echo "$outbound" | jq -r '.tag')
-    local protocol=$(echo "$outbound" | jq -r '.protocol')
+    local protocol=$(echo "$outbound" | jq -r '.type')
 
     clear
     echo -e "${OUTBOUND_CYAN}╔═══════════════════════════════════════╗${OUTBOUND_NC}"
@@ -1628,26 +1622,26 @@ modify_outbound_mux_config() {
     local index=$1
     local tag=$2
 
-    local current_enabled=$(jq -r ".outbounds[$((index-1))].mux.enabled // false" "$OUTBOUND_FILE")
-    local current_concurrency=$(jq -r ".outbounds[$((index-1))].mux.concurrency // 8" "$OUTBOUND_FILE")
+    local current_enabled=$(jq -r ".outbounds[$((index-1))].multiplex.enabled // false" "$OUTBOUND_FILE")
+    local current_connections=$(jq -r ".outbounds[$((index-1))].multiplex.max_connections // 4" "$OUTBOUND_FILE")
 
     echo ""
     echo -e "${OUTBOUND_YELLOW}当前 Mux 配置：${OUTBOUND_NC}"
     echo -e "  启用: $current_enabled"
-    [[ "$current_enabled" == "true" ]] && echo -e "  并发数: $current_concurrency"
+    [[ "$current_enabled" == "true" ]] && echo -e "  最大连接数: $current_connections"
     echo ""
 
     read -p "是否启用 Mux? [y/N]: " enable_mux
     local mux_enabled="false"
-    local mux_concurrency=8
+    local mux_connections=4
     if [[ "$enable_mux" == "y" || "$enable_mux" == "Y" ]]; then
         mux_enabled="true"
-        read -p "Mux 并发数 (1-128, 默认: 8): " input_concurrency
-        mux_concurrency=${input_concurrency:-8}
+        read -p "Mux 最大连接数 (1-128, 默认: 4): " input_connections
+        mux_connections=${input_connections:-4}
     fi
 
-    jq --argjson enabled "$mux_enabled" --argjson concurrency "$mux_concurrency" \
-       "(.outbounds[$((index-1))].mux) = {enabled: \$enabled, concurrency: \$concurrency}" \
+    jq --argjson enabled "$mux_enabled" --argjson connections "$mux_connections" \
+       "(.outbounds[$((index-1))].multiplex) = {enabled: \$enabled, protocol: \"h2mux\", max_connections: \$connections}" \
        "$OUTBOUND_FILE" > "${OUTBOUND_FILE}.tmp"
     mv "${OUTBOUND_FILE}.tmp" "$OUTBOUND_FILE"
 
@@ -1665,8 +1659,8 @@ modify_outbound_server() {
         return 1
     fi
 
-    local current_address=$(jq -r ".outbounds[$((index-1))].settings.servers[0].address" "$OUTBOUND_FILE")
-    local current_port=$(jq -r ".outbounds[$((index-1))].settings.servers[0].port" "$OUTBOUND_FILE")
+    local current_address=$(jq -r ".outbounds[$((index-1))].server" "$OUTBOUND_FILE")
+    local current_port=$(jq -r ".outbounds[$((index-1))].server_port" "$OUTBOUND_FILE")
 
     echo ""
     echo -e "${OUTBOUND_YELLOW}当前服务器：${OUTBOUND_NC}"
@@ -1681,8 +1675,8 @@ modify_outbound_server() {
     new_port=${new_port:-$current_port}
 
     jq --arg address "$new_address" --argjson port "$new_port" \
-       "(.outbounds[$((index-1))].settings.servers[0].address) = \$address |
-        (.outbounds[$((index-1))].settings.servers[0].port) = \$port" \
+       "(.outbounds[$((index-1))].server) = \$address |
+        (.outbounds[$((index-1))].server_port) = \$port" \
        "$OUTBOUND_FILE" > "${OUTBOUND_FILE}.tmp"
     mv "${OUTBOUND_FILE}.tmp" "$OUTBOUND_FILE"
 
@@ -1701,7 +1695,7 @@ modify_outbound_auth() {
     fi
 
     # 正确获取当前认证信息(从users数组中)
-    local current_user=$(jq -r ".outbounds[$((index-1))].settings.servers[0].users[0].user // \"\"" "$OUTBOUND_FILE")
+    local current_user=$(jq -r ".outbounds[$((index-1))].username // \"\"" "$OUTBOUND_FILE")
 
     echo ""
     if [[ -n "$current_user" ]]; then
@@ -1714,7 +1708,7 @@ modify_outbound_auth() {
     read -p "是否启用认证? [y/N]: " enable_auth
     if [[ "$enable_auth" != "y" && "$enable_auth" != "Y" ]]; then
         # 移除认证(删除users数组)
-        jq "del(.outbounds[$((index-1))].settings.servers[0].users)" \
+        jq "del(.outbounds[$((index-1))].username, .outbounds[$((index-1))].password)" \
            "$OUTBOUND_FILE" > "${OUTBOUND_FILE}.tmp"
         mv "${OUTBOUND_FILE}.tmp" "$OUTBOUND_FILE"
         print_success "认证已禁用"
@@ -1731,7 +1725,7 @@ modify_outbound_auth() {
 
     # 正确更新认证信息(更新users数组)
     jq --arg user "$username" --arg pass "$password" \
-       "(.outbounds[$((index-1))].settings.servers[0].users) = [{user: \$user, pass: \$pass, level: 0}]" \
+       "(.outbounds[$((index-1))].username) = \$user | (.outbounds[$((index-1))].password) = \$pass" \
        "$OUTBOUND_FILE" > "${OUTBOUND_FILE}.tmp"
     mv "${OUTBOUND_FILE}.tmp" "$OUTBOUND_FILE"
 
@@ -1796,17 +1790,21 @@ outbound_management_menu() {
                 print_menu_item "6" "Shadowsocks 协议"
                 print_menu_item "7" "Hysteria2 协议"
                 print_menu_item "8" "TUIC 协议"
+                print_menu_item "9" "Naive 协议"
+                print_menu_item "10" "AnyTLS 协议"
                 print_section_end
                 echo ""
 
                 print_nav_options "true" "true"
-                local protocol_choice=$(read_menu_choice "请选择协议")
-                local ret=$?
+                local protocol_choice
+                protocol_choice=$(read_menu_choice "请选择协议")
+                ret=$?
 
                 # 处理导航
-                if [[ $ret -eq 99 ]] || [[ $ret -eq 98 ]]; then
+                if [[ $ret -eq 99 ]]; then
                     continue
                 fi
+                [[ $ret -eq 98 ]] && return
 
                 case $protocol_choice in
                     1) add_http_outbound ;;
@@ -1817,6 +1815,8 @@ outbound_management_menu() {
                     6) add_shadowsocks_outbound ;;
                     7) add_hysteria2_outbound ;;
                     8) add_tuic_outbound ;;
+                    9) add_naive_outbound ;;
+                    10) add_anytls_outbound ;;
                     *) print_error "无效选择" ;;
                 esac
                 wait_for_input

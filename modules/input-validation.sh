@@ -525,9 +525,9 @@ validate_sing-box_config() {
 
     # 使用 sing-box 内置验证
     if command -v sing-box &>/dev/null; then
-        if ! sing-box test -c "$config_file" &>/dev/null; then
+        if ! sing-box check -c "$config_file" &>/dev/null; then
             log_error "sing-box 配置文件验证失败: $config_file"
-            sing-box test -c "$config_file"
+            sing-box check -c "$config_file"
             return 1
         fi
     else

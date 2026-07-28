@@ -14,7 +14,37 @@ DEFAULT_DOMAIN_FILE="${DATA_DIR}/default_domain.txt"
 init_domain_file() {
     if [[ ! -f "$DOMAIN_FILE" ]]; then
         echo '{"domains":[],"certificates":[]}' > "$DOMAIN_FILE"
+    elif jq -e . "$DOMAIN_FILE" >/dev/null 2>&1; then
+        # 兼容旧版 cert/key 字段，并确保数组始终存在。
+        jq '(.domains //= [])
+            | (.certificates //= [])
+            | .certificates |= map(
+                .cert_file = (.cert_file // .cert // "")
+                | .key_file = (.key_file // .key // "")
+                | .type = (.type // (if (.auto // false) then "acme" else "imported" end))
+                | .auto = (.auto // false)
+                | del(.cert, .key)
+              )' "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp" && mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE"
     fi
+}
+
+certificate_path_is_safe() {
+    local candidate="$1"
+    [[ -n "$candidate" ]] || return 1
+    local base resolved
+    base=$(readlink -m -- "$CERT_DIR") || return 1
+    resolved=$(readlink -m -- "$candidate") || return 1
+    [[ "$resolved" == "$base"/* ]]
+}
+
+safe_remove_certificate_file() {
+    local candidate="$1"
+    [[ -z "$candidate" ]] && return 0
+    if ! certificate_path_is_safe "$candidate"; then
+        print_warning "拒绝删除证书目录外的文件: $candidate"
+        return 1
+    fi
+    rm -f -- "$(readlink -m -- "$candidate")"
 }
 
 # 获取默认伪装域名
@@ -29,6 +59,10 @@ get_default_domain() {
 # 设置默认伪装域名
 set_default_domain() {
     local domain=$1
+    if ! validate_domain "$domain"; then
+        print_error "域名格式不正确: $domain"
+        return 1
+    fi
     echo "$domain" > "$DEFAULT_DOMAIN_FILE"
     print_success "默认伪装域名已设置为: $domain"
 }
@@ -199,12 +233,6 @@ test_custom_domain() {
         return 1
     fi
 
-    # 验证域名格式
-    if ! [[ "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
-        print_error "域名格式不正确"
-        return 1
-    fi
-
     echo ""
     print_info "开始测试域名: $domain"
     echo ""
@@ -288,8 +316,8 @@ add_custom_domain() {
     echo ""
 
     read -p "请输入域名: " domain
-    if [[ -z "$domain" ]]; then
-        print_error "域名不能为空"
+    if ! validate_domain "$domain"; then
+        print_error "域名格式不正确"
         return 1
     fi
 
@@ -317,8 +345,8 @@ add_custom_domain() {
         --arg note "$note" \
         '{domain: $domain, note: $note, type: "custom", created: now|todate}')
 
-    local current_data=$(cat "$DOMAIN_FILE")
-    echo "$current_data" | jq ".domains += [$domain_data]" > "$DOMAIN_FILE"
+    jq --argjson domain_data "$domain_data" '.domains += [$domain_data]' "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp" \
+        && mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE" || { rm -f "${DOMAIN_FILE}.tmp"; return 1; }
 
     print_success "域名添加成功！"
 }
@@ -373,8 +401,8 @@ delete_domain() {
     fi
 
     # 删除域名
-    jq ".domains = [.domains[] | select(.domain != \"$domain\")]" "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp"
-    mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE"
+    jq --arg domain "$domain" '.domains |= map(select(.domain != $domain))' "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp" \
+        && mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE" || { rm -f "${DOMAIN_FILE}.tmp"; return 1; }
 
     print_success "域名删除成功！"
 }
@@ -386,8 +414,8 @@ add_certificate() {
     echo ""
 
     read -p "请输入域名: " domain
-    if [[ -z "$domain" ]]; then
-        print_error "域名不能为空"
+    if ! validate_domain "$domain"; then
+        print_error "域名格式不正确"
         return 1
     fi
 
@@ -405,11 +433,14 @@ add_certificate() {
         print_info "生成自签名证书..."
         mkdir -p "$CERT_DIR"
 
-        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        if ! openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
             -keyout "${CERT_DIR}/${domain}.key" \
             -out "${CERT_DIR}/${domain}.pem" \
             -subj "/C=US/ST=State/L=City/O=Organization/CN=${domain}" \
-            2>/dev/null
+            2>/dev/null; then
+            print_error "证书生成失败"
+            return 1
+        fi
 
         cert_file="${CERT_DIR}/${domain}.pem"
         key_file="${CERT_DIR}/${domain}.key"
@@ -432,14 +463,18 @@ add_certificate() {
 
         # 复制到证书目录
         mkdir -p "$CERT_DIR"
-        cp "$cert_file" "${CERT_DIR}/${domain}.pem"
-        cp "$key_file" "${CERT_DIR}/${domain}.key"
+        if ! cp -- "$cert_file" "${CERT_DIR}/${domain}.pem" || ! cp -- "$key_file" "${CERT_DIR}/${domain}.key"; then
+            print_error "复制证书文件失败"
+            return 1
+        fi
 
         cert_file="${CERT_DIR}/${domain}.pem"
         key_file="${CERT_DIR}/${domain}.key"
 
         print_success "证书导入成功"
     fi
+
+    chmod 600 "$cert_file" "$key_file" 2>/dev/null || true
 
     # 保存证书信息
     init_domain_file
@@ -448,10 +483,10 @@ add_certificate() {
         --arg cert_file "$cert_file" \
         --arg key_file "$key_file" \
         --arg type "$([ "$cert_type" == "1" ] && echo "self-signed" || echo "imported")" \
-        '{domain: $domain, cert_file: $cert_file, key_file: $key_file, type: $type, created: now|todate}')
+        '{domain: $domain, cert_file: $cert_file, key_file: $key_file, type: $type, auto: false, created: now|todate}')
 
-    local current_data=$(cat "$DOMAIN_FILE")
-    echo "$current_data" | jq ".certificates += [$cert_data]" > "$DOMAIN_FILE"
+    jq --argjson cert_data "$cert_data" '.certificates += [$cert_data]' "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp" \
+        && mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE" || { rm -f "${DOMAIN_FILE}.tmp"; return 1; }
 
     echo ""
     echo -e "${CYAN}证书信息：${NC}"
@@ -482,6 +517,7 @@ list_certificates() {
         local type_display="未知"
         [[ "$type" == "self-signed" ]] && type_display="自签名"
         [[ "$type" == "imported" ]] && type_display="导入"
+        [[ "$type" == "acme" ]] && type_display="ACME 自动"
 
         printf "%-5s %-40s %-20s %-50s\n" "$index" "$domain" "$type_display" "$cert_file"
         ((index++))
@@ -494,8 +530,8 @@ delete_certificate() {
 
     echo ""
     read -p "请输入要删除的证书序号: " index
-    if [[ -z "$index" ]]; then
-        print_error "序号不能为空"
+    if [[ ! "$index" =~ ^[0-9]+$ || "$index" -lt 1 ]]; then
+        print_error "无效的序号"
         return 1
     fi
 
@@ -513,13 +549,14 @@ delete_certificate() {
     read -p "是否同时删除证书文件? [y/N]: " delete_files
 
     # 删除证书记录
-    jq ".certificates = [.certificates[] | select(.domain != \"$domain\")]" "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp"
-    mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE"
+    jq --arg domain "$domain" '.certificates |= map(select(.domain != $domain))' "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp" \
+        && mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE" || { rm -f "${DOMAIN_FILE}.tmp"; return 1; }
 
     # 删除文件
     if [[ "$delete_files" == "y" || "$delete_files" == "Y" ]]; then
-        rm -f "$cert_file" "$key_file"
-        print_success "证书记录和文件已删除"
+        safe_remove_certificate_file "$cert_file"
+        safe_remove_certificate_file "$key_file"
+        print_success "证书记录已删除，安全路径内的证书文件已清理"
     else
         print_success "证书记录已删除（文件保留）"
     fi
@@ -581,8 +618,9 @@ manage_server_domain() {
     echo ""
 
     print_nav_options "true" "true"
-    local choice=$(read_menu_choice "请选择")
-    local ret=$?
+    local choice ret
+    choice=$(read_menu_choice "请选择")
+    ret=$?
 
     # 处理导航
     [[ $ret -eq 99 ]] && return 0  # 返回上级
@@ -869,8 +907,9 @@ manage_sni_domain() {
     echo ""
 
     print_nav_options "true" "true"
-    local choice=$(read_menu_choice "请选择")
-    local ret=$?
+    local choice ret
+    choice=$(read_menu_choice "请选择")
+    ret=$?
 
     # 处理导航
     [[ $ret -eq 99 ]] && return 0  # 返回上级
@@ -940,8 +979,9 @@ manage_host_domain() {
     echo ""
 
     print_nav_options "true" "true"
-    local choice=$(read_menu_choice "请选择")
-    local ret=$?
+    local choice ret
+    choice=$(read_menu_choice "请选择")
+    ret=$?
 
     # 处理导航
     [[ $ret -eq 99 ]] && return 0  # 返回上级
@@ -1068,6 +1108,10 @@ modify_certificate() {
     fi
 
     local domain=$(echo "$cert" | jq -r '.domain')
+    if ! validate_domain "$domain"; then
+        print_error "证书记录包含无效域名，拒绝修改"
+        return 1
+    fi
     echo ""
     echo -e "${CYAN}修改证书:${NC} $domain"
     echo ""
@@ -1076,8 +1120,9 @@ modify_certificate() {
     echo ""
 
     print_nav_options "true" "true"
-    local choice=$(read_menu_choice "请选择")
-    local ret=$?
+    local choice ret
+    choice=$(read_menu_choice "请选择")
+    ret=$?
 
     # 处理导航
     [[ $ret -eq 99 ]] && return 0  # 返回上级
@@ -1089,13 +1134,17 @@ modify_certificate() {
             read -p "请输入新的证书文件路径: " cert_path
             if [[ -n "$cert_path" ]]; then
                 if [[ ! -f "$cert_path" ]]; then
-                    print_warning "证书文件不存在: $cert_path"
-                    read -p "是否仍要保存? [y/N]: " confirm
-                    [[ "$confirm" != "y" ]] && return
+                    print_error "证书文件不存在: $cert_path"
+                    return 1
                 fi
-
-                jq ".certificates[$((cert_index-1))].cert = \"$cert_path\"" "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp"
-                mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE"
+                local stored_cert="$CERT_DIR/${domain}.pem"
+                mkdir -p "$CERT_DIR" || return 1
+                if [[ "$(readlink -f -- "$cert_path")" != "$(readlink -m -- "$stored_cert")" ]]; then
+                    cp -- "$cert_path" "$stored_cert" || return 1
+                fi
+                chmod 600 "$stored_cert" 2>/dev/null || true
+                jq --arg path "$stored_cert" ".certificates[$((cert_index-1))].cert_file = \$path" "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp" \
+                    && mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE" || { rm -f "${DOMAIN_FILE}.tmp"; return 1; }
                 print_success "证书路径已更新"
             fi
             ;;
@@ -1104,13 +1153,17 @@ modify_certificate() {
             read -p "请输入新的密钥文件路径: " key_path
             if [[ -n "$key_path" ]]; then
                 if [[ ! -f "$key_path" ]]; then
-                    print_warning "密钥文件不存在: $key_path"
-                    read -p "是否仍要保存? [y/N]: " confirm
-                    [[ "$confirm" != "y" ]] && return
+                    print_error "密钥文件不存在: $key_path"
+                    return 1
                 fi
-
-                jq ".certificates[$((cert_index-1))].key = \"$key_path\"" "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp"
-                mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE"
+                local stored_key="$CERT_DIR/${domain}.key"
+                mkdir -p "$CERT_DIR" || return 1
+                if [[ "$(readlink -f -- "$key_path")" != "$(readlink -m -- "$stored_key")" ]]; then
+                    cp -- "$key_path" "$stored_key" || return 1
+                fi
+                chmod 600 "$stored_key" 2>/dev/null || true
+                jq --arg path "$stored_key" ".certificates[$((cert_index-1))].key_file = \$path" "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp" \
+                    && mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE" || { rm -f "${DOMAIN_FILE}.tmp"; return 1; }
                 print_success "密钥路径已更新"
             fi
             ;;
@@ -1139,11 +1192,15 @@ auto_apply_certificate() {
         if [[ "$install_acme" == "y" ]]; then
             echo ""
             print_info "正在安装 acme.sh..."
-            curl https://get.acme.sh | sh -s email=my@example.com || {
+            local acme_installer
+            acme_installer=$(mktemp /tmp/acme-install-XXXXXX.sh) || return 1
+            if ! curl -fsSL https://get.acme.sh -o "$acme_installer" \
+                || ! sh "$acme_installer" email=my@example.com; then
+                rm -f -- "$acme_installer"
                 print_error "acme.sh 安装失败"
                 return 1
-            }
-            source ~/.bashrc
+            fi
+            rm -f -- "$acme_installer"
             print_success "acme.sh 安装完成"
         else
             return
@@ -1152,9 +1209,9 @@ auto_apply_certificate() {
 
     echo ""
     read -p "请输入域名: " domain
-    if [[ -z "$domain" ]]; then
-        print_error "域名不能为空"
-        return
+    if ! validate_domain "$domain"; then
+        print_error "域名格式不正确"
+        return 1
     fi
 
     echo ""
@@ -1166,15 +1223,23 @@ auto_apply_certificate() {
     read -p "请选择验证方式 [1-3, 默认: 3]: " verify_method
     verify_method=${verify_method:-3}
 
-    local acme_cmd=""
+    local acme_bin
+    acme_bin=$(command -v acme.sh 2>/dev/null || true)
+    [[ -z "$acme_bin" && -x "$HOME/.acme.sh/acme.sh" ]] && acme_bin="$HOME/.acme.sh/acme.sh"
+    if [[ -z "$acme_bin" ]]; then
+        print_error "找不到 acme.sh 可执行文件"
+        return 1
+    fi
+
+    local -a acme_args=(--issue -d "$domain")
     case $verify_method in
         1)
             read -p "请输入网站根目录路径: " webroot
-            if [[ -z "$webroot" ]]; then
-                print_error "网站根目录不能为空"
-                return
+            if [[ -z "$webroot" || ! -d "$webroot" ]]; then
+                print_error "网站根目录不存在"
+                return 1
             fi
-            acme_cmd="~/.acme.sh/acme.sh --issue -d $domain -w $webroot"
+            acme_args+=(-w "$webroot")
             ;;
         2)
             echo ""
@@ -1184,13 +1249,33 @@ auto_apply_certificate() {
             echo -e "  • DNSPod (dp)"
             echo ""
             read -p "请输入 DNS 提供商简称: " dns_provider
-            read -p "请输入 API Key/Token: " api_key
-
-            export CF_Token="$api_key"  # 示例，实际需根据提供商设置
-            acme_cmd="~/.acme.sh/acme.sh --issue --dns dns_$dns_provider -d $domain"
+            case "$dns_provider" in
+                cf)
+                    read -s -p "请输入 Cloudflare API Token: " api_key; echo ""
+                    [[ -n "$api_key" ]] || { print_error "Token 不能为空"; return 1; }
+                    export CF_Token="$api_key"
+                    ;;
+                ali)
+                    read -p "请输入 Aliyun AccessKey ID: " ali_key
+                    read -s -p "请输入 Aliyun AccessKey Secret: " ali_secret; echo ""
+                    [[ -n "$ali_key" && -n "$ali_secret" ]] || { print_error "AccessKey 不能为空"; return 1; }
+                    export Ali_Key="$ali_key" Ali_Secret="$ali_secret"
+                    ;;
+                dp)
+                    read -p "请输入 DNSPod API ID: " dp_id
+                    read -s -p "请输入 DNSPod API Key: " dp_key; echo ""
+                    [[ -n "$dp_id" && -n "$dp_key" ]] || { print_error "DNSPod 凭据不能为空"; return 1; }
+                    export DP_Id="$dp_id" DP_Key="$dp_key"
+                    ;;
+                *)
+                    print_error "不支持的 DNS 提供商，仅允许 cf、ali、dp"
+                    return 1
+                    ;;
+            esac
+            acme_args+=(--dns "dns_${dns_provider}")
             ;;
         3)
-            acme_cmd="~/.acme.sh/acme.sh --issue -d $domain --standalone"
+            acme_args+=(--standalone)
             ;;
         *)
             print_error "无效的验证方式"
@@ -1202,24 +1287,30 @@ auto_apply_certificate() {
     print_info "正在申请证书..."
     echo ""
 
-    if eval "$acme_cmd"; then
+    if "$acme_bin" "${acme_args[@]}"; then
         print_success "证书申请成功"
 
         # 安装证书到指定目录
-        mkdir -p "$CERT_DIR/$domain"
-        ~/.acme.sh/acme.sh --install-cert -d "$domain" \
+        mkdir -p "$CERT_DIR/$domain" || return 1
+        if ! "$acme_bin" --install-cert -d "$domain" \
             --key-file "$CERT_DIR/$domain/key.pem" \
-            --fullchain-file "$CERT_DIR/$domain/cert.pem"
+            --fullchain-file "$CERT_DIR/$domain/cert.pem"; then
+            print_error "证书签发成功，但安装到目标目录失败"
+            return 1
+        fi
+        chmod 600 "$CERT_DIR/$domain/key.pem" "$CERT_DIR/$domain/cert.pem" 2>/dev/null || true
 
         # 添加到证书列表
         init_domain_file
         local cert_data=$(jq -n \
             --arg domain "$domain" \
-            --arg cert "$CERT_DIR/$domain/cert.pem" \
-            --arg key "$CERT_DIR/$domain/key.pem" \
-            '{domain: $domain, cert: $cert, key: $key, auto: true, created: now|todate}')
+            --arg cert_file "$CERT_DIR/$domain/cert.pem" \
+            --arg key_file "$CERT_DIR/$domain/key.pem" \
+            '{domain: $domain, cert_file: $cert_file, key_file: $key_file, type: "acme", auto: true, created: now|todate}')
 
-        jq ".certificates += [$cert_data]" "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp"
+        jq --arg domain "$domain" --argjson cert "$cert_data" \
+            '.certificates = ([.certificates[] | select(.domain != $domain)] + [$cert])' \
+            "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp"
         mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE"
 
         echo ""

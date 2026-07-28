@@ -204,6 +204,11 @@ confirm() {
 # UI 辅助函数 - UI Helper Functions
 #================================================================
 
+# 统一的 UI 导航返回码。调用方应先捕获返回码，再处理输出值。
+readonly UI_CANCEL=97
+readonly UI_MAIN_MENU=98
+readonly UI_BACK=99
+
 # 统一的边框样式
 print_header() {
     local title="$1"
@@ -263,14 +268,24 @@ print_nav_options() {
 # 增强的菜单输入处理
 read_menu_choice() {
     local prompt="${1:-请选择}"
+    local allow_cancel="${2:-false}"
     local choice
 
-    read -p "$prompt: " choice
+    if ! read -r -p "$prompt: " choice; then
+        return "$UI_CANCEL"
+    fi
 
     # 处理导航快捷键
     case "$choice" in
-        b|B) return 99 ;;  # 返回上级
-        m|M) return 98 ;;  # 返回主菜单
+        b|B) return "$UI_BACK" ;;
+        m|M) return "$UI_MAIN_MENU" ;;
+        q|Q)
+            if [[ "$allow_cancel" == "true" ]]; then
+                return "$UI_CANCEL"
+            fi
+            echo "$choice"
+            return 0
+            ;;
         *) echo "$choice"; return 0 ;;
     esac
 }
@@ -593,14 +608,15 @@ show_progress() {
 
 # 等待任务完成（带超时）
 wait_for_condition() {
-    local condition_command="$1"
-    local timeout=${2:-30}
-    local interval=${3:-1}
+    local timeout=${1:-30}
+    local interval=${2:-1}
+    shift 2
+    [[ $# -gt 0 ]] || return 1
 
     local elapsed=0
 
     while [[ $elapsed -lt $timeout ]]; do
-        if eval "$condition_command"; then
+        if "$@"; then
             return 0
         fi
 
@@ -608,7 +624,7 @@ wait_for_condition() {
         elapsed=$((elapsed + interval))
     done
 
-    log_warn "等待超时: $condition_command"
+    log_warn "等待超时: $*"
     return 1
 }
 
@@ -617,15 +633,15 @@ retry_with_backoff() {
     local max_attempts=${1:-3}
     local initial_delay=${2:-1}
     shift 2
-    local command="$@"
+    [[ $# -gt 0 ]] || return 1
 
     local attempt=1
     local delay=$initial_delay
 
     while [[ $attempt -le $max_attempts ]]; do
-        log_debug "尝试执行 (第 $attempt 次): $command"
+        log_debug "尝试执行 (第 $attempt 次): $*"
 
-        if eval "$command"; then
+        if "$@"; then
             return 0
         fi
 

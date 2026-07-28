@@ -5,6 +5,40 @@
 # 功能：安装、卸载、更新、启动、停止 sing-box
 #================================================================
 
+# 下载后执行官方安装脚本，避免网络响应在管道中被直接交给 shell。
+run_official_singbox_installer() {
+    local temp_dir installer status=0
+    temp_dir=$(mktemp -d) || {
+        print_error "无法创建安装临时目录"
+        return 1
+    }
+    installer="${temp_dir}/install.sh"
+
+    if ! curl -fL --retry 3 --connect-timeout 15 https://sing-box.app/install.sh -o "$installer"; then
+        print_error "下载安装脚本失败"
+        rm -rf -- "$temp_dir"
+        return 1
+    fi
+    chmod 700 "$installer" || {
+        rm -rf -- "$temp_dir"
+        return 1
+    }
+
+    bash "$installer" "$@" || status=$?
+    rm -rf -- "$temp_dir"
+    return "$status"
+}
+
+validate_singbox_version_input() {
+    [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9]+)*$ ]]
+}
+
+detect_singbox_version() {
+    local version
+    version=$(sing-box version 2>/dev/null | awk '/sing-box version/{print $3; exit}')
+    printf '%s\n' "${version:-unknown}"
+}
+
 # 安装 sing-box（使用官方安装脚本）
 install_sing-box() {
     print_info "开始安装 sing-box..."
@@ -12,7 +46,7 @@ install_sing-box() {
 
     # 检查是否已安装
     if command -v sing-box &>/dev/null; then
-        local installed_version=$(sing-box version 2>/dev/null | grep -oP 'sing-box version \K[0-9.]+' || echo "unknown")
+        local installed_version=$(detect_singbox_version)
         print_warning "sing-box 已安装，版本: ${installed_version}"
         print_info "如需重新安装，请先卸载"
         return 1
@@ -34,24 +68,20 @@ install_sing-box() {
     read -p "请选择 [1-3，默认1]: " version_choice
     version_choice=${version_choice:-1}
 
-    local install_cmd="curl -fsSL https://sing-box.app/install.sh | bash"
-
     case $version_choice in
         1)
             print_info "安装最新稳定版..."
             ;;
         2)
             print_info "安装最新测试版..."
-            install_cmd="curl -fsSL https://sing-box.app/install.sh | bash -s -- --beta"
             ;;
         3)
             read -p "请输入版本号（如 1.9.0）: " custom_version
-            if [[ -z "$custom_version" ]]; then
-                print_error "版本号不能为空"
+            if ! validate_singbox_version_input "$custom_version"; then
+                print_error "版本号格式无效"
                 return 1
             fi
             print_info "安装版本 ${custom_version}..."
-            install_cmd="curl -fsSL https://sing-box.app/install.sh | bash -s -- --version ${custom_version}"
             ;;
         *)
             print_error "无效选择"
@@ -64,8 +94,12 @@ install_sing-box() {
     echo -e "${YELLOW}使用官方安装脚本: https://sing-box.app/install.sh${NC}"
     echo ""
 
-    # 执行官方安装脚本
-    if eval "$install_cmd"; then
+    # 执行已完整下载的官方安装脚本。
+    if case "$version_choice" in
+        1) run_official_singbox_installer ;;
+        2) run_official_singbox_installer --beta ;;
+        3) run_official_singbox_installer --version "$custom_version" ;;
+       esac; then
         print_success "sing-box 安装完成"
     else
         print_error "sing-box 安装失败"
@@ -77,7 +111,7 @@ install_sing-box() {
 
     # 获取安装的版本
     if command -v sing-box &>/dev/null; then
-        local installed_version=$(sing-box version 2>/dev/null | grep -oP 'sing-box version \K[0-9.]+' || echo "unknown")
+        local installed_version=$(detect_singbox_version)
         print_success "已安装版本: ${installed_version}"
     fi
 
@@ -205,7 +239,7 @@ uninstall_sing-box() {
     fi
 
     # 显示当前版本
-    local installed_version=$(sing-box version 2>/dev/null | grep -oP 'sing-box version \K[0-9.]+' || echo "unknown")
+    local installed_version=$(detect_singbox_version)
     print_info "当前安装版本: ${installed_version}"
 
     # 显示将要删除的内容
@@ -236,6 +270,7 @@ uninstall_sing-box() {
         systemctl disable sing-box 2>/dev/null
         print_success "服务已禁用"
     fi
+    systemctl disable --now sing-box-user-limits.timer 2>/dev/null || true
 
     # 3. 使用包管理器卸载
     print_info "使用包管理器卸载 sing-box..."
@@ -247,7 +282,6 @@ uninstall_sing-box() {
         if dpkg -l | grep -q sing-box; then
             apt-get remove -y sing-box
             apt-get purge -y sing-box  # 完全删除包括配置文件
-            apt-get autoremove -y
             uninstall_success=true
         else
             print_warning "未找到 sing-box 软件包"
@@ -306,12 +340,19 @@ uninstall_sing-box() {
             rm -f /etc/systemd/system/sing-box.service
             print_success "已删除服务文件"
         fi
+        rm -f /etc/systemd/system/sing-box-user-limits.service /etc/systemd/system/sing-box-user-limits.timer
         if [[ -f "/lib/systemd/system/sing-box.service" ]]; then
             rm -f /lib/systemd/system/sing-box.service
             print_success "已删除服务文件"
         fi
 
         systemctl daemon-reload
+    fi
+
+    # 清理由本项目源码构建安装的内核，不触碰未受本项目管理的其他文件。
+    if [[ -f "${DATA_DIR}/installed_version" && -f "/usr/local/bin/sing-box" ]]; then
+        rm -f "/usr/local/bin/sing-box"
+        print_success "已删除项目管理的定制内核: /usr/local/bin/sing-box"
     fi
 
     # 4. 询问是否删除配置和数据
@@ -324,6 +365,11 @@ uninstall_sing-box() {
         if [[ -d "$SINGBOX_DIR" ]]; then
             rm -rf "$SINGBOX_DIR"
             print_success "已删除: $SINGBOX_DIR"
+        fi
+
+        if [[ -d "$DATA_DIR" && "$DATA_DIR" == "/var/lib/sing-box" ]]; then
+            rm -rf "$DATA_DIR"
+            print_success "已删除: $DATA_DIR"
         fi
 
         # 删除系统配置（如果存在）
@@ -368,7 +414,7 @@ update_sing-box() {
     fi
 
     # 获取当前版本
-    local current_version=$(sing-box version 2>/dev/null | grep -oP 'sing-box version \K[0-9.]+' || echo "unknown")
+    local current_version=$(detect_singbox_version)
     print_info "当前版本: ${current_version}"
 
     # 选择更新方式
@@ -400,44 +446,34 @@ update_sing-box() {
         1)
             print_info "使用包管理器更新..."
             if command -v apt-get &>/dev/null; then
-                apt-get update -qq
-                apt-get install --only-upgrade -y sing-box
-                update_success=true
+                apt-get update -qq && apt-get install --only-upgrade -y sing-box && update_success=true
             elif command -v dnf &>/dev/null; then
-                dnf upgrade -y sing-box
-                update_success=true
+                dnf upgrade -y sing-box && update_success=true
             elif command -v yum &>/dev/null; then
-                yum update -y sing-box
-                update_success=true
+                yum update -y sing-box && update_success=true
             elif command -v pacman &>/dev/null; then
-                pacman -Syu --noconfirm sing-box
-                update_success=true
+                pacman -Syu --noconfirm sing-box && update_success=true
             elif command -v opkg &>/dev/null; then
-                opkg update
-                opkg upgrade sing-box
-                update_success=true
+                opkg update && opkg upgrade sing-box && update_success=true
             else
                 print_warning "未检测到支持的包管理器"
                 print_info "将使用官方脚本更新"
-                curl -fsSL https://sing-box.app/install.sh | bash
-                update_success=true
+                run_official_singbox_installer && update_success=true
             fi
             ;;
         2)
             print_info "使用官方脚本更新..."
-            curl -fsSL https://sing-box.app/install.sh | bash
-            update_success=true
+            run_official_singbox_installer && update_success=true
             ;;
         3)
             read -p "请输入目标版本号（如 1.9.0）: " target_version
-            if [[ -z "$target_version" ]]; then
-                print_error "版本号不能为空"
+            if ! validate_singbox_version_input "$target_version"; then
+                print_error "版本号格式无效"
                 systemctl start sing-box
                 return 1
             fi
             print_info "更新到版本 ${target_version}..."
-            curl -fsSL https://sing-box.app/install.sh | bash -s -- --version "$target_version"
-            update_success=true
+            run_official_singbox_installer --version "$target_version" && update_success=true
             ;;
         *)
             print_error "无效选择"
@@ -446,14 +482,28 @@ update_sing-box() {
             ;;
     esac
 
+    if [[ "$update_choice" == "1" && "$update_success" != true ]]; then
+        print_warning "包管理器更新失败，尝试官方安装脚本"
+        run_official_singbox_installer && update_success=true
+    fi
+
+    if [[ "$update_success" != true ]]; then
+        print_error "sing-box 更新命令执行失败"
+        systemctl start sing-box 2>/dev/null || true
+        return 1
+    fi
+
     # 启动服务
     print_info "启动 sing-box 服务..."
-    systemctl start sing-box
+    if ! systemctl start sing-box; then
+        print_error "更新后 sing-box 服务启动失败"
+        return 1
+    fi
     sleep 2
 
     # 验证更新
     if command -v sing-box &>/dev/null; then
-        local new_version=$(sing-box version 2>/dev/null | grep -oP 'sing-box version \K[0-9.]+' || echo "unknown")
+        local new_version=$(detect_singbox_version)
         echo ""
         print_success "更新完成！"
         print_info "之前版本: ${current_version}"
@@ -463,8 +513,9 @@ update_sing-box() {
         if systemctl is-active --quiet sing-box; then
             print_success "服务运行正常"
         else
-            print_warning "服务启动失败"
+            print_error "服务启动失败"
             print_info "查看日志: journalctl -u sing-box -n 50"
+            return 1
         fi
     else
         print_error "更新失败，sing-box 命令不可用"
@@ -653,8 +704,8 @@ After=network.target nss-lookup.target
 Type=simple
 User=root
 WorkingDirectory=${DATA_DIR}
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 ExecStart=${singbox_bin_path} run -c ${config_path}
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure

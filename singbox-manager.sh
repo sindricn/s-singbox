@@ -3,12 +3,13 @@
 #================================================================
 # sing-box Manager - 主入口脚本
 # 功能：sing-box 服务管理工具
-# 版本：V1.0.0
+# 版本：由 APP_VERSION 统一管理
 # 项目地址：https://github.com/sindricn/s-singbox
 #================================================================
 
 # 严格模式
 set -uo pipefail
+umask 077
 
 # 颜色定义
 RED='\033[0;31m'
@@ -17,7 +18,10 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 GRAY='\033[0;90m'
+BOLD='\033[1m'
 NC='\033[0m' # No Color
+
+readonly APP_VERSION="2.0.0"
 
 # 全局变量（使用官方标准路径）
 # 官方标准路径参考: https://sing-box.sagernet.org/
@@ -108,7 +112,10 @@ init_data_dir() {
     ensure_json_file "$NODE_USERS_FILE" '{"bindings":[]}'
     ensure_json_file "${DATA_DIR}/subscriptions.json" '{"subscriptions":[]}'
     ensure_json_file "${DATA_DIR}/subscription_metadata.json" '{"subscriptions":[]}'
-    ensure_json_file "${DATA_DIR}/outbounds.json" '{"outbounds":[]}'
+    ensure_json_file "${DATA_DIR}/outbounds.json" '{"outbounds":[],"endpoints":[]}'
+    ensure_json_file "${DATA_DIR}/traffic_counters.json" '{"users":{}}'
+    chmod 700 "$DATA_DIR" "$SUBSCRIPTION_DIR"
+    chmod 600 "$DATA_DIR"/*.json 2>/dev/null || true
 }
 
 # =============================================================================
@@ -254,12 +261,37 @@ get_enabled_users_count() {
     echo "$count"
 }
 
-# 获取在线用户数量
-get_online_users_count() {
-    local online=0
-    # 注: 在线用户统计需要实际运行环境和数据支持
-    # 开发环境暂时返回0
-    echo "$online"
+# 获取本次 sing-box 运行期间产生过流量的用户数。
+# Stats API 不提供可靠的在线连接人数，因此这里不再伪装成“在线用户”。
+get_active_traffic_users_count() {
+    local bin="${SINGBOX_BIN:-}"
+    local api_addr="${SINGBOX_API_ADDR:-127.0.0.1:10085}"
+    local stats count
+
+    if ! command -v timeout >/dev/null 2>&1 \
+        || ! command -v jq >/dev/null 2>&1 \
+        || ! command -v systemctl >/dev/null 2>&1 \
+        || ! systemctl is-active --quiet sing-box \
+        || [[ ! -x "$bin" ]]; then
+        echo "N/A"
+        return 0
+    fi
+
+    if ! stats=$(timeout 1 "$bin" api statsquery --server="$api_addr" -pattern "user>>>" 2>/dev/null); then
+        echo "N/A"
+        return 0
+    fi
+
+    count=$(jq -r '
+        [.stat[]?
+         | select(.name | startswith("user>>>"))
+         | select(((.value // 0) | tonumber) > 0)
+         | (.name | split(">>>")[1])]
+        | unique
+        | length' <<< "$stats" 2>/dev/null) || count="N/A"
+
+    [[ "$count" =~ ^[0-9]+$ ]] || count="N/A"
+    echo "$count"
 }
 
 # =============================================================================
@@ -275,10 +307,14 @@ show_main_menu() {
     local status=$(echo "$status_info" | cut -d'|' -f2)
     local node_count=$(get_nodes_count 2>/dev/null || echo "0")
     local user_count=$(get_users_count 2>/dev/null || echo "0")
-    local online_count=$(get_online_users_count 2>/dev/null || echo "0")
+    local active_traffic_count=$(get_active_traffic_users_count 2>/dev/null || echo "N/A")
+    local active_traffic_display="${active_traffic_count}"
+    if [[ "$active_traffic_count" =~ ^[0-9]+$ ]]; then
+        active_traffic_display="${active_traffic_count}/${user_count}"
+    fi
 
     # 使用统一的UI函数
-    print_header "s-singbox 一键管理脚本 V1.0.0"
+    print_header "s-singbox 一键管理脚本 V${APP_VERSION}"
     echo ""
 
     print_section_start
@@ -288,7 +324,7 @@ show_main_menu() {
     print_menu_info "  运行状态" "${status}"
     print_menu_info "  用户数量" "${BLUE}${user_count}${NC}"
     print_menu_info "  节点总数" "${BLUE}${node_count}${NC}"
-    print_menu_info "  在线用户" "${GREEN}${online_count}${NC}/${BLUE}${user_count}${NC}"
+    print_menu_info "  有流量用户" "${GREEN}${active_traffic_display}${NC} ${GRAY}(本次运行)${NC}"
     print_section_end
     echo ""
 
@@ -309,6 +345,8 @@ show_main_menu() {
     print_divider
     print_menu_item "11" "脚本管理"
     print_menu_item "12" "关于脚本"
+    print_divider
+    print_menu_item "0" "退出程序"
     print_section_end
 
     print_nav_options "false" "false"
@@ -366,12 +404,16 @@ menu_core() {
                 echo ""
                 print_nav_options "true" "true"
 
-                log_choice=$(read_menu_choice "请选择 [0-3]")
+                local log_choice log_ret
+                log_choice=$(read_menu_choice "请选择 [1-3]")
+                log_ret=$?
+                [[ $log_ret -eq ${UI_MAIN_MENU:-98} ]] && return
+                [[ $log_ret -eq ${UI_BACK:-99} ]] && continue
+
                 case $log_choice in
                     1) echo ""; echo -e "${CYAN}实时日志(Ctrl+C退出):${NC}"; echo ""; journalctl -u sing-box -f -n 50 ;;
                     2) echo ""; echo -e "${CYAN}完整日志:${NC}"; echo ""; journalctl -u sing-box --no-pager | less ;;
                     3) echo ""; echo -e "${CYAN}错误日志:${NC}"; echo ""; journalctl -u sing-box -p err --no-pager | less ;;
-                    0) ;;
                     *) print_error "无效选择" ;;
                 esac
                 wait_for_input
@@ -574,8 +616,8 @@ handle_node_menu() {
                     else
                         print_error "无效的节点序号"
                     fi
+                    wait_for_input
                 fi
-                wait_for_input
                 ;;
             4) modify_node_config; wait_for_input ;;
             *)
@@ -613,6 +655,9 @@ menu_node_add() {
         print_menu_item "9" "HTTP" " - HTTP 代理"
         print_menu_item "10" "SOCKS" " - SOCKS5 代理"
         print_menu_item "11" "AnyTLS" " - 流量填充混淆（sing-box 1.12.0+）"
+        print_menu_item "12" "Hysteria v1" " - QUIC 高性能经典版"
+        print_menu_item "13" "ShadowTLS v3" " - TLS 流量伪装"
+        print_menu_item "14" "Snell v5/v6" " - sing-box 1.14.0+"
         print_section_end
 
         print_nav_options "true" "true"
@@ -627,6 +672,7 @@ menu_node_add() {
             q|Q)
                 menu_quick_setup
                 [[ $? -eq 98 ]] && return 98  # 传播返回主菜单
+                continue
                 ;;
             1) add_vless_node ;;
             2) add_vmess_node ;;
@@ -639,6 +685,9 @@ menu_node_add() {
             9) add_http_inbound_node ;;
             10) add_socks_inbound_node ;;
             11) add_anytls_node ;;
+            12) add_hysteria_node ;;
+            13) add_shadowtls_node ;;
+            14) add_snell_node ;;
             *) print_error "无效选择" ;;
         esac
 
@@ -687,9 +736,11 @@ handle_binding_menu() {
             1) bind_users_to_node_smart; wait_for_input ;;
             2) unbind_user_from_node; wait_for_input ;;
             3) batch_bind_users_to_node; wait_for_input ;;
-            4|5|6) show_user_node_bindings; wait_for_input ;;
-            7) log_info "清理空绑定功能待实现"; wait_for_input ;;
-            8) log_info "验证绑定功能待实现"; wait_for_input ;;
+            4) show_user_node_bindings all; wait_for_input ;;
+            5) show_user_node_bindings user; wait_for_input ;;
+            6) show_user_node_bindings node; wait_for_input ;;
+            7) clean_empty_bindings; wait_for_input ;;
+            8) validate_binding_integrity; wait_for_input ;;
             *)
                 print_error "无效选择"
                 sleep 1
@@ -708,7 +759,7 @@ handle_config_menu() {
         [[ $ret -eq 98 ]] && return  # 返回主菜单
 
         case "$choice" in
-            1) generate_singbox_config; wait_for_input ;;
+            1) generate_singbox_config && restart_sing-box; wait_for_input ;;
             2) show_config; wait_for_input ;;
             3)
                 if [[ -f "$SINGBOX_CONFIG" ]] && command -v sing-box &>/dev/null; then
@@ -744,7 +795,7 @@ handle_service_menu() {
         case "$choice" in
             1) start_singbox; wait_for_input ;;
             2) stop_singbox; wait_for_input ;;
-            3) restart_singbox; wait_for_input ;;
+            3) restart_sing-box; wait_for_input ;;
             4) reload_singbox; wait_for_input ;;
             *)
                 print_error "无效选择"
@@ -766,7 +817,7 @@ show_about() {
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
     echo -e "${YELLOW}脚本名称：${NC}s-singbox 一键管理脚本"
-    echo -e "${YELLOW}脚本版本：${NC}V1.0.0"
+    echo -e "${YELLOW}脚本版本：${NC}V${APP_VERSION}"
     echo ""
     echo -e "${YELLOW}功能简介：${NC}"
     echo -e "  ${GREEN}核心功能${NC}"
@@ -896,7 +947,6 @@ uninstall_complete() {
     if command -v apt-get &>/dev/null; then
         apt-get remove -y sing-box 2>/dev/null
         apt-get purge -y sing-box 2>/dev/null
-        apt-get autoremove -y 2>/dev/null
         uninstall_success=true
     elif command -v dnf &>/dev/null; then
         dnf remove -y sing-box 2>/dev/null
@@ -1069,6 +1119,7 @@ menu_script() {
 # =============================================================================
 
 main() {
+    local run_mode="${1:-}"
     # 先加载所有模块（必须在调用模块函数之前）
     source_modules
 
@@ -1078,15 +1129,44 @@ main() {
     # 初始化数据目录
     init_data_dir
 
+    # 防止交互管理和定时流量任务并发覆盖数据文件
+    if command -v flock >/dev/null 2>&1; then
+        exec {MANAGER_LOCK_FD}>"${DATA_DIR}/manager.lock"
+        if ! flock -n "$MANAGER_LOCK_FD"; then
+            print_error "已有管理或用户限制任务正在运行，请稍后重试"
+            return 1
+        fi
+    fi
+
+    # 异常退出后先恢复未完成事务，再补齐可能被回滚移除的空数据文件
+    if command -v recover_interrupted_transaction >/dev/null 2>&1; then
+        recover_interrupted_transaction || return 1
+        init_data_dir
+    fi
+
     # 初始化默认admin用户
     init_admin_user
 
-    log_info "sing-box 管理脚本启动 (V2.0.0)"
+    # 保存当前数据与配置作为运行时事务的回滚基线
+    if command -v initialize_runtime_state >/dev/null 2>&1; then
+        initialize_runtime_state
+    fi
+
+    if command -v ensure_user_limits_timer >/dev/null 2>&1 && [[ -f "$SINGBOX_SERVICE" && "$run_mode" != "--enforce-limits" ]]; then
+        ensure_user_limits_timer || print_warning "用户限制定时器初始化失败"
+    fi
+
+    if [[ "$run_mode" == "--enforce-limits" ]]; then
+        check_all_user_limits
+        return $?
+    fi
+
+    log_info "sing-box 管理脚本启动 (V${APP_VERSION})"
 
     # 主循环
     while true; do
         show_main_menu
-        read -p "请选择操作: " choice
+        read -r -p "请选择操作: " choice
 
         case "$choice" in
             1)
@@ -1162,4 +1242,4 @@ main() {
 }
 
 # 运行主程序
-main
+main "$@"

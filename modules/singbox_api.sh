@@ -8,7 +8,7 @@
 
 # API 配置
 if [[ -z "${SINGBOX_BIN:-}" ]]; then
-    SINGBOX_BIN="/usr/local/sing-box/sing-box"
+    SINGBOX_BIN="$(command -v sing-box 2>/dev/null || echo /usr/local/bin/sing-box)"
 fi
 readonly API_ADDR="127.0.0.1:10085"
 
@@ -116,7 +116,7 @@ api_disable_user() {
     fi
 
     # 获取用户的 email
-    local email=$(jq -r ".inbounds[].settings.clients[]? | select(.id == \"$uuid\" or .password) | .email" "$SINGBOX_CONFIG" | head -1)
+    local email=$(jq -r --arg uuid "$uuid" '.users[] | select(.id==$uuid) | (.username // .id)' "$USERS_FILE" | head -1)
 
     if [[ -z "$email" || "$email" == "null" ]]; then
         echo "错误: 无法找到用户的 email" >&2

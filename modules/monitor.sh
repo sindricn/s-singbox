@@ -60,42 +60,49 @@ show_traffic() {
         return 1
     fi
 
-    # 使用 sing-box API 获取统计信息
-    local api_port=10085
-    local api_addr="127.0.0.1:${api_port}"
-
-    # 检查API是否可用
-    if ! nc -z 127.0.0.1 "$api_port" 2>/dev/null; then
-        print_warning "API 服务未配置或未启动"
-        echo ""
-        echo "请确保配置文件中包含以下内容："
-        echo '  "api": {'
-        echo '    "tag": "api",'
-        echo '    "services": ["HandlerService", "StatsService"]'
-        echo '  }'
+    local bin stats api_addr="${SINGBOX_API_ADDR:-127.0.0.1:10085}"
+    if declare -f get_singbox_bin >/dev/null 2>&1; then
+        bin=$(get_singbox_bin)
+    else
+        bin=$(command -v sing-box)
+    fi
+    [[ -x "$bin" ]] || { print_error "sing-box 命令不可用"; return 1; }
+    if ! stats=$("$bin" api statsquery --server="$api_addr" -pattern "traffic" 2>/dev/null); then
+        print_error "无法连接 V2Ray Stats API: $api_addr"
+        print_info "请重新生成配置并确认 experimental.v2ray_api 已启用"
         return 1
     fi
+    echo "$stats" | jq -e '.stat | type == "array"' >/dev/null 2>&1 || {
+        print_error "Stats API 返回了无效数据"
+        return 1
+    }
 
     echo -e "${CYAN}总流量统计：${NC}"
     echo "----------------------------------------"
 
-    # 获取入站流量统计
-    local inbound_stats=$(curl -s "http://${api_addr}/stats" 2>/dev/null)
-
-    if [[ -n "$inbound_stats" ]]; then
-        echo "$inbound_stats" | jq -r '.stat[]? | select(.name | contains("inbound")) | "\(.name): 上行 \(.value.uplink|tonumber/1024/1024|floor)MB 下行 \(.value.downlink|tonumber/1024/1024|floor)MB"' 2>/dev/null
-    else
-        print_warning "无法获取流量统计"
-    fi
+    echo "$stats" | jq -r '
+        [.stat[]? | select(.name | startswith("inbound>>>"))
+         | (.name | split(">>>")) as $parts
+         | {name:$parts[1], direction:$parts[3], value:(.value // 0)}]
+        | group_by(.name)[]
+        | .[0].name as $name
+        | ([.[] | select(.direction=="uplink") | .value] | add // 0) as $up
+        | ([.[] | select(.direction=="downlink") | .value] | add // 0) as $down
+        | "\($name): 上行 \(($up/1048576*100|round)/100) MB  下行 \(($down/1048576*100|round)/100) MB"' 2>/dev/null
 
     echo ""
     echo -e "${CYAN}用户流量统计：${NC}"
     echo "----------------------------------------"
 
-    # 获取用户流量统计
-    if [[ -n "$inbound_stats" ]]; then
-        echo "$inbound_stats" | jq -r '.stat[]? | select(.name | contains("user")) | "\(.name): 上行 \(.value.uplink|tonumber/1024/1024|floor)MB 下行 \(.value.downlink|tonumber/1024/1024|floor)MB"' 2>/dev/null
-    fi
+    echo "$stats" | jq -r '
+        [.stat[]? | select(.name | startswith("user>>>"))
+         | (.name | split(">>>")) as $parts
+         | {name:$parts[1], direction:$parts[3], value:(.value // 0)}]
+        | group_by(.name)[]
+        | .[0].name as $name
+        | ([.[] | select(.direction=="uplink") | .value] | add // 0) as $up
+        | ([.[] | select(.direction=="downlink") | .value] | add // 0) as $down
+        | "\($name): 上行 \(($up/1048576*100|round)/100) MB  下行 \(($down/1048576*100|round)/100) MB"' 2>/dev/null
 }
 
 # 查看连接信息
@@ -259,10 +266,19 @@ reset_traffic() {
         return 0
     fi
 
-    # 重启服务以重置统计
-    systemctl restart sing-box
+    begin_data_transaction || return 1
+    if ! update_json_file '(.users[]?.traffic_used_gb) = "0"' "$USERS_FILE" \
+        || ! atomic_write_json "${TRAFFIC_COUNTERS_FILE:-${DATA_DIR}/traffic_counters.json}" '{"users":{}}'; then
+        rollback_data_transaction
+        print_error "流量账本重置失败，操作已回滚"
+        return 1
+    fi
+    if ! restart_sing-box; then
+        print_error "服务重启失败，流量账本已回滚"
+        return 1
+    fi
 
-    print_success "流量统计已重置"
+    print_success "运行时统计和持久化流量账本已重置"
 }
 
 # 导出统计数据
@@ -272,15 +288,27 @@ export_stats() {
 
     local export_file="${DATA_DIR}/stats_export_$(date +%Y%m%d_%H%M%S).json"
 
-    # 获取统计数据
-    local api_port=10085
-    local stats=$(curl -s "http://127.0.0.1:${api_port}/stats" 2>/dev/null)
-
-    if [[ -n "$stats" ]]; then
-        echo "$stats" | jq . > "$export_file"
-        print_success "统计数据已导出到: $export_file"
+    local bin stats api_addr="${SINGBOX_API_ADDR:-127.0.0.1:10085}" temp_file
+    if declare -f get_singbox_bin >/dev/null 2>&1; then
+        bin=$(get_singbox_bin)
     else
+        bin=$(command -v sing-box)
+    fi
+    if [[ ! -x "$bin" ]] || ! stats=$("$bin" api statsquery --server="$api_addr" -pattern "traffic" 2>/dev/null) \
+        || ! echo "$stats" | jq -e '.stat | type == "array"' >/dev/null 2>&1; then
         print_error "无法获取统计数据"
         return 1
     fi
+
+    temp_file=$(mktemp "${DATA_DIR}/stats_export_XXXXXX.json") || return 1
+    if ! jq -n --arg exported_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson runtime "$stats" \
+        --slurpfile users "$USERS_FILE" --slurpfile ledger "${TRAFFIC_COUNTERS_FILE:-${DATA_DIR}/traffic_counters.json}" \
+        '{exported_at:$exported_at,runtime:$runtime,users:($users[0] // {users:[]}),traffic_ledger:($ledger[0] // {users:{}})}' \
+        > "$temp_file" || ! mv "$temp_file" "$export_file"; then
+        rm -f "$temp_file"
+        print_error "统计数据导出失败"
+        return 1
+    fi
+    chmod 600 "$export_file"
+    print_success "统计数据已导出到: $export_file"
 }

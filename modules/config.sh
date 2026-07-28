@@ -5,25 +5,49 @@
 # 功能：查看配置、编辑配置、备份配置、恢复配置、验证配置
 #================================================================
 
+archive_members_are_safe() {
+    local archive="$1" member type
+    while IFS= read -r member; do
+        member="${member#./}"
+        [[ -z "$member" ]] && continue
+        if [[ "$member" == /* || "$member" =~ ^[A-Za-z]: || "$member" =~ (^|/)\.\.(/|$) ]]; then
+            return 1
+        fi
+    done < <(tar -tzf "$archive" 2>/dev/null) || return 1
+
+    while IFS= read -r type; do
+        [[ "$type" == "-" || "$type" == "d" ]] || return 1
+    done < <(tar -tvzf "$archive" 2>/dev/null | cut -c1) || return 1
+}
+
+# 激活待验证配置但暂不提交数据事务，供还需要执行防火墙等后置步骤的流程使用。
+activate_singbox_pending_transaction() {
+    systemctl restart sing-box >/dev/null 2>&1 || return 1
+    sleep 2
+    systemctl is-active --quiet sing-box
+}
+
 # 清理所有Hysteria2端口跳跃的iptables规则
 cleanup_all_port_hopping_rules() {
-    if [[ ! -f "$NODES_FILE" ]]; then
+    local nodes_source="${1:-$NODES_FILE}"
+    if [[ ! -f "$nodes_source" ]]; then
         return 0
     fi
 
-    local hy2_nodes=$(jq -r '.nodes[] | select(.protocol == "hysteria2") | select(.extra.port_hopping != null and .extra.port_hopping != "") | "\(.port)|\(.extra.port_hopping)"' "$NODES_FILE" 2>/dev/null)
+    local hy2_nodes=$(jq -r '.nodes[] | select(.protocol == "hysteria2") | select(.extra.port_hopping != null and .extra.port_hopping != "") | "\(.port)|\(.extra.port_hopping)"' "$nodes_source" 2>/dev/null)
 
     if [[ -z "$hy2_nodes" ]]; then
         return 0
     fi
 
+    local failed=0
     while IFS='|' read -r port port_hopping; do
         [[ -z "$port" || -z "$port_hopping" ]] && continue
         echo "  清理端口 $port 的跳跃规则: $port_hopping"
 
         # 调用清理函数（如果存在）
         if declare -f cleanup_port_hopping_rules >/dev/null 2>&1; then
-            cleanup_port_hopping_rules "$port" "$port_hopping"
+            cleanup_port_hopping_rules "$port" "$port_hopping" || failed=1
         else
             # 手动清理
             local start_port=$(echo "$port_hopping" | cut -d':' -f1)
@@ -31,10 +55,22 @@ cleanup_all_port_hopping_rules() {
             local main_interface=$(ip route | grep default | head -n1 | awk '{print $5}')
             [[ -z "$main_interface" ]] && main_interface="eth0"
 
-            iptables -t nat -D PREROUTING -i "$main_interface" -p udp --dport ${start_port}:${end_port} -j REDIRECT --to-ports $port 2>/dev/null
-            ip6tables -t nat -D PREROUTING -i "$main_interface" -p udp --dport ${start_port}:${end_port} -j REDIRECT --to-ports $port 2>/dev/null
+            iptables -t nat -D PREROUTING -i "$main_interface" -p udp --dport "${start_port}:${end_port}" -j REDIRECT --to-ports "$port" 2>/dev/null || true
+            ip6tables -t nat -D PREROUTING -i "$main_interface" -p udp --dport "${start_port}:${end_port}" -j REDIRECT --to-ports "$port" 2>/dev/null || true
         fi
     done <<< "$hy2_nodes"
+
+    return "$failed"
+}
+
+restore_port_hopping_rules_from_nodes_file() {
+    local nodes_source="$1" port port_hopping
+    [[ -f "$nodes_source" ]] || return 0
+    declare -f apply_port_hopping_rules >/dev/null 2>&1 || return 1
+    while IFS='|' read -r port port_hopping; do
+        [[ -n "$port" && -n "$port_hopping" ]] || continue
+        apply_port_hopping_rules "$port" "$port_hopping" || return 1
+    done < <(jq -r '.nodes[] | select(.protocol == "hysteria2") | select(.extra.port_hopping != null and .extra.port_hopping != "") | "\(.port)|\(.extra.port_hopping)"' "$nodes_source" 2>/dev/null)
 }
 
 # 查看当前配置
@@ -113,9 +149,11 @@ backup_config() {
         print_success "配置已备份到: $backup_file"
 
         # 保留最近10个备份
-        local backup_count=$(ls -1 "$backup_dir"/config_*.json 2>/dev/null | wc -l)
-        if [[ $backup_count -gt 10 ]]; then
-            ls -t "$backup_dir"/config_*.json | tail -n +11 | xargs rm -f
+        local backups=()
+        mapfile -t backups < <(find "$backup_dir" -maxdepth 1 -type f -name 'config_*.json' -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2-)
+        if [[ ${#backups[@]} -gt 10 ]]; then
+            local old_backups=("${backups[@]:10}")
+            rm -f -- "${old_backups[@]}"
             print_info "已清理旧备份文件"
         fi
     else
@@ -211,12 +249,12 @@ validate_config() {
 
     # 使用 sing-box 内置验证
     if command -v sing-box &>/dev/null; then
-        if sing-box test -config "$SINGBOX_CONFIG" >/dev/null 2>&1; then
+        if sing-box check -c "$SINGBOX_CONFIG" >/dev/null 2>&1; then
             print_success "配置验证通过"
             return 0
         else
             print_error "配置验证失败"
-            sing-box test -config "$SINGBOX_CONFIG"
+            sing-box check -c "$SINGBOX_CONFIG"
             return 1
         fi
     else
@@ -240,15 +278,39 @@ export_config() {
     # 创建临时目录
     local temp_dir=$(mktemp -d)
 
-    # 复制配置文件
-    cp "$SINGBOX_CONFIG" "${temp_dir}/"
-    cp "$USERS_FILE" "${temp_dir}/" 2>/dev/null
-    cp "$NODES_FILE" "${temp_dir}/" 2>/dev/null
+    if [[ ! -f "$SINGBOX_CONFIG" ]] || ! cp -- "$SINGBOX_CONFIG" "${temp_dir}/config.json"; then
+        rm -rf -- "$temp_dir"
+        print_error "主配置不存在或无法复制"
+        return 1
+    fi
+
+    local data_file
+    for data_file in users.json nodes.json node_users.json outbounds.json traffic_counters.json \
+        subscriptions.json subscription_metadata.json port_hopping.json domains.json; do
+        [[ ! -f "${DATA_DIR}/${data_file}" ]] || cp -- "${DATA_DIR}/${data_file}" "${temp_dir}/${data_file}" || {
+            rm -rf -- "$temp_dir"
+            print_error "复制数据文件失败: $data_file"
+            return 1
+        }
+    done
+    if [[ -d "$SUBSCRIPTION_DIR" ]]; then
+        mkdir -p "${temp_dir}/subscriptions"
+        cp -a "$SUBSCRIPTION_DIR/." "${temp_dir}/subscriptions/" || {
+            rm -rf -- "$temp_dir"
+            print_error "复制订阅文件失败"
+            return 1
+        }
+    fi
 
     # 打包
-    tar -czf "$export_file" -C "$temp_dir" . 2>/dev/null
+    if ! tar -czf "$export_file" -C "$temp_dir" . 2>/dev/null; then
+        rm -rf -- "$temp_dir"
+        print_error "导出打包失败"
+        return 1
+    fi
 
-    rm -rf "$temp_dir"
+    rm -rf -- "$temp_dir"
+    chmod 600 "$export_file" 2>/dev/null || true
 
     if [[ -f "$export_file" ]]; then
         print_success "配置已导出到: $export_file"
@@ -270,53 +332,95 @@ import_config() {
         return 1
     fi
 
-    print_warning "导入前将备份当前配置"
-    backup_config
+    print_warning "导入将以事务方式替换现有配置和数据"
+    begin_data_transaction || return 1
 
-    # 检查文件类型
+    local temp_dir=""
     if [[ "$import_file" == *.tar.gz ]]; then
-        # 解压导入
-        local temp_dir=$(mktemp -d)
-        tar -xzf "$import_file" -C "$temp_dir" 2>/dev/null
-
-        if [[ -f "${temp_dir}/config.json" ]]; then
-            cp "${temp_dir}/config.json" "$SINGBOX_CONFIG"
+        if ! archive_members_are_safe "$import_file"; then
+            print_error "归档包含绝对路径、上级路径、链接或损坏成员，拒绝导入"
+            rollback_data_transaction
+            return 1
+        fi
+        temp_dir=$(mktemp -d) || { rollback_data_transaction; return 1; }
+        if ! tar -xzf "$import_file" -C "$temp_dir" --no-same-owner --no-same-permissions; then
+            rm -rf -- "$temp_dir"
+            rollback_data_transaction
+            print_error "解压导入文件失败"
+            return 1
         fi
 
-        if [[ -f "${temp_dir}/users.json" ]]; then
-            cp "${temp_dir}/users.json" "$USERS_FILE"
+        [[ -f "${temp_dir}/config.json" ]] || {
+            rm -rf -- "$temp_dir"; rollback_data_transaction
+            print_error "归档缺少 config.json"; return 1
+        }
+
+        local spec filename root_key
+        for spec in 'users.json|users' 'nodes.json|nodes' 'node_users.json|bindings' \
+            'outbounds.json|outbounds' 'traffic_counters.json|users' 'subscriptions.json|subscriptions' \
+            'subscription_metadata.json|subscriptions' 'port_hopping.json|configs' 'domains.json|domains'; do
+            IFS='|' read -r filename root_key <<< "$spec"
+            [[ ! -f "${temp_dir}/${filename}" ]] || jq -e --arg key "$root_key" \
+                'type == "object" and has($key)' "${temp_dir}/${filename}" >/dev/null 2>&1 || {
+                rm -rf -- "$temp_dir"; rollback_data_transaction
+                print_error "导入数据结构无效: $filename"; return 1
+            }
+        done
+        jq -e 'type == "object"' "${temp_dir}/config.json" >/dev/null 2>&1 || {
+            rm -rf -- "$temp_dir"; rollback_data_transaction
+            print_error "config.json 不是有效对象"; return 1
+        }
+
+        cp -- "${temp_dir}/config.json" "$SINGBOX_CONFIG" || { rm -rf -- "$temp_dir"; rollback_data_transaction; return 1; }
+        for filename in users.json nodes.json node_users.json outbounds.json traffic_counters.json \
+            subscriptions.json subscription_metadata.json port_hopping.json domains.json; do
+            [[ ! -f "${temp_dir}/${filename}" ]] || cp -- "${temp_dir}/${filename}" "${DATA_DIR}/${filename}" || {
+                rm -rf -- "$temp_dir"; rollback_data_transaction; return 1
+            }
+        done
+        if [[ -d "${temp_dir}/subscriptions" ]]; then
+            rm -rf -- "$SUBSCRIPTION_DIR"
+            mkdir -p "$SUBSCRIPTION_DIR" || { rm -rf -- "$temp_dir"; rollback_data_transaction; return 1; }
+            cp -a "${temp_dir}/subscriptions/." "$SUBSCRIPTION_DIR/" || { rm -rf -- "$temp_dir"; rollback_data_transaction; return 1; }
         fi
-
-        if [[ -f "${temp_dir}/nodes.json" ]]; then
-            cp "${temp_dir}/nodes.json" "$NODES_FILE"
-        fi
-
-        rm -rf "$temp_dir"
-
     elif [[ "$import_file" == *.json ]]; then
-        # JSON 配置文件
-        if jq empty "$import_file" 2>/dev/null; then
-            cp "$import_file" "$SINGBOX_CONFIG"
-        else
-            print_error "无效的 JSON 文件"
+        if ! jq -e 'type == "object"' "$import_file" >/dev/null 2>&1 || ! cp -- "$import_file" "$SINGBOX_CONFIG"; then
+            rollback_data_transaction
+            print_error "无效的 JSON 配置文件"
             return 1
         fi
     else
+        rollback_data_transaction
         print_error "不支持的文件格式"
         return 1
     fi
 
-    # 验证并重启
-    if validate_config; then
-        print_success "配置导入成功"
-        read -p "是否重启服务? [Y/n]: " restart_confirm
-        if [[ "$restart_confirm" != "n" && "$restart_confirm" != "N" ]]; then
-            restart_sing-box
-        fi
-    else
-        print_error "导入的配置无效"
-        restore_config
+    if ! validate_config; then
+        [[ -z "$temp_dir" ]] || rm -rf -- "$temp_dir"
+        rollback_data_transaction
+        print_error "导入的配置无效，已恢复原数据"
+        return 1
     fi
+
+    read -p "是否立即重启服务应用导入? [Y/n]: " restart_confirm
+    if [[ "$restart_confirm" != "n" && "$restart_confirm" != "N" ]]; then
+        if ! activate_singbox_pending_transaction; then
+            [[ -z "$temp_dir" ]] || rm -rf -- "$temp_dir"
+            rollback_data_transaction
+            systemctl restart sing-box >/dev/null 2>&1 || true
+            print_error "服务启动失败，导入已回滚"
+            return 1
+        fi
+    fi
+    if ! commit_data_transaction; then
+        [[ -z "$temp_dir" ]] || rm -rf -- "$temp_dir"
+        rollback_data_transaction
+        print_error "导入快照提交失败，已回滚"
+        return 1
+    fi
+    [[ -z "$temp_dir" ]] || rm -rf -- "$temp_dir"
+    chmod 600 "$DATA_DIR"/*.json "$SINGBOX_CONFIG" 2>/dev/null || true
+    print_success "配置导入成功"
 }
 
 # 重置用户数据
@@ -340,36 +444,37 @@ reset_users() {
         return 0
     fi
 
-    # 备份
-    if [[ -f "$USERS_FILE" ]]; then
-        cp "$USERS_FILE" "${USERS_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    begin_data_transaction || return 1
+    printf '%s\n' '{"users":[]}' > "$USERS_FILE" \
+        && printf '%s\n' '{"bindings":[]}' > "$NODE_USERS_FILE" \
+        && printf '%s\n' '{"subscriptions":[]}' > "${DATA_DIR}/subscriptions.json" \
+        && printf '%s\n' '{"subscriptions":[]}' > "${DATA_DIR}/subscription_metadata.json" \
+        && printf '%s\n' '{"users":{}}' > "${DATA_DIR}/traffic_counters.json" || {
+        rollback_data_transaction; print_error "重置用户数据写入失败"; return 1
+    }
+    find "$SUBSCRIPTION_DIR" -mindepth 1 -maxdepth 1 -delete 2>/dev/null || {
+        rollback_data_transaction; print_error "清理订阅文件失败"; return 1
+    }
+    if ! declare -f init_admin_user >/dev/null 2>&1 || ! init_admin_user; then
+        rollback_data_transaction; print_error "重新创建 admin 用户失败"; return 1
     fi
-    if [[ -f "$NODE_USERS_FILE" ]]; then
-        cp "$NODE_USERS_FILE" "${NODE_USERS_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    local admin_id
+    admin_id=$(jq -r '.users[] | select(.username == "admin") | .id' "$USERS_FILE" 2>/dev/null | head -1)
+    if [[ -z "$admin_id" ]] || ! jq --arg user "$admin_id" \
+        '{bindings:[.nodes[] | select(.port != null) | {port:(.port|tostring),protocol:(.protocol // "unknown"),users:[$user]}]}' \
+        "$NODES_FILE" > "${NODE_USERS_FILE}.tmp" || ! mv "${NODE_USERS_FILE}.tmp" "$NODE_USERS_FILE"; then
+        rm -f "${NODE_USERS_FILE}.tmp"
+        rollback_data_transaction
+        print_error "重新绑定 admin 到保留节点失败"
+        return 1
     fi
-
-    # 重置用户数据
-    echo '{"users":[]}' > "$USERS_FILE"
-    echo '{"bindings":[]}' > "$NODE_USERS_FILE"
-
-    # 重新初始化admin用户
-    if declare -f init_admin_user &>/dev/null; then
-        init_admin_user
+    if ! generate_singbox_config || ! activate_singbox_pending_transaction || ! commit_data_transaction; then
+        rollback_data_transaction
+        systemctl restart sing-box >/dev/null 2>&1 || true
+        print_error "重置应用失败，已恢复原数据"
+        return 1
     fi
-
-    # 重新生成配置
-    if declare -f generate_singbox_config &>/dev/null; then
-        generate_singbox_config
-    fi
-
-    # 重启服务
-    if declare -f restart_sing-box &>/dev/null; then
-        restart_sing-box
-    else
-        systemctl restart sing-box
-    fi
-
-    print_success "用户数据已重置"
+    print_success "用户、绑定、订阅和流量账本已重置"
 }
 
 # 重置节点数据
@@ -393,37 +498,34 @@ reset_nodes() {
         return 0
     fi
 
-    # 清理Hysteria2端口跳跃的iptables规则
-    print_info "清理端口跳跃规则..."
-    cleanup_all_port_hopping_rules
-    print_success "端口跳跃规则清理完成"
-
-    # 备份
-    print_info "备份节点数据..."
-    if [[ -f "$NODES_FILE" ]]; then
-        cp "$NODES_FILE" "${NODES_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    begin_data_transaction || return 1
+    printf '%s\n' '{"nodes":[]}' > "$NODES_FILE" \
+        && printf '%s\n' '{"bindings":[]}' > "$NODE_USERS_FILE" \
+        && printf '%s\n' '{"subscriptions":[]}' > "${DATA_DIR}/subscriptions.json" \
+        && printf '%s\n' '{"subscriptions":[]}' > "${DATA_DIR}/subscription_metadata.json" \
+        && printf '%s\n' '{"configs":[]}' > "${DATA_DIR}/port_hopping.json" || {
+        rollback_data_transaction; print_error "重置节点数据写入失败"; return 1
+    }
+    find "$SUBSCRIPTION_DIR" -mindepth 1 -maxdepth 1 -delete 2>/dev/null || {
+        rollback_data_transaction; print_error "清理订阅文件失败"; return 1
+    }
+    if ! generate_singbox_config || ! activate_singbox_pending_transaction; then
+        rollback_data_transaction; systemctl restart sing-box >/dev/null 2>&1 || true
+        print_error "新配置无法激活，节点重置已回滚"; return 1
     fi
-    if [[ -f "$NODE_USERS_FILE" ]]; then
-        cp "$NODE_USERS_FILE" "${NODE_USERS_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    if ! cleanup_all_port_hopping_rules "${RUNTIME_TX_DIR}/nodes.json"; then
+        rollback_data_transaction
+        restore_port_hopping_rules_from_nodes_file "${RUNTIME_STATE_DIR}/nodes.json" || true
+        systemctl restart sing-box >/dev/null 2>&1 || true
+        print_error "端口跳跃规则清理失败，节点重置已回滚"; return 1
     fi
-
-    # 重置节点数据
-    echo '{"nodes":[]}' > "$NODES_FILE"
-    echo '{"bindings":[]}' > "$NODE_USERS_FILE"
-
-    # 重新生成配置
-    if declare -f generate_singbox_config &>/dev/null; then
-        generate_singbox_config
+    if ! commit_data_transaction; then
+        rollback_data_transaction
+        restore_port_hopping_rules_from_nodes_file "${RUNTIME_STATE_DIR}/nodes.json" || true
+        systemctl restart sing-box >/dev/null 2>&1 || true
+        print_error "节点重置提交失败，已回滚"; return 1
     fi
-
-    # 重启服务
-    if declare -f restart_sing-box &>/dev/null; then
-        restart_sing-box
-    else
-        systemctl restart sing-box
-    fi
-
-    print_success "节点数据已重置"
+    print_success "节点、绑定、订阅和端口跳跃配置已重置"
 }
 
 # 重置所有数据
@@ -447,49 +549,50 @@ reset_all_data() {
         return 0
     fi
 
-    # 清理Hysteria2端口跳跃的iptables规则
-    print_info "清理端口跳跃规则..."
-    cleanup_all_port_hopping_rules
-    print_success "端口跳跃规则清理完成"
-
-    # 备份所有数据
-    print_info "备份现有数据..."
-    if [[ -f "$USERS_FILE" ]]; then
-        cp "$USERS_FILE" "${USERS_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    begin_data_transaction || return 1
+    printf '%s\n' '{"users":[]}' > "$USERS_FILE" \
+        && printf '%s\n' '{"nodes":[]}' > "$NODES_FILE" \
+        && printf '%s\n' '{"bindings":[]}' > "$NODE_USERS_FILE" \
+        && printf '%s\n' '{"outbounds":[],"endpoints":[]}' > "${DATA_DIR}/outbounds.json" \
+        && printf '%s\n' '{"users":{}}' > "${DATA_DIR}/traffic_counters.json" \
+        && printf '%s\n' '{"subscriptions":[]}' > "${DATA_DIR}/subscriptions.json" \
+        && printf '%s\n' '{"subscriptions":[]}' > "${DATA_DIR}/subscription_metadata.json" \
+        && printf '%s\n' '{"configs":[]}' > "${DATA_DIR}/port_hopping.json" \
+        && printf '%s\n' '{"domains":[],"certificates":[]}' > "${DATA_DIR}/domains.json" \
+        && printf '%s\n' '{"auths":[]}' > "${DATA_DIR}/cf_auths.json" || {
+        rollback_data_transaction; print_error "重置数据写入失败"; return 1
+    }
+    rm -f -- "${DATA_DIR}/default_domain.txt" "${DATA_DIR}/server_domain.txt" "${DATA_DIR}/host_domain.txt"
+    find "$SUBSCRIPTION_DIR" -mindepth 1 -maxdepth 1 -delete 2>/dev/null || {
+        rollback_data_transaction; print_error "清理订阅文件失败"; return 1
+    }
+    if ! declare -f init_admin_user >/dev/null 2>&1 || ! init_admin_user; then
+        rollback_data_transaction; print_error "重新创建 admin 用户失败"; return 1
     fi
-    if [[ -f "$NODES_FILE" ]]; then
-        cp "$NODES_FILE" "${NODES_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
-    fi
-    if [[ -f "$NODE_USERS_FILE" ]]; then
-        cp "$NODE_USERS_FILE" "${NODE_USERS_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
-    fi
-    if [[ -f "$SINGBOX_CONFIG" ]]; then
-        cp "$SINGBOX_CONFIG" "${SINGBOX_CONFIG}.backup.$(date +%Y%m%d_%H%M%S)"
-    fi
-
-    # 重置所有数据文件
-    echo '{"users":[]}' > "$USERS_FILE"
-    echo '{"nodes":[]}' > "$NODES_FILE"
-    echo '{"bindings":[]}' > "$NODE_USERS_FILE"
-
-    # 重新初始化admin用户
-    if declare -f init_admin_user &>/dev/null; then
-        init_admin_user
-    fi
-
-    # 创建默认配置
-    if declare -f create_default_config &>/dev/null; then
-        create_default_config
-    fi
-
-    # 重启服务
-    if declare -f restart_sing-box &>/dev/null; then
-        restart_sing-box
+    if declare -f generate_singbox_config >/dev/null 2>&1; then
+        generate_singbox_config || { rollback_data_transaction; return 1; }
+    elif declare -f create_default_config >/dev/null 2>&1; then
+        create_default_config || { rollback_data_transaction; return 1; }
     else
-        systemctl restart sing-box
+        rollback_data_transaction; print_error "缺少配置生成函数"; return 1
     fi
-
-    print_success "所有数据已重置"
+    if ! activate_singbox_pending_transaction; then
+        rollback_data_transaction; systemctl restart sing-box >/dev/null 2>&1 || true
+        print_error "重置后的配置无法启动，已恢复原数据"; return 1
+    fi
+    if ! cleanup_all_port_hopping_rules "${RUNTIME_TX_DIR}/nodes.json"; then
+        rollback_data_transaction
+        restore_port_hopping_rules_from_nodes_file "${RUNTIME_STATE_DIR}/nodes.json" || true
+        systemctl restart sing-box >/dev/null 2>&1 || true
+        print_error "端口跳跃规则清理失败，完整重置已回滚"; return 1
+    fi
+    if ! commit_data_transaction; then
+        rollback_data_transaction
+        restore_port_hopping_rules_from_nodes_file "${RUNTIME_STATE_DIR}/nodes.json" || true
+        systemctl restart sing-box >/dev/null 2>&1 || true
+        print_error "完整重置提交失败，已回滚"; return 1
+    fi
+    print_success "所有运行数据已重置（证书文件和程序工具链保留）"
 }
 
 # 配置优化建议

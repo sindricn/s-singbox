@@ -8,8 +8,13 @@
 set -e
 umask 077
 
-# 默认分支配置
-DEFAULT_BRANCH="main"
+# 当前安装入口所属分支。dev/install.sh 必须默认安装 dev，避免在线执行时
+# 因无法从进程替换文件描述符反推出 curl URL 而错误回退到 main。
+DEFAULT_BRANCH="dev"
+
+# 在后续给 BRANCH 赋值前保留调用方显式传入的环境变量。
+# 推荐使用 S_SINGBOX_BRANCH；同时兼容已有的 BRANCH 用法。
+INSTALL_BRANCH_OVERRIDE="${S_SINGBOX_BRANCH:-${BRANCH:-}}"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -191,8 +196,8 @@ if [[ ! -f "${SCRIPT_DIR}/singbox-manager.sh" || ! -d "${SCRIPT_DIR}/modules" ]]
 
     # 分支选择优先级：
     # 1. 命令行参数 $1
-    # 2. 本地git仓库的当前分支（如果存在）
-    # 3. 环境变量 BRANCH
+    # 2. 环境变量 S_SINGBOX_BRANCH（兼容 BRANCH）
+    # 3. 本地git仓库的当前分支（如果存在）
     # 4. 脚本内定义的 DEFAULT_BRANCH
     BRANCH=""
 
@@ -200,6 +205,10 @@ if [[ ! -f "${SCRIPT_DIR}/singbox-manager.sh" || ! -d "${SCRIPT_DIR}/modules" ]]
     if [[ -n "$1" ]]; then
         BRANCH="$1"
         print_info "使用命令行参数指定的分支: $BRANCH"
+    # 使用调用方显式指定的环境变量
+    elif [[ -n "$INSTALL_BRANCH_OVERRIDE" ]]; then
+        BRANCH="$INSTALL_BRANCH_OVERRIDE"
+        print_info "使用环境变量指定的分支: $BRANCH"
     # 检测本地git仓库
     elif [[ -d "${SCRIPT_DIR}/.git" ]]; then
         BRANCH=$(git -C "${SCRIPT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
@@ -208,10 +217,15 @@ if [[ ! -f "${SCRIPT_DIR}/singbox-manager.sh" || ! -d "${SCRIPT_DIR}/modules" ]]
         fi
     fi
 
-    # 如果都未检测到，使用环境变量或脚本默认分支
+    # 如果都未检测到，使用当前安装入口的默认分支
     if [[ -z "$BRANCH" ]]; then
-        BRANCH="${BRANCH:-$DEFAULT_BRANCH}"
+        BRANCH="$DEFAULT_BRANCH"
         print_info "使用默认分支: $BRANCH"
+    fi
+
+    if ! git check-ref-format --branch "$BRANCH" >/dev/null 2>&1; then
+        print_error "无效的安装分支名称: $BRANCH"
+        exit 1
     fi
 
     # 备份现有数据
@@ -225,7 +239,13 @@ if [[ ! -f "${SCRIPT_DIR}/singbox-manager.sh" || ! -d "${SCRIPT_DIR}/modules" ]]
     # 下载项目文件
     print_info "下载最新代码 (分支: $BRANCH)..."
     if git clone --depth=1 --branch "$BRANCH" https://github.com/sindricn/s-singbox.git "$TEMP_DIR"; then
-        print_success "代码下载完成 (分支: $BRANCH)"
+        CLONED_BRANCH=$(git -C "$TEMP_DIR" branch --show-current 2>/dev/null || echo "")
+        CLONED_COMMIT=$(git -C "$TEMP_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+        if [[ "$CLONED_BRANCH" != "$BRANCH" ]]; then
+            print_error "下载分支校验失败: 期望 $BRANCH，实际 ${CLONED_BRANCH:-unknown}"
+            exit 1
+        fi
+        print_success "代码下载完成 (分支: $CLONED_BRANCH, 提交: $CLONED_COMMIT)"
     else
         print_error "下载失败，请检查网络连接或分支名称是否正确"
         print_info "提示: 可用分支通常为 main 或 dev"
@@ -327,6 +347,11 @@ echo -e "${GREEN}=====================================${NC}"
 echo ""
 echo -e "${CYAN}安装信息：${NC}"
 echo -e "  安装目录: ${YELLOW}${SCRIPT_DIR}${NC}"
+if [[ -d "${SCRIPT_DIR}/.git" ]]; then
+    INSTALLED_BRANCH=$(git -C "$SCRIPT_DIR" branch --show-current 2>/dev/null || echo "unknown")
+    INSTALLED_COMMIT=$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    echo -e "  代码版本: ${YELLOW}${INSTALLED_BRANCH}@${INSTALLED_COMMIT}${NC}"
+fi
 echo -e "  全局命令: ${YELLOW}s-singbox${NC} / ${YELLOW}singbox-manager${NC}"
 echo ""
 echo -e "${CYAN}快速开始：${NC}"

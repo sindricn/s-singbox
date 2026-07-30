@@ -1078,7 +1078,7 @@ menu_script() {
                     echo ""
                     print_info "解决方案："
                     echo "  方案1 (推荐): 重新使用在线安装"
-                    echo -e "    ${YELLOW}bash <(curl -fsSL https://raw.githubusercontent.com/sindricn/s-singbox/main/install.sh)${NC}"
+                    echo -e "    ${YELLOW}bash <(curl -fsSL https://raw.githubusercontent.com/sindricn/s-singbox/dev/install.sh) dev${NC}"
                     echo ""
                     echo "  方案2: 手动下载最新版本"
                     echo -e "    ${YELLOW}https://github.com/sindricn/s-singbox${NC}"

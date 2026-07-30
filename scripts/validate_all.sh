@@ -154,6 +154,12 @@ echo "[5/8] 管理调用链检查"
 ! grep -RIn 'generate_sing-box_config' "$ROOT_DIR/modules" "$ROOT_DIR/singbox-manager.sh" --include='*.sh'
 ! grep -RInE 'eval[[:space:]]+"?\$acme_cmd|sing-box[[:space:]]+test' "$ROOT_DIR/modules" "$ROOT_DIR/scripts" "$ROOT_DIR/singbox-manager.sh" --include='*.sh' --exclude='*.bak' --exclude='*.backup*' --exclude='*_backup*' --exclude='validate_all.sh'
 ! grep -RInE '(curl|wget)[^|]*\|[[:space:]]*(ba)?sh' "$ROOT_DIR/modules" "$ROOT_DIR/scripts" "$ROOT_DIR/install.sh" "$ROOT_DIR/singbox-manager.sh" --include='*.sh' --exclude='*.bak' --exclude='*.backup*' --exclude='*_backup*' --exclude='validate_all.sh'
+
+# dev 在线安装入口必须克隆 dev，并保留显式环境变量覆盖，防止 process substitution 静默回退 main。
+grep -q '^DEFAULT_BRANCH="dev"$' "$ROOT_DIR/install.sh"
+grep -q 'INSTALL_BRANCH_OVERRIDE="${S_SINGBOX_BRANCH:-${BRANCH:-}}"' "$ROOT_DIR/install.sh"
+grep -q 'git check-ref-format --branch "$BRANCH"' "$ROOT_DIR/install.sh"
+grep -q 'CLONED_BRANCH.*branch --show-current' "$ROOT_DIR/install.sh"
 grep -q 'os.path.commonpath' "$ROOT_DIR/modules/subscription.sh"
 grep -q 'sing-box-subscription.service' "$ROOT_DIR/modules/subscription.sh"
 grep -q 'sing-box-subscription-health.timer' "$ROOT_DIR/modules/subscription.sh"

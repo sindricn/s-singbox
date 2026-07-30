@@ -82,13 +82,25 @@ WireGuard 按 sing-box 1.11+ 的新结构保存到顶层 `endpoints`，Selector/
 
 ### 一键安装
 
-**推荐安装方式**（使用 curl）：
+**稳定版**（main）：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/sindricn/s-singbox/main/install.sh)
 ```
 
-或使用 wget：
+**开发验证版**（dev）：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/sindricn/s-singbox/dev/install.sh) dev
+```
+
+也可以通过环境变量明确指定分支：
+
+```bash
+S_SINGBOX_BRANCH=dev bash <(curl -fsSL https://raw.githubusercontent.com/sindricn/s-singbox/dev/install.sh)
+```
+
+使用 wget 安装稳定版：
 
 ```bash
 bash <(wget -qO- https://raw.githubusercontent.com/sindricn/s-singbox/main/install.sh)

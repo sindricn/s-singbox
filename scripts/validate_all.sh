@@ -32,6 +32,7 @@ grep -q 'with_v2ray_api' "$ROOT_DIR/modules/zz_singbox_114.sh"
 echo "[3/8] 14 协议配置生成矩阵"
 export RED='' GREEN='' YELLOW='' BLUE='' CYAN='' GRAY='' NC=''
 export LOG_FILE="$TMP_DIR/manager.log" LOG_LEVEL=3
+export SINGBOX_SKIP_KERNEL_PREFLIGHT=1
 SINGBOX_DIR="$TMP_DIR/etc/sing-box"
 SINGBOX_CONFIG="$SINGBOX_DIR/config.json"
 SINGBOX_SERVICE="$TMP_DIR/sing-box.service"
@@ -184,6 +185,8 @@ grep -q 'sync_runtime_subscriptions' "$ROOT_DIR/modules/zz_singbox_114.sh"
 grep -q 'api statsquery' "$ROOT_DIR/modules/monitor.sh"
 ! grep -q 'http://.*\/stats' "$ROOT_DIR/modules/monitor.sh"
 grep -q '当前 sing-box 内核缺少 with_v2ray_api' "$ROOT_DIR/modules/zz_singbox_114.sh"
+grep -q 'ensure_singbox_stats_capability' "$ROOT_DIR/modules/zz_singbox_114.sh"
+grep -q 'ensure_singbox_stats_capability' "$ROOT_DIR/singbox-manager.sh"
 grep -q 'warn_if_stats_capability_missing' "$ROOT_DIR/singbox-manager.sh"
 grep -q 'ensure_subscription_server_runtime' "$ROOT_DIR/singbox-manager.sh"
 (
@@ -274,6 +277,7 @@ grep -q 'OnUnitActiveSec=1min' "$TMP_DIR/sing-box-user-limits.timer"
 
 echo "[6/8] UI 交互回归检查"
 bash "$ROOT_DIR/scripts/validate_ui.sh" "$TMP_DIR"
+bash "$ROOT_DIR/scripts/validate_kernel_preflight.sh"
 if command -v python3 >/dev/null 2>&1; then
     bash "$ROOT_DIR/scripts/validate_subscription_server.sh"
 else

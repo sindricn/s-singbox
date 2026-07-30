@@ -366,7 +366,7 @@ menu_core() {
         print_menu_item "3" "停止 sing-box"
         print_menu_item "4" "重启 sing-box"
         print_menu_item "5" "卸载 sing-box"
-        print_menu_item "6" "更新 sing-box"
+        print_menu_item "6" "更新/修复定制内核"
         print_menu_item "7" "查看日志"
         print_menu_item "8" "查看版本"
         echo ""
@@ -630,6 +630,13 @@ handle_node_menu() {
 
 # 添加节点菜单（协议选择）
 menu_node_add() {
+    if declare -f ensure_singbox_stats_capability >/dev/null 2>&1 \
+        && ! ensure_singbox_stats_capability; then
+        print_error "节点创建已取消：sing-box 定制内核未就绪"
+        wait_for_input
+        return 1
+    fi
+
     while true; do
         clear
         print_header "添加节点"

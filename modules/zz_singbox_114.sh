@@ -29,9 +29,63 @@ warn_if_stats_capability_missing() {
     [[ -x "$bin" ]] || return 0
     if ! "$bin" version 2>/dev/null | grep -q 'with_v2ray_api'; then
         print_warning "当前 sing-box 内核缺少 with_v2ray_api，用户流量与最近活跃状态不可用"
-        print_info "请进入【sing-box 管理 → 更新 sing-box】安装定制内核"
+        print_info "创建或修改配置时可按提示自动安装定制内核"
         return 1
     fi
+}
+
+singbox_has_stats_capability() {
+    local bin
+    bin=$(get_singbox_bin)
+    [[ -x "$bin" ]] && "$bin" version 2>/dev/null | grep -q 'with_v2ray_api'
+}
+
+ensure_singbox_stats_capability() {
+    [[ "${SINGBOX_SKIP_KERNEL_PREFLIGHT:-0}" == "1" ]] && return 0
+    singbox_has_stats_capability && return 0
+
+    local bin answer="" version start_after_install=true
+    bin=$(get_singbox_bin)
+    if [[ -x "$bin" ]]; then
+        print_warning "检测到普通 sing-box 内核，缺少 with_v2ray_api 流量统计能力"
+    else
+        print_warning "尚未安装 sing-box 定制内核"
+    fi
+
+    case "${SINGBOX_AUTO_REPAIR_STATS_KERNEL:-prompt}" in
+        1|yes|true) answer="y" ;;
+        0|no|false) answer="n" ;;
+        *)
+            if [[ -t 0 ]]; then
+                echo -e "${YELLOW}脚本将从官方源码构建带 with_v2ray_api 的内核，首次执行可能需要数分钟。${NC}"
+                read -r -p "是否立即安装/修复定制内核并继续? [Y/n]: " answer
+                answer=${answer:-y}
+            else
+                print_error "非交互任务无法自动确认内核安装"
+                print_info "请运行 s-singbox，进入【sing-box 管理 → 更新/修复定制内核】"
+                return 1
+            fi
+            ;;
+    esac
+
+    if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+        print_error "当前配置需要带 with_v2ray_api 的 sing-box 定制内核"
+        print_info "可进入【sing-box 管理 → 更新/修复定制内核】后重试"
+        return 1
+    fi
+
+    version=$(resolve_singbox_version stable) || {
+        print_error "无法解析最新 sing-box 稳定版本"
+        return 1
+    }
+    print_info "正在自动修复 sing-box 定制内核（目标版本: v${version}）..."
+    [[ -f "$SINGBOX_CONFIG" ]] || start_after_install=false
+    build_and_install_singbox "$version" "$start_after_install" || return 1
+    if ! singbox_has_stats_capability; then
+        print_error "定制内核安装后能力校验仍未通过"
+        return 1
+    fi
+    print_success "with_v2ray_api 能力已就绪，继续原操作"
 }
 
 atomic_write_json() {
@@ -1373,6 +1427,7 @@ save_node_info() {
 }
 
 generate_singbox_config() {
+    ensure_singbox_stats_capability || return 1
     begin_data_transaction || {
         print_error "无法创建配置事务快照"
         return 1

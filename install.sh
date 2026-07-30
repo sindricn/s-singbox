@@ -353,6 +353,11 @@ if [[ -d "${SCRIPT_DIR}/.git" ]]; then
     echo -e "  代码版本: ${YELLOW}${INSTALLED_BRANCH}@${INSTALLED_COMMIT}${NC}"
 fi
 echo -e "  全局命令: ${YELLOW}s-singbox${NC} / ${YELLOW}singbox-manager${NC}"
+if command -v sing-box >/dev/null 2>&1 && ! sing-box version 2>/dev/null | grep -q 'with_v2ray_api'; then
+    echo -e "  内核状态: ${YELLOW}检测到普通内核，首次创建配置时将提示自动修复${NC}"
+elif ! command -v sing-box >/dev/null 2>&1; then
+    echo -e "  内核状态: ${YELLOW}尚未安装，首次创建配置时将提示自动安装${NC}"
+fi
 echo ""
 echo -e "${CYAN}快速开始：${NC}"
 echo ""
@@ -364,7 +369,7 @@ echo -e "     或"
 echo -e "     ${YELLOW}${SCRIPT_DIR}/singbox-manager.sh${NC}"
 echo ""
 echo -e "  2. 首次使用建议："
-echo -e "     - 安装 sing-box 内核"
+echo -e "     - 安装 sing-box 定制内核（节点创建时也可按提示自动安装）"
 echo -e "     - 添加节点"
 echo -e "     - 添加用户"
 echo -e "     - 生成订阅"

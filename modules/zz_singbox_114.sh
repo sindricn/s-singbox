@@ -400,6 +400,7 @@ generate_114_inbound() {
             fi ;;
         tuic)
             tls=$(generate_114_tls_server tls "$extra") || return 1
+            tls=$(echo "$tls" | jq '.alpn=["h3"]') || return 1
             base=$(echo "$base" | jq --argjson tls "$tls" --arg cc "$(echo "$extra" | jq -r '.congestion_control // "cubic"')" \
                 --argjson zrtt "$(echo "$extra" | jq -r '.zero_rtt_handshake // false')" \
                 '.tls=$tls | .congestion_control=$cc | .auth_timeout="3s" | .zero_rtt_handshake=$zrtt | .heartbeat="10s"') ;;
@@ -992,7 +993,7 @@ subscription_ss_password() {
 }
 
 generate_share_link_smart() {
-    local user_id=$1 ignored=${2:-} node=$3 user protocol host uri_host port name password uuid extra security transport insecure query method ss_password
+    local user_id=$1 ignored=${2:-} node=$3 user protocol host uri_host port name password uuid extra security transport insecure insecure_flag query method ss_password
     user=$(get_subscription_user "$user_id")
     [[ -n "$user" ]] || return 1
     [[ "$(echo "$node" | jq -r '.enabled // true')" == "true" ]] || return 1
@@ -1004,11 +1005,13 @@ generate_share_link_smart() {
     password=$(echo "$user" | jq -r '.password'); uuid=$(echo "$user" | jq -r '.id')
     extra=$(echo "$node" | jq -c '.extra // {}'); security=$(echo "$node" | jq -r '.security // "none"'); transport=$(echo "$node" | jq -r '.transport // "tcp"')
     insecure=$(node_tls_insecure "$extra")
+    [[ "$insecure" == true ]] && insecure_flag=1 || insecure_flag=0
     case "$protocol" in
         vless)
             query="encryption=none&security=$security&type=$transport"
             [[ "$security" == reality ]] && query+="&flow=xtls-rprx-vision&sni=$(urlencode "$(echo "$extra" | jq -r '.server_names[0] // .tls_domain')")&fp=chrome&pbk=$(urlencode "$(echo "$extra" | jq -r '.public_key')")&sid=$(urlencode "$(echo "$extra" | jq -r '.short_ids[0] // ""')")"
-            [[ "$security" == tls ]] && query+="&sni=$(urlencode "$(echo "$extra" | jq -r '.tls_domain')")&allowInsecure=$insecure"
+            [[ "$security" == tls ]] && query+="&sni=$(urlencode "$(echo "$extra" | jq -r '.tls_domain')")&allowInsecure=$insecure_flag"
+            [[ "$transport" == tcp ]] && query+="&headerType=none"
             [[ "$transport" == ws ]] && query+="&path=$(urlencode "$(echo "$extra" | jq -r '.ws_path // "/"')")&host=$(urlencode "$(echo "$extra" | jq -r '.ws_host // ""')")"
             [[ "$transport" == grpc ]] && query+="&serviceName=$(urlencode "$(echo "$extra" | jq -r '.grpc_service // "grpc"')")"
             [[ "$transport" == http ]] && query+="&path=$(urlencode "$(echo "$extra" | jq -r '.http_path // "/"')")&host=$(urlencode "$(echo "$extra" | jq -r '.http_host // ""')")"
@@ -1049,7 +1052,8 @@ generate_share_link_smart() {
             [[ "$snell_client_version" != "6" ]] || query+="&mode=$(urlencode "$(echo "$extra" | jq -r '.mode // "default"')")"
             echo "snell://$(urlencode "$(echo "$extra" | jq -r '.psk')")@${uri_host}:${port}?${query}#$(urlencode "$name")" ;;
         tuic)
-            echo "tuic://${uuid}:$(urlencode "$password")@${uri_host}:${port}?sni=$(urlencode "$(echo "$extra" | jq -r '.tls_domain')")&congestion_control=$(urlencode "$(echo "$extra" | jq -r '.congestion_control // "cubic"')")&allow_insecure=${insecure}#$(urlencode "$name")" ;;
+            query="sni=$(urlencode "$(echo "$extra" | jq -r '.tls_domain')")&alpn=h3&congestion_control=$(urlencode "$(echo "$extra" | jq -r '.congestion_control // "cubic"')")&udp_relay_mode=native&allow_insecure=${insecure_flag}&zero_rtt_handshake=$([[ "$(echo "$extra" | jq -r '.zero_rtt_handshake // false')" == true ]] && echo 1 || echo 0)&heartbeat=10s"
+            echo "tuic://${uuid}:$(urlencode "$password")@${uri_host}:${port}?${query}#$(urlencode "$name")" ;;
         naive)
             echo "naive+https://$(urlencode "$(echo "$user" | jq -r '.username')"):$(urlencode "$password")@${uri_host}:${port}#$(urlencode "$name")" ;;
         anytls)
@@ -1063,10 +1067,11 @@ generate_share_link_smart() {
 }
 
 client_tls_for_node() {
-    local node=$1 extra security insecure tls server sni
-    extra=$(echo "$node" | jq -c '.extra // {}'); security=$(echo "$node" | jq -r '.security // "none"'); insecure=$(node_tls_insecure "$extra")
+    local node=$1 extra security protocol insecure tls server sni
+    extra=$(echo "$node" | jq -c '.extra // {}'); security=$(echo "$node" | jq -r '.security // "none"'); protocol=$(echo "$node" | jq -r '.protocol'); insecure=$(node_tls_insecure "$extra")
     sni=$(echo "$extra" | jq -r '.tls_domain // .server_names[0] // ""')
     tls=$(jq -n --arg sni "$sni" --argjson insecure "$insecure" '{enabled:true,server_name:$sni,insecure:$insecure}')
+    [[ "$protocol" == tuic ]] && tls=$(echo "$tls" | jq '.alpn=["h3"]')
     if [[ "$security" == reality ]]; then
         tls=$(echo "$tls" | jq --arg pk "$(echo "$extra" | jq -r '.public_key')" --arg sid "$(echo "$extra" | jq -r '.short_ids[0] // ""')" '.reality={enabled:true,public_key:$pk,short_id:$sid} | .utls={enabled:true,fingerprint:"chrome"}')
     fi
@@ -1105,7 +1110,9 @@ node_to_singbox_outbound() {
             else
                 out=$(echo "$out" | jq --arg mode "$(echo "$extra" | jq -r '.mode // "default"')" '.mode=$mode')
             fi ;;
-        tuic) out=$(jq -n --arg tag "$tag" --arg server "$host" --argjson port "$port" --arg uuid "$uuid" --arg password "$password" --arg cc "$(echo "$extra" | jq -r '.congestion_control // "cubic"')" '{type:"tuic",tag:$tag,server:$server,server_port:$port,uuid:$uuid,password:$password,congestion_control:$cc}') ;;
+        tuic) out=$(jq -n --arg tag "$tag" --arg server "$host" --argjson port "$port" --arg uuid "$uuid" --arg password "$password" --arg cc "$(echo "$extra" | jq -r '.congestion_control // "cubic"')" \
+            --argjson zrtt "$(echo "$extra" | jq -r '.zero_rtt_handshake // false')" \
+            '{type:"tuic",tag:$tag,server:$server,server_port:$port,uuid:$uuid,password:$password,congestion_control:$cc,udp_relay_mode:"native",zero_rtt_handshake:$zrtt,heartbeat:"10s"}') ;;
         naive) out=$(jq -n --arg tag "$tag" --arg server "$host" --argjson port "$port" --arg username "$username" --arg password "$password" '{type:"naive",tag:$tag,server:$server,server_port:$port,username:$username,password:$password}') ;;
         anytls) out=$(jq -n --arg tag "$tag" --arg server "$host" --argjson port "$port" --arg password "$password" '{type:"anytls",tag:$tag,server:$server,server_port:$port,password:$password}') ;;
         http) out=$(jq -n --arg tag "$tag" --arg server "$host" --argjson port "$port" --arg username "$username" --arg password "$password" '{type:"http",tag:$tag,server:$server,server_port:$port,username:$username,password:$password}') ;;

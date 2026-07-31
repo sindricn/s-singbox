@@ -2796,6 +2796,9 @@ add_tuic_node() {
     if ! save_node_and_bind_admin "tuic" "$port" "udp" "tls" "$extra_config" "tuic-$port"; then
         return 1
     fi
+    local admin_info="$ADMIN_BIND_RESULT"
+    local admin_uuid admin_password admin_username
+    IFS='|' read -r admin_uuid admin_password admin_username <<< "$admin_info"
 
     # 生成配置
     if ! generate_singbox_config || ! restart_sing-box; then
@@ -2810,6 +2813,8 @@ add_tuic_node() {
     echo "  拥塞控制: $congestion_control"
     echo "  0-RTT: $zero_rtt"
     echo ""
+
+    generate_and_show_node_link "$port" "$admin_uuid" "$admin_username"
 }
 
 # ============================================================================

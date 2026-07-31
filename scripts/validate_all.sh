@@ -186,6 +186,19 @@ jq -e '.outbounds[] | select(.type=="vmess") | (.alter_id == 7 and .transport.ty
 jq -e '.outbounds[] | select(.type=="trojan") | (.transport.type == "grpc" and .transport.service_name == "trojan-grpc")' "$TMP_DIR/client.json" >/dev/null
 jq -e '.outbounds[] | select(.type=="hysteria") | (.auth_str == "fixture-p@ss:#?/+" and .up_mbps == 100 and .tls.server_name == "example.com")' "$TMP_DIR/client.json" >/dev/null
 jq -e '.outbounds[] | select(.type=="shadowtls") | (.version == 3 and .password == "fixture-p@ss:#?/+" and .tls.server_name == "example.com")' "$TMP_DIR/client.json" >/dev/null
+jq -e '.outbounds[] | select(.type=="tuic") | (.udp_relay_mode == "native" and .zero_rtt_handshake == false and .heartbeat == "10s" and .tls.alpn == ["h3"] and .tls.insecure == true)' "$TMP_DIR/client.json" >/dev/null
+
+vless_node=$(jq -c '.nodes[] | select(.protocol=="vless")' "$NODES_FILE")
+vless_link=$(generate_share_link_smart "059032a9-7d40-4a96-9bb1-36823d848068" "" "$vless_node")
+[[ "$vless_link" == *'allowInsecure=1'* && "$vless_link" == *'type=ws'* && "$vless_link" == *'path=%2Fws'* ]]
+
+tuic_node=$(jq -c '.nodes[] | select(.protocol=="tuic")' "$NODES_FILE")
+tuic_link=$(generate_share_link_smart "059032a9-7d40-4a96-9bb1-36823d848068" "" "$tuic_node")
+[[ "$tuic_link" == *'alpn=h3'* && "$tuic_link" == *'udp_relay_mode=native'* && "$tuic_link" == *'allow_insecure=1'* && "$tuic_link" == *'zero_rtt_handshake=0'* ]]
+
+if [[ -n "${SINGBOX_VALIDATION_BIN:-}" && -x "$SINGBOX_VALIDATION_BIN" ]]; then
+    "$SINGBOX_VALIDATION_BIN" check -c "$TMP_DIR/client.json"
+fi
 
 hy2_node=$(jq -c '.nodes[] | select(.protocol=="hysteria2")' "$NODES_FILE")
 hy2_link=$(generate_share_link_smart "059032a9-7d40-4a96-9bb1-36823d848068" "" "$hy2_node")
@@ -274,9 +287,13 @@ tunnel_node='{"port":"21001","tunnel_domain":"https://[2001:db8::8]:8443/proxy?t
     get_subscription_domain_hint() { echo 'global.example.com'; }
     get_public_ip() { echo '203.0.113.10'; }
     node_with_address='{"extra":{"server_address":"node.example.com","tls_domain":"sni.example.com"}}'
-    legacy_node='{"extra":{"tls_domain":"sni.example.com"}}'
+    legacy_tls_node='{"security":"tls","extra":{"tls_domain":"sni.example.com"}}'
+    plain_node='{"security":"none","extra":{}}'
+    reality_node='{"security":"reality","extra":{"tls_domain":"www.example.com"}}'
     [[ "$(resolve_subscription_host "$node_with_address")" == node.example.com ]]
-    [[ "$(resolve_subscription_host "$legacy_node")" == global.example.com ]]
+    [[ "$(resolve_subscription_host "$legacy_tls_node")" == global.example.com ]]
+    [[ "$(resolve_subscription_host "$plain_node")" == 203.0.113.10 ]]
+    [[ "$(resolve_subscription_host "$reality_node")" == 203.0.113.10 ]]
 )
 (
     domain_dir="$TMP_DIR/domain-choice"

@@ -360,14 +360,25 @@ resolve_subscription_host() {
         [[ "$host" == "null" ]] && host=""
     fi
 
-    # 优先3: 使用全局配置的服务器域名
+    # Reality 的 SNI 是伪装目标，连接地址必须直连服务器，不能回退到可能
+    # 开启 CDN 代理的全局域名。无 TLS 节点也优先使用公网 IP，避免订阅域名
+    # 被用作普通 TCP/UDP 节点地址。
+    if [[ -z "$host" && "$security" == "reality" ]]; then
+        host=$(get_public_ip 2>/dev/null || true)
+        [[ -n "$host" ]] || return 1
+    fi
+
+    if [[ -z "$host" && "$security" == "none" ]]; then
+        host=$(get_public_ip 2>/dev/null || true)
+    fi
+
+    # TLS 节点以及公网 IP 获取失败的旧节点，才使用全局服务器域名兜底。
     if [[ -z "$host" ]]; then
         host=$(get_subscription_domain_hint)
     fi
 
-    # 优先4: 使用公网 IP
     if [[ -z "$host" ]]; then
-        host=$(get_public_ip)
+        host=$(get_public_ip 2>/dev/null || true)
     fi
 
     # TLS/SNI 可能只是伪装域名，不能作为连接地址兜底；绝不生成 localhost 或错误网站地址。

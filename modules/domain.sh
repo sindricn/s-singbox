@@ -27,6 +27,22 @@ is_reality_handshake_domain_compatible() {
     esac
 }
 
+# A successful TLS connection already proves that DNS resolution works.  Do
+# not add a second dependency on host/dig here: minimal server installations
+# often have OpenSSL and getent but no bind-utils/dnsutils package.
+measure_reality_domain_latency() {
+    local domain="${1:-}" started finished
+    [[ -n "$domain" ]] || return 1
+    is_reality_handshake_domain_compatible "$domain" || return 2
+    command -v openssl >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1 || return 3
+
+    started=$(date +%s%3N) || return 1
+    timeout 3 openssl s_client -tls1_3 -connect "$domain:443" -servername "$domain" \
+        </dev/null >/dev/null 2>&1 || return 1
+    finished=$(date +%s%3N) || return 1
+    echo $((finished - started))
+}
+
 # 初始化域名数据文件
 init_domain_file() {
     if [[ ! -f "$DOMAIN_FILE" ]]; then
@@ -143,32 +159,21 @@ test_best_reality_domains() {
     echo ""
 
     for domain in "${domains[@]}"; do
-        ((count++))
+        ((count+=1))
 
-        # 记录开始时间（毫秒）
-        local t1=$(date +%s%3N)
+        local latency=""
+        if latency=$(measure_reality_domain_latency "$domain"); then
+            echo "$latency $domain" >> "$temp_file"
+            ((success_count+=1))
 
-        # 测试连接（超时2秒）
-        if timeout 2 openssl s_client -connect "$domain:443" -servername "$domain" </dev/null >/dev/null 2>&1; then
-            local t2=$(date +%s%3N)
-            local latency=$((t2 - t1))
-
-            # 验证 DNS 解析（静默模式）
-            if host "$domain" >/dev/null 2>&1; then
-                echo "$latency $domain" >> "$temp_file"
-                ((success_count++))
-
-                # 更新最佳域名
-                if [[ $latency -lt $best_latency ]]; then
-                    best_latency=$latency
-                    best_domain=$domain
-                fi
-
-                # 实时显示成功结果
-                printf "  ${GREEN}✔${NC} [%2d/%2d] %-35s ${CYAN}%4d ms${NC}\n" "$count" "$total" "$domain" "$latency"
+            if [[ $latency -lt $best_latency ]]; then
+                best_latency=$latency
+                best_domain=$domain
             fi
+
+            printf "  ${GREEN}✔${NC} [%2d/%2d] %-35s ${CYAN}%4d ms${NC}\n" "$count" "$total" "$domain" "$latency"
         else
-            printf "  ${RED}✘${NC} [%2d/%2d] %-35s ${YELLOW}超时${NC}\n" "$count" "$total" "$domain"
+            printf "  ${RED}✘${NC} [%2d/%2d] %-35s ${YELLOW}TLS 1.3 握手失败或超时${NC}\n" "$count" "$total" "$domain"
         fi
     done
 
@@ -262,9 +267,9 @@ test_custom_domain() {
 
     # DNS 解析测试
     print_info "1. DNS 解析测试..."
-    if host "$domain" &>/dev/null; then
-        local ip=$(host "$domain" | grep "has address" | awk '{print $4}' | head -1)
-        print_success "DNS 解析成功: $ip"
+    local resolved_ips=""
+    if resolved_ips=$(resolve_domain_ipv4 "$domain"); then
+        print_success "DNS 解析成功: $resolved_ips"
     else
         print_error "DNS 解析失败"
         return 1
@@ -272,11 +277,9 @@ test_custom_domain() {
 
     # TLS 握手测试
     print_info "2. TLS 握手测试..."
-    local t1=$(date +%s%3N)
+    local latency=""
 
-    if timeout 3 openssl s_client -connect "$domain:443" -servername "$domain" </dev/null &>/dev/null; then
-        local t2=$(date +%s%3N)
-        local latency=$((t2 - t1))
+    if latency=$(measure_reality_domain_latency "$domain"); then
         print_success "TLS 握手成功，延迟: ${latency}ms"
 
         # 询问是否设置为默认伪装域名
@@ -307,28 +310,12 @@ test_dns_resolution() {
     print_info "测试域名: $domain"
     echo ""
 
-    # 使用 host 命令测试
-    print_info "使用 host 命令测试..."
-    if host "$domain"; then
-        print_success "DNS 解析成功"
+    local resolved_ips=""
+    print_info "使用系统可用的 DNS 解析器测试..."
+    if resolved_ips=$(resolve_domain_ipv4 "$domain"); then
+        print_success "DNS 解析成功: $resolved_ips"
     else
         print_error "DNS 解析失败"
-    fi
-
-    echo ""
-
-    # 使用 dig 命令测试（如果可用）
-    if command -v dig &>/dev/null; then
-        print_info "使用 dig 命令测试..."
-        dig "$domain" +short
-    fi
-
-    echo ""
-
-    # 使用 nslookup 命令测试（如果可用）
-    if command -v nslookup &>/dev/null; then
-        print_info "使用 nslookup 命令测试..."
-        nslookup "$domain"
     fi
 }
 
@@ -352,9 +339,9 @@ add_custom_domain() {
 
     # 测试 DNS 解析
     print_info "测试 DNS 解析..."
-    if host "$domain" &>/dev/null; then
-        local ip=$(host "$domain" | grep "has address" | awk '{print $4}' | head -1)
-        print_success "DNS 解析成功: $ip"
+    local resolved_ips=""
+    if resolved_ips=$(resolve_domain_ipv4 "$domain"); then
+        print_success "DNS 解析成功: $resolved_ips"
     else
         print_warning "DNS 解析失败，但仍可添加"
     fi
@@ -684,33 +671,8 @@ manage_server_domain() {
                     echo -e "  服务器IP: ${YELLOW}$server_ip${NC}"
 
                     # 解析域名
-                    if ! command -v host &>/dev/null && ! command -v dig &>/dev/null && ! command -v nslookup &>/dev/null; then
-                        print_warning "未找到DNS查询工具，跳过DNS验证"
-                        read -p "是否继续设置域名？[y/N]: " confirm
-                        if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-                            print_info "已取消"
-                            read -p "按 Enter 键继续..."
-                            return 0
-                        fi
-                    else
-                        local domain_ip=""
-
-                        # 尝试使用host命令
-                        if command -v host &>/dev/null; then
-                            domain_ip=$(host "$domain" 2>/dev/null | grep "has address" | awk '{print $4}' | head -1)
-                        fi
-
-                        # 如果host失败，尝试dig
-                        if [[ -z "$domain_ip" ]] && command -v dig &>/dev/null; then
-                            domain_ip=$(dig +short "$domain" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
-                        fi
-
-                        # 如果dig也失败，尝试nslookup
-                        if [[ -z "$domain_ip" ]] && command -v nslookup &>/dev/null; then
-                            domain_ip=$(nslookup "$domain" 2>/dev/null | grep -A1 "Name:" | grep "Address:" | awk '{print $2}' | head -1)
-                        fi
-
-                        if [[ -z "$domain_ip" ]]; then
+                    local domain_ips=""
+                    if ! domain_ips=$(resolve_domain_ipv4 "$domain"); then
                             print_error "域名解析失败: $domain"
                             print_info "请确保："
                             echo "  1. 域名已添加DNS解析记录"
@@ -718,24 +680,23 @@ manage_server_domain() {
                             echo "  3. DNS服务器可正常访问"
                             read -p "按 Enter 键继续..."
                             return 1
-                        fi
-
-                        echo -e "  域名解析: ${YELLOW}$domain_ip${NC}"
-
-                        # 验证IP是否匹配
-                        if [[ "$domain_ip" != "$server_ip" ]]; then
-                            print_error "域名未指向本服务器"
-                            echo ""
-                            echo -e "${RED}DNS解析IP: $domain_ip${NC}"
-                            echo -e "${GREEN}服务器IP:   $server_ip${NC}"
-                            echo ""
-                            print_info "请将域名的A记录指向服务器IP: $server_ip"
-                            read -p "按 Enter 键继续..."
-                            return 1
-                        fi
-
-                        print_success "DNS解析验证通过"
                     fi
+
+                    echo -e "  域名解析: ${YELLOW}$domain_ips${NC}"
+
+                    # 任意 A 记录指向本机即可，兼容多 IP 域名。
+                    if [[ " $domain_ips " != *" $server_ip "* ]]; then
+                        print_error "域名未指向本服务器"
+                        echo ""
+                        echo -e "${RED}DNS解析IP: $domain_ips${NC}"
+                        echo -e "${GREEN}服务器IP:   $server_ip${NC}"
+                        echo ""
+                        print_info "请将域名的A记录指向服务器IP: $server_ip"
+                        read -p "按 Enter 键继续..."
+                        return 1
+                    fi
+
+                    print_success "DNS解析验证通过"
                 fi
 
                 # 保存域名
@@ -750,9 +711,9 @@ manage_server_domain() {
             if [[ -n "$domain" ]]; then
                 echo ""
                 print_info "测试域名解析: $domain"
-                if host "$domain" >/dev/null 2>&1; then
-                    local ip=$(host "$domain" | grep "has address" | awk '{print $4}' | head -1)
-                    print_success "解析成功: $domain -> $ip"
+                local resolved_ips=""
+                if resolved_ips=$(resolve_domain_ipv4 "$domain"); then
+                    print_success "解析成功: $domain -> $resolved_ips"
                 else
                     print_error "解析失败: $domain"
                 fi
@@ -790,21 +751,14 @@ auto_select_sni_domain() {
     local total=${#premium_domains[@]}
 
     for domain in "${premium_domains[@]}"; do
-        ((count++))
+        ((count+=1))
 
-        # 测试延迟
-        local t1=$(date +%s%3N)
-        if timeout 2 openssl s_client -connect "$domain:443" -servername "$domain" </dev/null >/dev/null 2>&1; then
-            local t2=$(date +%s%3N)
-            local latency=$((t2 - t1))
-
-            # 验证DNS解析
-            if host "$domain" >/dev/null 2>&1; then
-                echo "$latency $domain" >> "$temp_file"
-                printf "  ${GREEN}✔${NC} [%2d/%2d] %-35s ${CYAN}%4d ms${NC}\n" "$count" "$total" "$domain" "$latency"
-            fi
+        local latency=""
+        if latency=$(measure_reality_domain_latency "$domain"); then
+            echo "$latency $domain" >> "$temp_file"
+            printf "  ${GREEN}✔${NC} [%2d/%2d] %-35s ${CYAN}%4d ms${NC}\n" "$count" "$total" "$domain" "$latency"
         else
-            printf "  ${RED}✘${NC} [%2d/%2d] %-35s ${YELLOW}超时${NC}\n" "$count" "$total" "$domain"
+            printf "  ${RED}✘${NC} [%2d/%2d] %-35s ${YELLOW}TLS 1.3 握手失败或超时${NC}\n" "$count" "$total" "$domain"
         fi
     done
 
@@ -967,10 +921,10 @@ manage_sni_domain() {
             if [[ -n "$domain" ]]; then
                 echo ""
                 print_info "测试 TLS 握手: $domain"
-                if timeout 3 openssl s_client -connect "$domain:443" -servername "$domain" </dev/null >/dev/null 2>&1; then
-                    print_success "TLS 握手成功: $domain"
+                if measure_reality_domain_latency "$domain" >/dev/null; then
+                    print_success "TLS 1.3 握手成功: $domain"
                 else
-                    print_error "TLS 握手失败: $domain"
+                    print_error "TLS 1.3 握手失败或超时: $domain"
                 fi
             fi
             ;;

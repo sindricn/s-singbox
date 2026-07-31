@@ -130,6 +130,17 @@ source "$ROOT_DIR/modules/zzz_outbound_extended.sh"
 [[ "$(get_default_domain)" == "www.cloudflare.com" ]]
 ! is_reality_handshake_domain_compatible "www.microsoft.com"
 is_reality_handshake_domain_compatible "www.cloudflare.com"
+(
+    getent() { printf '%s\n' '203.0.113.10 STREAM fixture.example.com'; }
+    [[ "$(resolve_domain_ipv4 fixture.example.com)" == "203.0.113.10" ]]
+)
+(
+    date() { echo 1000; }
+    timeout() { shift; "$@"; }
+    openssl() { return 0; }
+    host() { return 127; }
+    [[ "$(measure_reality_domain_latency www.cloudflare.com)" == "0" ]]
+)
 
 generate_singbox_config
 jq -e '.inbounds | length == 13' "$SINGBOX_CONFIG" >/dev/null

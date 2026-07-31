@@ -48,20 +48,6 @@ get_configured_server_domain() {
     echo "$domain"
 }
 
-resolve_domain_ipv4() {
-    local domain="$1" result=""
-    if command -v getent >/dev/null 2>&1; then
-        result=$(getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ')
-    elif command -v dig >/dev/null 2>&1; then
-        result=$(dig +short A "$domain" 2>/dev/null | awk '/^[0-9]+(\.[0-9]+){3}$/' | sort -u | tr '\n' ' ')
-    elif command -v host >/dev/null 2>&1; then
-        result=$(host -t A "$domain" 2>/dev/null | awk '/has address/ {print $NF}' | sort -u | tr '\n' ' ')
-    fi
-    result=${result% }
-    [[ -n "$result" ]] || return 1
-    echo "$result"
-}
-
 # 返回 0 表示域名 A 记录包含本机公网 IPv4，1 表示明确不匹配，2 表示无法验证。
 check_server_domain_resolution() {
     local domain="$1" server_ip="" resolved_ips=""
@@ -688,25 +674,20 @@ quick_add_vless_reality() {
             echo ""
 
             for domain in "${test_domains[@]}"; do
-                local t1=$(date +%s%3N)
-                if timeout 2 openssl s_client -connect "$domain:443" -servername "$domain" </dev/null >/dev/null 2>&1; then
-                    local t2=$(date +%s%3N)
-                    local latency=$((t2 - t1))
+                local latency=""
+                if latency=$(measure_reality_domain_latency "$domain"); then
+                    echo "$latency $domain" >> "$temp_file"
+                    ((success_count+=1))
 
-                    if host "$domain" >/dev/null 2>&1; then
-                        echo "$latency $domain" >> "$temp_file"
-                        ((success_count++))
-
-                        if [[ $latency -lt $best_latency ]]; then
-                            best_latency=$latency
-                            best_domain=$domain
-                        fi
-
-                        # 实时显示测试结果
-                        printf "  ${GREEN}✔${NC} %-35s ${CYAN}%4d ms${NC}\n" "$domain" "$latency"
+                    if [[ $latency -lt $best_latency ]]; then
+                        best_latency=$latency
+                        best_domain=$domain
                     fi
+
+                    # 实时显示测试结果
+                    printf "  ${GREEN}✔${NC} %-35s ${CYAN}%4d ms${NC}\n" "$domain" "$latency"
                 else
-                    printf "  ${RED}✘${NC} %-35s ${YELLOW}超时${NC}\n" "$domain"
+                    printf "  ${RED}✘${NC} %-35s ${YELLOW}TLS 1.3 握手失败或超时${NC}\n" "$domain"
                 fi
             done
             echo ""
@@ -766,10 +747,10 @@ quick_add_vless_reality() {
 
             # 测试输入的域名
             print_info "测试域名连接性..."
-            if timeout 3 openssl s_client -connect "$dest_server:443" -servername "$dest_server" </dev/null >/dev/null 2>&1; then
-                print_success "域名测试通过"
+            if measure_reality_domain_latency "$dest_server" >/dev/null; then
+                print_success "域名 TLS 1.3 握手测试通过"
             else
-                print_warning "域名测试失败，但仍可继续使用"
+                print_warning "域名 TLS 1.3 握手失败或超时，不建议作为 Reality 伪装目标"
             fi
 
             server_names=$dest_server
@@ -3198,25 +3179,20 @@ quick_setup_vless_reality() {
             echo ""
 
             for domain in "${test_domains[@]}"; do
-                local t1=$(date +%s%3N)
-                if timeout 2 openssl s_client -connect "$domain:443" -servername "$domain" </dev/null >/dev/null 2>&1; then
-                    local t2=$(date +%s%3N)
-                    local latency=$((t2 - t1))
+                local latency=""
+                if latency=$(measure_reality_domain_latency "$domain"); then
+                    echo "$latency $domain" >> "$temp_file"
+                    ((success_count+=1))
 
-                    if host "$domain" >/dev/null 2>&1; then
-                        echo "$latency $domain" >> "$temp_file"
-                        ((success_count++))
-
-                        if [[ $latency -lt $best_latency ]]; then
-                            best_latency=$latency
-                            best_domain=$domain
-                        fi
-
-                        # 实时显示测试结果
-                        printf "  ${GREEN}✔${NC} %-35s ${CYAN}%4d ms${NC}\n" "$domain" "$latency"
+                    if [[ $latency -lt $best_latency ]]; then
+                        best_latency=$latency
+                        best_domain=$domain
                     fi
+
+                    # 实时显示测试结果
+                    printf "  ${GREEN}✔${NC} %-35s ${CYAN}%4d ms${NC}\n" "$domain" "$latency"
                 else
-                    printf "  ${RED}✘${NC} %-35s ${YELLOW}超时${NC}\n" "$domain"
+                    printf "  ${RED}✘${NC} %-35s ${YELLOW}TLS 1.3 握手失败或超时${NC}\n" "$domain"
                 fi
             done
             echo ""
@@ -3251,10 +3227,10 @@ quick_setup_vless_reality() {
 
             # 测试输入的域名
             print_info "测试域名连接性..."
-            if timeout 3 openssl s_client -connect "$dest_server:443" -servername "$dest_server" </dev/null >/dev/null 2>&1; then
-                print_success "域名测试通过"
+            if measure_reality_domain_latency "$dest_server" >/dev/null; then
+                print_success "域名 TLS 1.3 握手测试通过"
             else
-                print_warning "域名测试失败，但仍可继续使用"
+                print_warning "域名 TLS 1.3 握手失败或超时，不建议作为 Reality 伪装目标"
             fi
 
             server_names=$dest_server

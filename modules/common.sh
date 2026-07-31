@@ -522,6 +522,24 @@ sanitize_input() {
     echo "$input"
 }
 
+# 使用系统现有解析工具获取域名 IPv4，不强制依赖 dnsutils/bind-utils。
+resolve_domain_ipv4() {
+    local domain="${1:-}" result=""
+    [[ -n "$domain" ]] || return 1
+    if command -v getent >/dev/null 2>&1; then
+        result=$(getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ')
+    elif command -v dig >/dev/null 2>&1; then
+        result=$(dig +short A "$domain" 2>/dev/null | awk '/^[0-9]+(\.[0-9]+){3}$/' | sort -u | tr '\n' ' ')
+    elif command -v host >/dev/null 2>&1; then
+        result=$(host -t A "$domain" 2>/dev/null | awk '/has address/ {print $NF}' | sort -u | tr '\n' ' ')
+    elif command -v nslookup >/dev/null 2>&1; then
+        result=$(nslookup -type=A "$domain" 2>/dev/null | awk '/^Address: / {print $2}' | awk '/^[0-9]+(\.[0-9]+){3}$/' | sort -u | tr '\n' ' ')
+    fi
+    result=${result% }
+    [[ -n "$result" ]] || return 1
+    echo "$result"
+}
+
 # 获取公网 IP
 get_public_ip() {
     local ip="" endpoint

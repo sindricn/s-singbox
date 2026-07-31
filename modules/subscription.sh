@@ -530,7 +530,7 @@ generate_vless_reality_link_from_config() {
     fi
 
     # 构建VLESS Reality链接
-    local share_link="vless://${uuid}@${server_host}:${port}?encryption=none&flow=${flow}&security=reality&sni=${sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=tcp&headerType=none#$(urlencode "$remark")"
+    local share_link="vless://${uuid}@${server_host}:${port}?encryption=none&flow=${flow}&security=reality&sni=${sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=tcp&packetEncoding=xudp&headerType=none#$(urlencode "$remark")"
 
     if [[ "${DEBUG:-0}" == "1" ]]; then
         echo "  生成的链接: $share_link" >&2
@@ -566,7 +566,7 @@ generate_vless_tls_link_from_config() {
     server_host=$(resolve_subscription_host "$node_json")
 
     # 构建链接
-    local share_link="vless://${uuid}@${server_host}:${port}?encryption=none&security=tls&type=${transport}"
+    local share_link="vless://${uuid}@${server_host}:${port}?encryption=none&security=tls&type=${transport}&packetEncoding=xudp"
 
     if [[ -n "$tls_domain" ]]; then
         share_link+="&sni=${tls_domain}"
@@ -619,7 +619,7 @@ generate_vless_plain_link_from_config() {
         server_port=$port
     fi
 
-    local share_link="vless://${uuid}@${server_host}:${server_port}?encryption=none&security=${security}&type=${transport}"
+    local share_link="vless://${uuid}@${server_host}:${server_port}?encryption=none&security=${security}&type=${transport}&packetEncoding=xudp"
 
     # 添加 SNI（如果使用 TLS）
     if [[ "$security" == "tls" ]]; then
@@ -986,6 +986,7 @@ EOF
     uuid: ${user_id}
     network: tcp
     udp: true
+    packet-encoding: xudp
     tls: true
     flow: ${flow}
     servername: ${sni}
@@ -1009,6 +1010,7 @@ EOF
     port: ${port}
     uuid: ${user_id}
     udp: true
+    packet-encoding: xudp
     tls: true
     skip-cert-verify: false"
                     [[ -n "$sni" ]] && node_config="${node_config}
@@ -1038,7 +1040,8 @@ EOF
     server: ${node_host}
     port: ${port}
     uuid: ${user_id}
-    udp: true"
+    udp: true
+    packet-encoding: xudp"
                     if [[ "$transport" == "ws" && -n "$ws_path" ]]; then
                         node_config="${node_config}
     network: ws
@@ -1534,6 +1537,7 @@ generate_singbox_subscription_config() {
                             server: $server,
                             server_port: $port,
                             uuid: $uuid,
+                            packet_encoding: "xudp",
                             flow: $flow,
                             tls: {
                                 enabled: true,
@@ -1582,6 +1586,7 @@ generate_singbox_subscription_config() {
                                     server: $server,
                                     server_port: $port,
                                     uuid: $uuid,
+                                    packet_encoding: "xudp",
                                     tls: {
                                         enabled: true,
                                         server_name: $sni,
@@ -1609,6 +1614,7 @@ generate_singbox_subscription_config() {
                                     server: $server,
                                     server_port: $port,
                                     uuid: $uuid,
+                                    packet_encoding: "xudp",
                                     tls: {
                                         enabled: true,
                                         server_name: $sni,
@@ -1633,6 +1639,7 @@ generate_singbox_subscription_config() {
                                 server: $server,
                                 server_port: $port,
                                 uuid: $uuid,
+                                packet_encoding: "xudp",
                                 tls: {
                                     enabled: true,
                                     server_name: $sni,
@@ -1652,7 +1659,8 @@ generate_singbox_subscription_config() {
                             tag: $tag,
                             server: $server,
                             server_port: $port,
-                            uuid: $uuid
+                            uuid: $uuid,
+                            packet_encoding: "xudp"
                         }')
                 fi
                 ;;

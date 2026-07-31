@@ -906,7 +906,7 @@ generate_vless_reality_share() {
     fi
 
     # 构建分享链接
-    local share_link="vless://${uuid}@${uri_host}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=tcp&headerType=none#${email}"
+    local share_link="vless://${uuid}@${uri_host}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=tcp&packetEncoding=xudp&headerType=none#${email}"
 
     echo ""
     echo -e "${CYAN}分享链接：${NC}"

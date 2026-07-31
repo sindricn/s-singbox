@@ -172,6 +172,7 @@ SINGBOX_BIN="$TMP_DIR/mock-sing-box-stats"
 echo "[4/8] 订阅协议字段检查"
 nodes=$(jq -c '.nodes' "$NODES_FILE")
 generate_clash_config "$nodes" "059032a9-7d40-4a96-9bb1-36823d848068" > "$TMP_DIR/clash.yaml"
+grep -q 'type: vless.*packet-encoding: xudp' "$TMP_DIR/clash.yaml"
 grep -q 'ws-opts:.*path: "/vmess"' "$TMP_DIR/clash.yaml"
 grep -q 'alterId: 7' "$TMP_DIR/clash.yaml"
 grep -q 'grpc-opts:.*trojan-grpc' "$TMP_DIR/clash.yaml"
@@ -181,6 +182,7 @@ grep -q 'up: "100 Mbps"' "$TMP_DIR/clash.yaml"
 grep -q 'type: hysteria' "$TMP_DIR/clash.yaml"
 
 generate_singbox_subscription_config "$nodes" "059032a9-7d40-4a96-9bb1-36823d848068" > "$TMP_DIR/client.json"
+jq -e '.outbounds[] | select(.type=="vless") | .packet_encoding == "xudp"' "$TMP_DIR/client.json" >/dev/null
 jq -e '.outbounds[] | select(.type=="hysteria2") | (.server_ports == ["22000:22100"] and (has("server_port")|not) and .hop_interval == "30s" and .obfs.type == "salamander")' "$TMP_DIR/client.json" >/dev/null
 jq -e '.outbounds[] | select(.type=="vmess") | (.alter_id == 7 and .transport.type == "ws" and .transport.path == "/vmess")' "$TMP_DIR/client.json" >/dev/null
 jq -e '.outbounds[] | select(.type=="trojan") | (.transport.type == "grpc" and .transport.service_name == "trojan-grpc")' "$TMP_DIR/client.json" >/dev/null
@@ -190,7 +192,16 @@ jq -e '.outbounds[] | select(.type=="tuic") | (.udp_relay_mode == "native" and .
 
 vless_node=$(jq -c '.nodes[] | select(.protocol=="vless")' "$NODES_FILE")
 vless_link=$(generate_share_link_smart "059032a9-7d40-4a96-9bb1-36823d848068" "" "$vless_node")
-[[ "$vless_link" == *'allowInsecure=1'* && "$vless_link" == *'type=ws'* && "$vless_link" == *'path=%2Fws'* ]]
+[[ "$vless_link" == *'allowInsecure=1'* && "$vless_link" == *'type=ws'* && "$vless_link" == *'packetEncoding=xudp'* && "$vless_link" == *'path=%2Fws'* ]]
+
+reality_node='[{"name":"reality","protocol":"vless","port":"21014","transport":"tcp","security":"reality","extra":{"server_address":"203.0.113.10","server_names":["www.microsoft.com"],"public_key":"fixture-public-key","short_ids":["0123456789abcdef"]}}]'
+generate_clash_config "$reality_node" "059032a9-7d40-4a96-9bb1-36823d848068" > "$TMP_DIR/reality-clash.yaml"
+grep -q 'type: vless.*packet-encoding: xudp.*flow: xtls-rprx-vision.*reality-opts:' "$TMP_DIR/reality-clash.yaml"
+(
+    get_public_ip() { echo '203.0.113.10'; }
+    direct_reality_output=$(generate_vless_reality_share "059032a9-7d40-4a96-9bb1-36823d848068" "fixture" "21014" "www.microsoft.com" "fixture-public-key" "0123456789abcdef")
+    [[ "$direct_reality_output" == *'packetEncoding=xudp'* ]]
+)
 
 tuic_node=$(jq -c '.nodes[] | select(.protocol=="tuic")' "$NODES_FILE")
 tuic_link=$(generate_share_link_smart "059032a9-7d40-4a96-9bb1-36823d848068" "" "$tuic_node")

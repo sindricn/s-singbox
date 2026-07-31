@@ -1043,7 +1043,7 @@ generate_share_link_smart() {
     [[ "$insecure" == true ]] && insecure_flag=1 || insecure_flag=0
     case "$protocol" in
         vless)
-            query="encryption=none&security=$security&type=$transport"
+            query="encryption=none&security=$security&type=$transport&packetEncoding=xudp"
             [[ "$security" == reality ]] && query+="&flow=xtls-rprx-vision&sni=$(urlencode "$(echo "$extra" | jq -r '.server_names[0] // .tls_domain')")&fp=chrome&pbk=$(urlencode "$(echo "$extra" | jq -r '.public_key')")&sid=$(urlencode "$(echo "$extra" | jq -r '.short_ids[0] // ""')")"
             [[ "$security" == tls ]] && query+="&sni=$(urlencode "$(echo "$extra" | jq -r '.tls_domain')")&allowInsecure=$insecure_flag"
             [[ "$transport" == tcp ]] && query+="&headerType=none"
@@ -1122,7 +1122,7 @@ node_to_singbox_outbound() {
     tag="$(echo "$node" | jq -r '.name // .tag // .protocol')-${port}"; password=$(echo "$user" | jq -r '.password'); uuid=$(echo "$user" | jq -r '.id'); username=$(echo "$user" | jq -r '.username')
     extra=$(echo "$node" | jq -c '.extra // {}'); security=$(echo "$node" | jq -r '.security // "none"'); transport=$(echo "$node" | jq -r '.transport // "tcp"')
     case "$protocol" in
-        vless) out=$(jq -n --arg tag "$tag" --arg server "$host" --argjson port "$port" --arg uuid "$uuid" '{type:"vless",tag:$tag,server:$server,server_port:$port,uuid:$uuid}')
+        vless) out=$(jq -n --arg tag "$tag" --arg server "$host" --argjson port "$port" --arg uuid "$uuid" '{type:"vless",tag:$tag,server:$server,server_port:$port,uuid:$uuid,packet_encoding:"xudp"}')
             [[ "$security" == reality ]] && out=$(echo "$out" | jq '.flow="xtls-rprx-vision"') ;;
         vmess) out=$(jq -n --arg tag "$tag" --arg server "$host" --argjson port "$port" --arg uuid "$uuid" --arg security "$(echo "$extra" | jq -r '.cipher // "auto"')" --argjson alter_id "$(echo "$extra" | jq -r '.alter_id // 0')" '{type:"vmess",tag:$tag,server:$server,server_port:$port,uuid:$uuid,security:$security,alter_id:$alter_id}') ;;
         trojan) out=$(jq -n --arg tag "$tag" --arg server "$host" --argjson port "$port" --arg password "$password" '{type:"trojan",tag:$tag,server:$server,server_port:$port,password:$password}') ;;
@@ -1193,7 +1193,7 @@ generate_clash_config() {
             vless)
                 local clash_transport="$transport"
                 [[ "$clash_transport" == http ]] && clash_transport=h2
-                proxies+="  - {name: \"$name\", type: vless, server: \"$host\", port: $port, uuid: \"$uuid\", network: \"$clash_transport\", tls: $([[ "$security" == none ]] && echo false || echo true), udp: true"
+                proxies+="  - {name: \"$name\", type: vless, server: \"$host\", port: $port, uuid: \"$uuid\", network: \"$clash_transport\", tls: $([[ "$security" == none ]] && echo false || echo true), udp: true, packet-encoding: xudp"
                 [[ "$security" == reality ]] && proxies+=", flow: xtls-rprx-vision, servername: \"$(echo "$extra" | jq -r '.server_names[0]')\", reality-opts: {public-key: \"$(echo "$extra" | jq -r '.public_key')\", short-id: \"$(echo "$extra" | jq -r '.short_ids[0] // ""')\"}, client-fingerprint: chrome"
                 [[ "$security" == tls ]] && proxies+=", servername: \"$(echo "$extra" | jq -r '.tls_domain')\", skip-cert-verify: $insecure"
                 [[ "$transport" == ws ]] && proxies+=", ws-opts: {path: \"$(echo "$extra" | jq -r '.ws_path // "/"')\", headers: {Host: \"$(echo "$extra" | jq -r '.ws_host // ""')\"}}"

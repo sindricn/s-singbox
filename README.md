@@ -3,7 +3,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Shell](https://img.shields.io/badge/shell-bash-green.svg)](https://www.gnu.org/software/bash/)
 [![sing-box](https://img.shields.io/badge/sing--box-compatible-orange.svg)](https://sing-box.sagernet.org/)
-[![Version](https://img.shields.io/badge/version-V1.0.0-brightgreen.svg)](https://github.com/sindricn/s-singbox)
+[![Version](https://img.shields.io/badge/version-V1.1.0-brightgreen.svg)](https://github.com/sindricn/s-singbox)
 
 基于 sing-box 的开源代理服务管理脚本，提供完整的协议支持和用户管理能力。
 
@@ -185,18 +185,21 @@ bash scripts/validate_all.sh
 
 ## 📜 更新日志
 
-### V1.1.0 (2026-07-27)
+### V1.1.0 (2026-07-31)
 
-- 适配 sing-box 1.13.15 稳定版文档和配置 Schema
-- 使用带 `with_v2ray_api` 的官方源码定制构建
-- 完成 13 种稳定版入站协议、分享链接、Clash 和 SingBox 订阅支持
-- 移除 `sniff`、Xray `.settings.*`、旧安装路径和无关 systemd capabilities
-- 修复在线安装误判成功、更新无回滚、Shadowsocks 多用户和匿名 HTTP/SOCKS/Mixed 问题
-- 新增累计流量账本和完整验证脚本
-- 修复首次安装过早启动、绑定菜单参数错误和配置生成函数名不一致
-- 增加配置/数据/服务健康检查事务与最后可用快照回滚
-- 补齐 VMess/Trojan WS/gRPC、Hysteria2 混淆/带宽/端口跳跃订阅字段
-- 增加用户限制 systemd 定时器、并发锁、IPv6 URI 和完整 URL 编码
+本次版本全面适配 sing-box 1.13.15 稳定版，重点提升节点可用性、订阅兼容性和管理稳定性。
+
+- 完善 13 种入站协议及常用出站协议支持
+- 修复 VLESS Reality、TUIC 等节点连接问题
+- Clash 与 sing-box 订阅新增自动测速选择
+- 流量统计改为可选增强功能，不再影响节点创建
+- 完善服务器域名、节点连接地址和 Cloudflare 隧道逻辑
+- 增强配置检查、服务健康检查及失败自动回滚
+- 完善定制内核构建、进度提示和异常处理
+
+**已知问题：**
+
+- 用户在线状态和流量累计统计暂时不可用，将在后续版本修复。
 
 ### V1.0.0 (2025-11-25)
 

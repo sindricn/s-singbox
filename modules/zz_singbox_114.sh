@@ -945,13 +945,24 @@ resolve_tunnel_endpoint() {
 }
 
 resolve_subscription_host() {
-    local node=$1 host="" tunnel parsed
+    local node=$1 host="" tunnel parsed security
     tunnel=$(echo "$node" | jq -r '.tunnel_domain // ""')
     if [[ -n "$tunnel" && "$tunnel" != null ]]; then
         parsed=$(resolve_tunnel_endpoint "$tunnel") || return 1
         host=${parsed%|*}
     fi
     [[ -n "$host" ]] || host=$(echo "$node" | jq -r '.extra.server_address // ""')
+    security=$(echo "$node" | jq -r '.security // "none"')
+    if [[ -z "$host" && "$security" == reality ]]; then
+        host=$(get_public_ip 2>/dev/null || true)
+        [[ -n "$host" ]] || {
+            print_error "无法获取 Reality 节点的服务器公网 IPv4，拒绝生成可能指向 CDN 的无效订阅" >&2
+            return 1
+        }
+    fi
+    if [[ -z "$host" && "$security" == none ]]; then
+        host=$(get_public_ip 2>/dev/null || true)
+    fi
     [[ -n "$host" ]] || host=$(get_subscription_domain_hint 2>/dev/null || true)
     [[ -n "$host" ]] || host=$(get_public_ip 2>/dev/null || true)
     host=${host#\[}

@@ -34,10 +34,15 @@ warn_if_stats_capability_missing() {
     fi
 }
 
-singbox_has_stats_capability() {
-    local bin
+singbox_has_build_tag() {
+    local tag=$1 bin
     bin=$(get_singbox_bin)
-    [[ -x "$bin" ]] && "$bin" version 2>/dev/null | grep -q 'with_v2ray_api'
+    [[ "$tag" =~ ^[A-Za-z0-9_.-]+$ && -x "$bin" ]] || return 1
+    "$bin" version 2>/dev/null | grep -Eq "(^|[ ,])${tag}([ ,]|$)"
+}
+
+singbox_has_stats_capability() {
+    singbox_has_build_tag with_v2ray_api
 }
 
 ensure_singbox_stats_capability() {
@@ -435,6 +440,12 @@ _generate_singbox_config_114() (
     fi
     custom_outbounds=$(jq --argjson tags "$resolved_tags" '[(.outbounds // [])[] | select(.tag as $t | $tags | index($t))]' "$outbounds_file") || return 1
     custom_endpoints=$(jq --argjson tags "$resolved_tags" '[(.endpoints // [])[] | select(.tag as $t | $tags | index($t))]' "$outbounds_file") || return 1
+    if echo "$custom_outbounds" | jq -e 'any(.[]; .type == "naive")' >/dev/null 2>&1 \
+        && ! singbox_has_build_tag with_naive_outbound; then
+        print_error "当前内核不支持已启用的 Naive 出站（缺少 with_naive_outbound）"
+        print_info "请移除该出站引用，或安装同时提供 Cronet/libcronet.so 的外部定制内核"
+        return 1
+    fi
     local outbound_tags full route_rules='[]' endpoints warp_config='{}'
     endpoints="$custom_endpoints"
     outbound_tags=$(jq -n --argjson o "$custom_outbounds" --argjson e "$custom_endpoints" '([$o[].tag] + [$e[].tag] + ["direct-out"]) | unique')
@@ -654,17 +665,23 @@ ensure_singbox_go() {
 }
 
 normalize_singbox_build_tags() {
-    local tags_file=$1 raw token result="" seen=" "
+    local tags_file=$1 excluded_tags=${2:-} raw token excluded result="" seen=" " skip
     local IFS=$' \t\n'
     [[ -f "$tags_file" ]] || return 1
 
     # 官方不同版本可能使用逗号、空格或换行分隔；Go 1.25 不接受逗号与空格混用。
     raw=$(tr ',\r\n\t' '    ' < "$tags_file") || return 1
+    excluded_tags=${excluded_tags//,/ }
     for token in $raw with_v2ray_api; do
         if [[ ! "$token" =~ ^[A-Za-z0-9_.-]+$ ]]; then
             print_error "发现非法 Go 构建标签: $token" >&2
             return 1
         fi
+        skip=false
+        for excluded in $excluded_tags; do
+            [[ "$token" == "$excluded" ]] && { skip=true; break; }
+        done
+        $skip && continue
         if [[ "$seen" != *" $token "* ]]; then
             result+="${result:+,}${token}"
             seen+="$token "
@@ -675,7 +692,7 @@ normalize_singbox_build_tags() {
 }
 
 build_and_install_singbox() {
-    local version=$1 start_after_install=${2:-true} go_bin work source tags ldflags candidate target backup required_go was_active=false
+    local version=$1 start_after_install=${2:-true} go_bin work source tags tags_file ldflags candidate target backup required_go was_active=false
     [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || { print_error "非法版本号: $version"; return 1; }
     mkdir -p "$SINGBOX_BUILD_DIR"
     work=$(mktemp -d "${SINGBOX_BUILD_DIR}/build.XXXXXX") || return 1
@@ -684,7 +701,17 @@ build_and_install_singbox() {
     if ! git -c advice.detachedHead=false clone --depth 1 --single-branch --branch "v${version}" https://github.com/SagerNet/sing-box.git "$source"; then
         rm -rf "$work"; print_error "源码下载失败"; return 1
     fi
-    [[ -f "$source/release/DEFAULT_BUILD_TAGS" && -f "$source/release/LDFLAGS" ]] || { rm -rf "$work"; print_error "官方构建元数据缺失"; return 1; }
+    [[ -f "$source/release/LDFLAGS" ]] || { rm -rf "$work"; print_error "官方构建元数据缺失"; return 1; }
+    if [[ -n "${SINGBOX_BUILD_TAGS_FILE:-}" ]]; then
+        tags_file="$SINGBOX_BUILD_TAGS_FILE"
+    elif [[ -f "$source/release/DEFAULT_BUILD_TAGS_OTHERS" ]]; then
+        # 与官方 release/local/common.sh 保持一致。完整 DEFAULT_BUILD_TAGS 中的
+        # with_naive_outbound 需要额外构建 Chromium/Cronet 和 libcronet.so。
+        tags_file="$source/release/DEFAULT_BUILD_TAGS_OTHERS"
+    else
+        tags_file="$source/release/DEFAULT_BUILD_TAGS"
+    fi
+    [[ -f "$tags_file" ]] || { rm -rf "$work"; print_error "官方本地构建标签文件缺失"; return 1; }
     required_go=$(awk '$1 == "go" { print $2 } $1 == "toolchain" { sub(/^go/, "", $2); print $2 }' "$source/go.mod" | sort -V | tail -n1)
     required_go=${required_go:-1.24.0}
     go_bin=$(ensure_singbox_go "$required_go") || { rm -rf "$work"; print_error "无法准备 Go ${required_go}+ 工具链"; return 1; }
@@ -693,7 +720,7 @@ build_and_install_singbox() {
         print_error "Go 工具链路径无效: ${go_bin//$'\n'/, }"
         return 1
     fi
-    tags=$(normalize_singbox_build_tags "$source/release/DEFAULT_BUILD_TAGS") || {
+    tags=$(normalize_singbox_build_tags "$tags_file" "with_naive_outbound") || {
         rm -rf "$work"
         print_error "无法解析官方 sing-box 构建标签"
         return 1
@@ -1326,6 +1353,12 @@ add_trojan_outbound() {
 
 add_naive_outbound() {
     local tag server port username password sni insecure=false outbound
+    ensure_singbox_stats_capability || return 1
+    if ! singbox_has_build_tag with_naive_outbound; then
+        print_error "当前定制内核不包含 with_naive_outbound，无法添加 Naive 出站"
+        print_info "上游 Naive 出站需要独立 Chromium/Cronet 工具链和 libcronet.so，不属于官方本地构建能力"
+        return 1
+    fi
     read -p "出站标签: " tag; read -p "服务器地址: " server; read -p "端口 [443]: " port; port=${port:-443}; read -p "用户名: " username; read -p "密码: " password
     [[ -n "$tag" && -n "$server" && -n "$username" && -n "$password" ]] || return 1
     read -p "TLS SNI [$server]: " sni; sni=${sni:-$server}; read -p "允许自签名证书? [y/N]: " ans; [[ "$ans" =~ ^[Yy]$ ]] && insecure=true

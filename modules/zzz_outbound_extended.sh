@@ -692,7 +692,7 @@ outbound_management_menu() {
             2)
                 clear
                 echo " 1.HTTP  2.SOCKS  3.VLESS  4.VMess  5.Trojan  6.Shadowsocks"
-                echo " 7.Hysteria2  8.TUIC  9.Naive  10.AnyTLS  11.Hysteria v1"
+                echo " 7.Hysteria2  8.TUIC  9.Naive(需Cronet内核)  10.AnyTLS  11.Hysteria v1"
                 echo "12.ShadowTLS  13.SSH  14.Snell  15.Tor  16.WireGuard Endpoint"
                 echo "17.Selector  18.URLTest  19.Direct  20.Block  0.返回"
                 read -p "请选择协议: " protocol_choice

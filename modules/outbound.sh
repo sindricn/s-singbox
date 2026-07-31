@@ -1790,7 +1790,7 @@ outbound_management_menu() {
                 print_menu_item "6" "Shadowsocks 协议"
                 print_menu_item "7" "Hysteria2 协议"
                 print_menu_item "8" "TUIC 协议"
-                print_menu_item "9" "Naive 协议"
+                print_menu_item "9" "Naive 协议（需外部 Cronet 内核）"
                 print_menu_item "10" "AnyTLS 协议"
                 print_section_end
                 echo ""

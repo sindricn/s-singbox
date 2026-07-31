@@ -35,6 +35,9 @@ EOF
 normalized_tags=$(normalize_singbox_build_tags "$TMP_DIR/build-tags")
 [[ "$normalized_tags" == 'with_gvisor,with_quic,with_dhcp,with_v2ray_api' ]]
 [[ "$normalized_tags" != *' '* ]]
+echo 'with_gvisor,with_naive_outbound,with_quic' > "$TMP_DIR/build-tags-full"
+safe_tags=$(normalize_singbox_build_tags "$TMP_DIR/build-tags-full" 'with_naive_outbound')
+[[ "$safe_tags" == 'with_gvisor,with_quic,with_v2ray_api' ]]
 echo 'with_gvisor,@invalid' > "$TMP_DIR/invalid-build-tags"
 if normalize_singbox_build_tags "$TMP_DIR/invalid-build-tags" >/dev/null 2>&1; then
     echo "非法构建标签未被拒绝" >&2
@@ -49,7 +52,11 @@ cat > "$TMP_DIR/stats-singbox" <<'EOF'
 #!/bin/sh
 echo 'sing-box version 1.14.0 Tags: with_v2ray_api'
 EOF
-chmod +x "$TMP_DIR/plain-singbox" "$TMP_DIR/stats-singbox"
+cat > "$TMP_DIR/full-singbox" <<'EOF'
+#!/bin/sh
+echo 'sing-box version 1.14.0 Tags: with_v2ray_api,with_naive_outbound'
+EOF
+chmod +x "$TMP_DIR/plain-singbox" "$TMP_DIR/stats-singbox" "$TMP_DIR/full-singbox"
 
 kernel_state=plain
 build_count=0
@@ -73,8 +80,20 @@ ensure_singbox_stats_capability
 [[ "$kernel_state" == stats && "$build_count" -eq 1 ]]
 [[ "$last_start_mode" == false ]]
 singbox_has_stats_capability
+! singbox_has_build_tag with_naive_outbound
+
+get_singbox_bin() { echo "$TMP_DIR/full-singbox"; }
+singbox_has_build_tag with_v2ray_api
+singbox_has_build_tag with_naive_outbound
 
 # 已具备能力时不得重复构建。
+get_singbox_bin() {
+    if [[ "$kernel_state" == stats ]]; then
+        echo "$TMP_DIR/stats-singbox"
+    else
+        echo "$TMP_DIR/plain-singbox"
+    fi
+}
 ensure_singbox_stats_capability
 [[ "$build_count" -eq 1 ]]
 

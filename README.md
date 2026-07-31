@@ -28,7 +28,9 @@
 - **SOCKS** - SOCKS5 代理
 - **Mixed** - HTTP + SOCKS5 混合代理
 
-**出站协议与策略**（20 类）：HTTP、SOCKS、VLESS、VMess、Trojan、Shadowsocks、Hysteria v1、Hysteria2、TUIC、Naive、AnyTLS、ShadowTLS、SSH、Snell v4/v6、Tor、WireGuard Endpoint、Selector、URLTest、Direct、Block
+**默认定制内核出站协议与策略**（19 类）：HTTP、SOCKS、VLESS、VMess、Trojan、Shadowsocks、Hysteria v1、Hysteria2、TUIC、AnyTLS、ShadowTLS、SSH、Snell v4/v6、Tor、WireGuard Endpoint、Selector、URLTest、Direct、Block
+
+> Naive 入站可正常使用。Naive 出站依赖上游独立 Chromium/Cronet 工具链和 `libcronet.so`，不属于官方本地构建标签集合；仅在外部内核包含 `with_naive_outbound` 时开放。
 
 WireGuard 按 sing-box 1.11+ 的新结构保存到顶层 `endpoints`，Selector/URLTest 会自动解析并带入依赖出站。Bridge 仅适用于 L3/TUN 转发，不适合作为当前 L4 节点的普通链式出站；旧 DNS outbound 已废弃，因此不在菜单中提供。
 
@@ -56,7 +58,7 @@ WireGuard 按 sing-box 1.11+ 的新结构保存到顶层 `endpoints`，Selector/
 ### 🧩 定制内核与安全更新
 
 - 从官方 `SagerNet/sing-box` 对应版本标签构建
-- 继承官方 `release/DEFAULT_BUILD_TAGS` 和 `release/LDFLAGS`
+- 按官方 `release/local/common.sh` 使用 `release/DEFAULT_BUILD_TAGS_OTHERS` 和 `release/LDFLAGS`
 - 额外启用 `with_v2ray_api`，供用户流量统计使用
 - 自动读取目标版本 `go.mod` 的 Go/toolchain 要求；本机版本不足时下载官方稳定工具链并校验 SHA256
 - 更新前先编译候选内核并检查现有配置；启动失败自动回滚二进制

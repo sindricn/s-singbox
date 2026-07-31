@@ -197,7 +197,11 @@ tuic_link=$(generate_share_link_smart "059032a9-7d40-4a96-9bb1-36823d848068" "" 
 [[ "$tuic_link" == *'alpn=h3'* && "$tuic_link" == *'udp_relay_mode=native'* && "$tuic_link" == *'allow_insecure=1'* && "$tuic_link" == *'zero_rtt_handshake=0'* ]]
 
 if [[ -n "${SINGBOX_VALIDATION_BIN:-}" && -x "$SINGBOX_VALIDATION_BIN" ]]; then
-    "$SINGBOX_VALIDATION_BIN" check -c "$TMP_DIR/client.json"
+    # 默认定制内核不包含 with_naive_outbound；Naive 客户端结构单独做字段测试，
+    # 真实内核检查覆盖其余官方本地构建支持的客户端出站。
+    client_validation_nodes=$(echo "$nodes" | jq -c 'map(select(.protocol != "naive"))')
+    generate_singbox_subscription_config "$client_validation_nodes" "059032a9-7d40-4a96-9bb1-36823d848068" > "$TMP_DIR/client-kernel-check.json"
+    "$SINGBOX_VALIDATION_BIN" check -c "$TMP_DIR/client-kernel-check.json"
 fi
 
 hy2_node=$(jq -c '.nodes[] | select(.protocol=="hysteria2")' "$NODES_FILE")

@@ -604,6 +604,16 @@ ensure_singbox_go() {
             return
         fi
     fi
+
+    # 优先复用项目之前下载并校验过的 Go 工具链，避免失败重试时重复下载。
+    if [[ -x "$SINGBOX_GO_DIR/bin/go" ]]; then
+        current=$($SINGBOX_GO_DIR/bin/go version 2>/dev/null | sed -n 's/.*go\([0-9][0-9.]*\).*/\1/p')
+        if [[ -n "$current" ]] && version_ge "$current" "$minimum"; then
+            printf '%s\n' "$SINGBOX_GO_DIR/bin/go"
+            return
+        fi
+    fi
+
     arch=$(uname -m)
     case "$arch" in
         x86_64|amd64) arch=amd64 ;;
@@ -616,14 +626,20 @@ ensure_singbox_go() {
         '[.[] | select(.stable == true) | . as $release | .files[] | select(.os=="linux" and .arch==$arch and .kind=="archive") | . + {go_version:($release.version | ltrimstr("go"))}][0]') || return 1
     download_version=$(echo "$file" | jq -r '.go_version // empty')
     [[ -n "$download_version" ]] && version_ge "$download_version" "$minimum" || {
-        print_error "Go 官方稳定版低于 sing-box 要求的 $minimum"
+        print_error "Go 官方稳定版低于 sing-box 要求的 $minimum" >&2
         return 1
     }
     url="https://go.dev/dl/$(echo "$file" | jq -r '.filename')"
     sha=$(echo "$file" | jq -r '.sha256')
     [[ -n "$sha" && "$sha" != null ]] || return 1
     tmp=$(mktemp -d) || return 1
-    if ! curl -fL --retry 3 "$url" -o "$tmp/go.tgz" || ! echo "$sha  $tmp/go.tgz" | sha256sum -c -; then
+    if ! curl -fL --retry 3 "$url" -o "$tmp/go.tgz"; then
+        rm -rf "$tmp"
+        return 1
+    fi
+    # ensure_singbox_go 的标准输出只能包含最终可执行路径；校验成功提示不得被命令替换捕获。
+    if ! echo "$sha  $tmp/go.tgz" | sha256sum -c - >/dev/null; then
+        print_error "Go 工具链 SHA256 校验失败" >&2
         rm -rf "$tmp"
         return 1
     fi
@@ -634,7 +650,7 @@ ensure_singbox_go() {
     rm -rf "$tmp"
     current=$($SINGBOX_GO_DIR/bin/go version | sed -n 's/.*go\([0-9][0-9.]*\).*/\1/p')
     [[ -n "$current" ]] && version_ge "$current" "$minimum" || return 1
-    echo "$SINGBOX_GO_DIR/bin/go"
+    printf '%s\n' "$SINGBOX_GO_DIR/bin/go"
 }
 
 build_and_install_singbox() {
@@ -644,13 +660,18 @@ build_and_install_singbox() {
     work=$(mktemp -d "${SINGBOX_BUILD_DIR}/build.XXXXXX") || return 1
     source="$work/source"; candidate="$work/sing-box"
     print_info "拉取 sing-box v${version} 源码..."
-    if ! git clone --depth 1 --branch "v${version}" https://github.com/SagerNet/sing-box.git "$source"; then
+    if ! git -c advice.detachedHead=false clone --depth 1 --single-branch --branch "v${version}" https://github.com/SagerNet/sing-box.git "$source"; then
         rm -rf "$work"; print_error "源码下载失败"; return 1
     fi
     [[ -f "$source/release/DEFAULT_BUILD_TAGS" && -f "$source/release/LDFLAGS" ]] || { rm -rf "$work"; print_error "官方构建元数据缺失"; return 1; }
     required_go=$(awk '$1 == "go" { print $2 } $1 == "toolchain" { sub(/^go/, "", $2); print $2 }' "$source/go.mod" | sort -V | tail -n1)
     required_go=${required_go:-1.24.0}
     go_bin=$(ensure_singbox_go "$required_go") || { rm -rf "$work"; print_error "无法准备 Go ${required_go}+ 工具链"; return 1; }
+    if [[ "$go_bin" == *$'\n'* || ! -x "$go_bin" ]]; then
+        rm -rf "$work"
+        print_error "Go 工具链路径无效: ${go_bin//$'\n'/, }"
+        return 1
+    fi
     tags="$(tr '\n' ' ' < "$source/release/DEFAULT_BUILD_TAGS") with_v2ray_api"
     ldflags=$(tr '\n' ' ' < "$source/release/LDFLAGS")
     print_info "编译 sing-box（启用 with_v2ray_api）..."

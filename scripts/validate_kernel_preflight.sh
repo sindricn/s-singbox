@@ -16,6 +16,17 @@ source "$ROOT_DIR/modules/common.sh"
 # shellcheck source=/dev/null
 source "$ROOT_DIR/modules/zz_singbox_114.sh"
 
+# 已下载工具链必须被直接复用，且函数标准输出只能有一条可执行路径。
+SINGBOX_GO_DIR="$TMP_DIR/toolchain/go"
+mkdir -p "$SINGBOX_GO_DIR/bin"
+cat > "$SINGBOX_GO_DIR/bin/go" <<'EOF'
+#!/bin/sh
+echo 'go version go1.25.1 linux/amd64'
+EOF
+chmod +x "$SINGBOX_GO_DIR/bin/go"
+resolved_go=$(ensure_singbox_go '1.24.0')
+[[ "$resolved_go" == "$SINGBOX_GO_DIR/bin/go" ]]
+
 cat > "$TMP_DIR/plain-singbox" <<'EOF'
 #!/bin/sh
 echo 'sing-box version 1.14.0'

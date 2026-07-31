@@ -21,10 +21,11 @@ SINGBOX_GO_DIR="$TMP_DIR/toolchain/go"
 mkdir -p "$SINGBOX_GO_DIR/bin"
 cat > "$SINGBOX_GO_DIR/bin/go" <<'EOF'
 #!/bin/sh
-echo 'go version go1.25.1 linux/amd64'
+echo 'go version go99.0.0 linux/amd64'
 EOF
 chmod +x "$SINGBOX_GO_DIR/bin/go"
-resolved_go=$(ensure_singbox_go '1.24.0')
+# 使用远高于 CI 预装 Go 的最低版本，确保覆盖“复用项目工具链”分支。
+resolved_go=$(ensure_singbox_go '99.0.0')
 [[ "$resolved_go" == "$SINGBOX_GO_DIR/bin/go" ]]
 
 # 兼容官方逗号格式、旧换行/空格格式，并输出 Go 1.25 接受的单一逗号列表。

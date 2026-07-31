@@ -1173,7 +1173,7 @@ generate_singbox_subscription_config() {
     done < <(echo "$nodes" | jq -c '.[]')
     [[ $(echo "$outbounds" | jq length) -gt 0 ]] || return 1
     tags=$(echo "$outbounds" | jq -c '[.[].tag]')
-    selector=$(jq -n --argjson tags "$tags" '{type:"selector",tag:"主代理",outbounds:( $tags + ["直连"] )}')
+    selector=$(jq -n --argjson tags "$tags" '{type:"selector",tag:"主代理",outbounds:(["自动选择"] + $tags + ["直连"]),default:"自动选择"}')
     urltest=$(jq -n --argjson tags "$tags" '{type:"urltest",tag:"自动选择",outbounds:$tags,url:"https://www.gstatic.com/generate_204",interval:"5m",tolerance:50}')
     outbounds=$(echo "$outbounds" | jq --argjson s "$selector" --argjson u "$urltest" '. = [$s,$u] + . + [{type:"direct",tag:"直连"}]')
     jq -n --argjson out "$outbounds" '{log:{level:"error",timestamp:true},dns:{servers:[{type:"https",tag:"dns-remote",server:"1.1.1.1",server_port:443,path:"/dns-query",domain_resolver:"dns-local"},{type:"local",tag:"dns-local"}],final:"dns-remote"},inbounds:[{type:"mixed",tag:"mixed-in",listen:"127.0.0.1",listen_port:2080},{type:"tun",tag:"tun-in",interface_name:"singtun0",address:["172.19.0.1/30"],auto_route:true,strict_route:true,stack:"system",mtu:9000}],outbounds:$out,route:{default_domain_resolver:"dns-local",rules:[{ip_is_private:true,action:"route",outbound:"直连"},{domain_suffix:[".cn"],action:"route",outbound:"直连"}],final:"主代理",auto_detect_interface:true}}'
@@ -1244,7 +1244,7 @@ generate_clash_config() {
         names+="      - \"$name\"\n"
     done < <(echo "$nodes" | jq -c '.[]')
     [[ -n "$proxies" ]] || return 1
-    printf 'port: 7890\nsocks-port: 7891\nallow-lan: false\nmode: rule\nlog-level: info\nproxies:\n%bproxy-groups:\n  - name: "主代理"\n    type: select\n    proxies:\n%b      - DIRECT\nrules:\n  - MATCH,主代理\n' "$proxies" "$names"
+    printf 'port: 7890\nsocks-port: 7891\nallow-lan: false\nmode: rule\nlog-level: info\nproxies:\n%bproxy-groups:\n  - name: "主代理"\n    type: select\n    proxies:\n      - "自动选择"\n%b      - DIRECT\n  - name: "自动选择"\n    type: url-test\n    proxies:\n%b    url: "https://www.gstatic.com/generate_204"\n    interval: 300\n    tolerance: 50\nrules:\n  - MATCH,主代理\n' "$proxies" "$names" "$names"
 }
 
 get_user_email_from_config() {

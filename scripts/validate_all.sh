@@ -189,6 +189,10 @@ SINGBOX_BIN="$TMP_DIR/mock-sing-box-stats"
 echo "[4/8] 订阅协议字段检查"
 nodes=$(jq -c '.nodes' "$NODES_FILE")
 generate_clash_config "$nodes" "059032a9-7d40-4a96-9bb1-36823d848068" > "$TMP_DIR/clash.yaml"
+grep -q 'name: "自动选择"' "$TMP_DIR/clash.yaml"
+grep -q 'type: url-test' "$TMP_DIR/clash.yaml"
+grep -q 'url: "https://www.gstatic.com/generate_204"' "$TMP_DIR/clash.yaml"
+grep -A4 'name: "主代理"' "$TMP_DIR/clash.yaml" | grep -q '"自动选择"'
 grep -q 'type: vless.*packet-encoding: xudp' "$TMP_DIR/clash.yaml"
 grep -q 'ws-opts:.*path: "/vmess"' "$TMP_DIR/clash.yaml"
 grep -q 'alterId: 7' "$TMP_DIR/clash.yaml"
@@ -199,6 +203,8 @@ grep -q 'up: "100 Mbps"' "$TMP_DIR/clash.yaml"
 grep -q 'type: hysteria' "$TMP_DIR/clash.yaml"
 
 generate_singbox_subscription_config "$nodes" "059032a9-7d40-4a96-9bb1-36823d848068" > "$TMP_DIR/client.json"
+jq -e '.outbounds[] | select(.type=="selector" and .tag=="主代理") | (.default == "自动选择" and .outbounds[0] == "自动选择" and (.outbounds | index("直连") != null))' "$TMP_DIR/client.json" >/dev/null
+jq -e '.outbounds[] | select(.type=="urltest" and .tag=="自动选择") | (.url == "https://www.gstatic.com/generate_204" and .interval == "5m" and .tolerance == 50)' "$TMP_DIR/client.json" >/dev/null
 jq -e '.outbounds[] | select(.type=="vless") | .packet_encoding == "xudp"' "$TMP_DIR/client.json" >/dev/null
 jq -e '.outbounds[] | select(.type=="hysteria2") | (.server_ports == ["22000:22100"] and (has("server_port")|not) and .hop_interval == "30s" and .obfs.type == "salamander")' "$TMP_DIR/client.json" >/dev/null
 jq -e '.outbounds[] | select(.type=="vmess") | (.alter_id == 7 and .transport.type == "ws" and .transport.path == "/vmess")' "$TMP_DIR/client.json" >/dev/null

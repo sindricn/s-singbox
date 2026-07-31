@@ -6,7 +6,13 @@ on:
     branches:
       - dev
     paths:
+      - singbox-manager.sh
+      - install.sh
+      - README.md
+      - modules/monitor.sh
+      - modules/user.sh
       - modules/zz_singbox_114.sh
+      - scripts/validate_all.sh
       - scripts/validate_custom_kernel_build.sh
       - scripts/validate_kernel_preflight.sh
       - .github/workflows/validate-custom-kernel.yml
@@ -30,6 +36,8 @@ jobs:
         run: |
           bash -n modules/zz_singbox_114.sh
           bash scripts/validate_kernel_preflight.sh
+      - name: Validate ordinary and custom kernel behavior
+        run: bash scripts/validate_all.sh
       - name: Build real custom kernel
         env:
           SINGBOX_BUILD_TEST_VERSION: 1.13.15

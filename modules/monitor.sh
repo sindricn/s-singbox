@@ -55,6 +55,13 @@ show_traffic() {
     clear
     echo -e "${CYAN}====== 流量统计 ======${NC}\n"
 
+    if declare -f singbox_has_stats_capability >/dev/null 2>&1 \
+        && ! singbox_has_stats_capability; then
+        print_warning "当前内核未启用 with_v2ray_api，流量统计不可用"
+        print_info "节点创建与代理功能不受影响；可在 sing-box 管理中手动安装定制内核"
+        return 0
+    fi
+
     if ! systemctl is-active --quiet sing-box; then
         print_error "sing-box 未运行"
         return 1
@@ -285,6 +292,13 @@ reset_traffic() {
 export_stats() {
     clear
     echo -e "${CYAN}====== 导出统计数据 ======${NC}"
+
+    if declare -f singbox_has_stats_capability >/dev/null 2>&1 \
+        && ! singbox_has_stats_capability; then
+        print_warning "当前内核未启用 with_v2ray_api，没有可导出的运行时流量统计"
+        print_info "节点创建与代理功能不受影响"
+        return 0
+    fi
 
     local export_file="${DATA_DIR}/stats_export_$(date +%Y%m%d_%H%M%S).json"
 

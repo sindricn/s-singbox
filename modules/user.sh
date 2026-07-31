@@ -159,6 +159,10 @@ list_global_users() {
                             online_text="未使用"
                             online_display="${GRAY}未使用${NC}"
                             ;;
+                        unavailable)
+                            online_text="不可用"
+                            online_display="${GRAY}不可用${NC}"
+                            ;;
                         *)
                             online_text="未知"
                             online_display="${GRAY}未知${NC}"
@@ -344,16 +348,22 @@ show_user_detail() {
     local traffic_limit=$(echo "$user" | jq -r '.traffic_limit_gb // "unlimited"')
     local expire_date=$(echo "$user" | jq -r '.expire_date // "unlimited"')
 
-    # 实时更新流量使用情况
-    echo -e "${GRAY}正在获取实时流量统计...${NC}"
-    local traffic_used="0"
-    local updated_gb=$(update_user_traffic_usage "$uuid" 2>/dev/null)
-    if [[ $? -eq 0 && -n "$updated_gb" ]]; then
-        traffic_used="$updated_gb"
-        commit_data_transaction || print_warning "流量账本已更新，但最后可用快照同步失败"
+    # 实时更新流量使用情况；普通官方内核不提供 Stats API。
+    local traffic_used
+    if declare -f singbox_has_stats_capability >/dev/null 2>&1 \
+        && ! singbox_has_stats_capability; then
+        traffic_used="不可用（普通内核）"
     else
-        # 如果无法更新，使用文件中的旧值
-        traffic_used=$(echo "$user" | jq -r '.traffic_used_gb // "0"')
+        echo -e "${GRAY}正在获取实时流量统计...${NC}"
+        local updated_gb
+        updated_gb=$(update_user_traffic_usage "$uuid" 2>/dev/null)
+        if [[ $? -eq 0 && -n "$updated_gb" ]]; then
+            traffic_used="${updated_gb} GB"
+            commit_data_transaction || print_warning "流量账本已更新，但最后可用快照同步失败"
+        else
+            # Stats API 临时不可达时显示旧账本值，并明确标记不是实时数据。
+            traffic_used="$(echo "$user" | jq -r '.traffic_used_gb // "0"') GB（缓存）"
+        fi
     fi
 
     local status_text=""
@@ -374,7 +384,7 @@ show_user_detail() {
     echo ""
     echo -e "${GREEN}流量与有效期：${NC}"
     echo -e "  流量限制: ${YELLOW}$traffic_limit GB${NC}"
-    echo -e "  已用流量: ${YELLOW}$traffic_used GB${NC}"
+    echo -e "  已用流量: ${YELLOW}$traffic_used${NC}"
     echo -e "  有效期至: ${YELLOW}$expire_date${NC}"
     echo ""
 
@@ -778,6 +788,12 @@ get_user_recent_activity_status() {
     local state_file="${TRAFFIC_COUNTERS_FILE:-${DATA_DIR}/traffic_counters.json}"
     local last_change total_bytes last_epoch now_epoch age
 
+    if declare -f singbox_has_stats_capability >/dev/null 2>&1 \
+        && ! singbox_has_stats_capability; then
+        echo "unavailable"
+        return 0
+    fi
+
     [[ "$active_window" =~ ^[0-9]+$ && "$active_window" -ge 30 ]] || active_window=180
 
     if ! update_user_traffic_usage "$uuid" >/dev/null 2>&1; then
@@ -958,6 +974,13 @@ update_all_users_traffic() {
         return
     fi
 
+    if declare -f singbox_has_stats_capability >/dev/null 2>&1 \
+        && ! singbox_has_stats_capability; then
+        print_warning "当前内核未启用 with_v2ray_api，无法更新用户流量统计"
+        print_info "节点创建与代理功能不受影响；可在 sing-box 管理中手动安装定制内核"
+        return 0
+    fi
+
     echo -e "${CYAN}正在更新所有用户流量统计...${NC}"
 
     local updated_count=0
@@ -1051,7 +1074,14 @@ check_user_expiration() {
 # 检查用户流量限制（如果超过限制则禁用）
 check_traffic_limits() {
     if [[ ! -f "$USERS_FILE" ]]; then
-        return
+        return 0
+    fi
+
+    if declare -f singbox_has_stats_capability >/dev/null 2>&1 \
+        && ! singbox_has_stats_capability; then
+        echo -e "${YELLOW}跳过用户流量限制：当前内核不支持流量统计${NC}"
+        echo -e "${GRAY}用户有效期限制仍会正常执行，节点代理功能不受影响${NC}"
+        return 0
     fi
 
     echo -e "${CYAN}检查用户流量限制...${NC}"
@@ -1178,6 +1208,13 @@ show_online_users() {
     local total_users=$(jq '.users | length' "$USERS_FILE" 2>/dev/null)
     if [[ "$total_users" -eq 0 ]]; then
         print_warning "没有用户"
+        return 0
+    fi
+
+    if declare -f singbox_has_stats_capability >/dev/null 2>&1 \
+        && ! singbox_has_stats_capability; then
+        print_warning "当前内核未启用 with_v2ray_api，最近活跃状态不可用"
+        print_info "节点创建与代理功能不受影响；此列表不会把用户误报为离线或零流量"
         return 0
     fi
 

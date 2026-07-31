@@ -32,7 +32,6 @@ grep -q 'with_v2ray_api' "$ROOT_DIR/modules/zz_singbox_114.sh"
 echo "[3/8] 14 协议配置生成矩阵"
 export RED='' GREEN='' YELLOW='' BLUE='' CYAN='' GRAY='' NC=''
 export LOG_FILE="$TMP_DIR/manager.log" LOG_LEVEL=3
-export SINGBOX_SKIP_KERNEL_PREFLIGHT=1
 SINGBOX_DIR="$TMP_DIR/etc/sing-box"
 SINGBOX_CONFIG="$SINGBOX_DIR/config.json"
 SINGBOX_SERVICE="$TMP_DIR/sing-box.service"
@@ -41,8 +40,28 @@ USERS_FILE="$DATA_DIR/users.json"
 NODES_FILE="$DATA_DIR/nodes.json"
 NODE_USERS_FILE="$DATA_DIR/node_users.json"
 SUBSCRIPTION_DIR="$DATA_DIR/subscriptions"
-SINGBOX_BIN="${SINGBOX_BIN:-}"
 mkdir -p "$SINGBOX_DIR" "$DATA_DIR" "$SUBSCRIPTION_DIR"
+
+export MOCK_CHECK_LOG="$TMP_DIR/sing-box-check.log"
+cat > "$TMP_DIR/mock-sing-box-stats" <<'SH'
+#!/bin/bash
+case "${1:-}" in
+    version) printf '%s\n' 'sing-box version 1.14.0' 'Tags: with_v2ray_api' ;;
+    check) printf '%s\n' "${*:2}" >> "${MOCK_CHECK_LOG:?}" ;;
+    api) printf '%s\n' '{"stat":[]}' ;;
+    *) exit 1 ;;
+esac
+SH
+cat > "$TMP_DIR/mock-sing-box-ordinary" <<'SH'
+#!/bin/bash
+case "${1:-}" in
+    version) printf '%s\n' 'sing-box version 1.14.0' 'Tags: with_quic,with_utls' ;;
+    check) printf '%s\n' "${*:2}" >> "${MOCK_CHECK_LOG:?}" ;;
+    *) exit 1 ;;
+esac
+SH
+chmod +x "$TMP_DIR/mock-sing-box-stats" "$TMP_DIR/mock-sing-box-ordinary"
+SINGBOX_BIN="$TMP_DIR/mock-sing-box-stats"
 
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=example.com' \
     -keyout "$TMP_DIR/key.pem" -out "$TMP_DIR/cert.pem" >/dev/null 2>&1
@@ -127,6 +146,16 @@ jq -e '.endpoints[] | select(.type=="wireguard" and .tag=="fixture-wg")' "$SINGB
 jq -e '[.outbounds[].type] | (index("hysteria") != null and index("shadowtls") != null and index("ssh") != null and index("snell") != null and index("tor") != null and index("selector") != null and index("urltest") != null and index("direct") != null and index("block") != null)' "$DATA_DIR/outbounds.json" >/dev/null
 jq -e '.endpoints[] | select(.type=="wireguard")' "$DATA_DIR/outbounds.json" >/dev/null
 
+# 官方普通内核也必须能生成并校验完整节点配置，只是不注入 Stats API。
+stats_config="$SINGBOX_CONFIG"
+SINGBOX_BIN="$TMP_DIR/mock-sing-box-ordinary"
+SINGBOX_CONFIG="$SINGBOX_DIR/config-ordinary.json"
+_generate_singbox_config_114
+jq -e '((.experimental // {}) | has("v2ray_api") | not) and (.inbounds | length == 14)' "$SINGBOX_CONFIG" >/dev/null
+grep -q -- '-c .*config-ordinary.json' "$MOCK_CHECK_LOG"
+SINGBOX_CONFIG="$stats_config"
+SINGBOX_BIN="$TMP_DIR/mock-sing-box-stats"
+
 echo "[4/8] 订阅协议字段检查"
 nodes=$(jq -c '.nodes' "$NODES_FILE")
 generate_clash_config "$nodes" "059032a9-7d40-4a96-9bb1-36823d848068" > "$TMP_DIR/clash.yaml"
@@ -184,9 +213,11 @@ grep -q 'persist_port_hopping_rules' "$ROOT_DIR/modules/node.sh"
 grep -q 'sync_runtime_subscriptions' "$ROOT_DIR/modules/zz_singbox_114.sh"
 grep -q 'api statsquery' "$ROOT_DIR/modules/monitor.sh"
 ! grep -q 'http://.*\/stats' "$ROOT_DIR/modules/monitor.sh"
-grep -q '当前 sing-box 内核缺少 with_v2ray_api' "$ROOT_DIR/modules/zz_singbox_114.sh"
+grep -q '当前为官方普通 sing-box 内核：节点创建与代理功能正常' "$ROOT_DIR/modules/zz_singbox_114.sh"
 grep -q 'ensure_singbox_stats_capability' "$ROOT_DIR/modules/zz_singbox_114.sh"
-grep -q 'ensure_singbox_stats_capability' "$ROOT_DIR/singbox-manager.sh"
+! grep -q 'ensure_singbox_stats_capability' "$ROOT_DIR/singbox-manager.sh"
+! sed -n '/^generate_singbox_config()/,/^}/p' "$ROOT_DIR/modules/zz_singbox_114.sh" | grep -q 'ensure_singbox_stats_capability'
+! sed -n '/^add_naive_outbound()/,/^}/p' "$ROOT_DIR/modules/zz_singbox_114.sh" | grep -q 'ensure_singbox_stats_capability'
 grep -q 'sha256sum -c - >/dev/null' "$ROOT_DIR/modules/zz_singbox_114.sh"
 grep -q 'Go 工具链路径无效' "$ROOT_DIR/modules/zz_singbox_114.sh"
 grep -q 'normalize_singbox_build_tags' "$ROOT_DIR/modules/zz_singbox_114.sh"
@@ -225,6 +256,7 @@ tunnel_node='{"port":"21001","tunnel_domain":"https://[2001:db8::8]:8443/proxy?t
     TRAFFIC_COUNTERS_FILE="$TMP_DIR/activity-counters.json"
     printf '%s\n' '{"users":{}}' > "$TRAFFIC_COUNTERS_FILE"
     : > "$TMP_DIR/traffic-updated-users"
+    singbox_has_stats_capability() { return 0; }
     update_user_traffic_usage() {
         printf '%s\n' "$1" >> "$TMP_DIR/traffic-updated-users"
         echo "0.001"
@@ -237,6 +269,22 @@ tunnel_node='{"port":"21001","tunnel_domain":"https://[2001:db8::8]:8443/proxy?t
     jq -n --arg id '059032a9-7d40-4a96-9bb1-36823d848068' --arg now "$now" \
         '{users:{($id):{last_raw:1024,total_bytes:1024,last_change:$now}}}' > "$TRAFFIC_COUNTERS_FILE"
     [[ "$(get_user_recent_activity_status '059032a9-7d40-4a96-9bb1-36823d848068')" == online ]]
+)
+(
+    before="$TMP_DIR/users-before-no-stats.json"
+    cp "$USERS_FILE" "$before"
+    rm -f "$TMP_DIR/traffic-called-without-stats"
+    singbox_has_stats_capability() { return 1; }
+    update_user_traffic_usage() {
+        : > "$TMP_DIR/traffic-called-without-stats"
+        return 1
+    }
+    USER_LIMITS_CHANGED=false
+    check_traffic_limits >/dev/null
+    cmp -s "$before" "$USERS_FILE"
+    [[ ! -e "$TMP_DIR/traffic-called-without-stats" ]]
+    [[ "$USER_LIMITS_CHANGED" == false ]]
+    [[ "$(get_user_recent_activity_status '059032a9-7d40-4a96-9bb1-36823d848068')" == unavailable ]]
 )
 
 stale_file="$SUBSCRIPTION_DIR/stale_ghost_raw.txt"

@@ -12,10 +12,10 @@ RUNTIME_TX_DIR="${RUNTIME_TX_DIR:-${DATA_DIR}/.pending-transaction}"
 MANAGER_SCRIPT="${MANAGER_SCRIPT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/singbox-manager.sh}"
 
 get_singbox_bin() {
-    if [[ -x "/usr/local/bin/sing-box" ]]; then
-        printf '%s\n' "/usr/local/bin/sing-box"
-    elif [[ -n "${SINGBOX_BIN:-}" && -x "${SINGBOX_BIN}" ]]; then
+    if [[ -n "${SINGBOX_BIN:-}" && -x "${SINGBOX_BIN}" ]]; then
         printf '%s\n' "$SINGBOX_BIN"
+    elif [[ -x "/usr/local/bin/sing-box" ]]; then
+        printf '%s\n' "/usr/local/bin/sing-box"
     elif command -v sing-box >/dev/null 2>&1; then
         command -v sing-box
     else
@@ -28,8 +28,8 @@ warn_if_stats_capability_missing() {
     bin=$(get_singbox_bin)
     [[ -x "$bin" ]] || return 0
     if ! "$bin" version 2>/dev/null | grep -q 'with_v2ray_api'; then
-        print_warning "当前 sing-box 内核缺少 with_v2ray_api，用户流量与最近活跃状态不可用"
-        print_info "创建或修改配置时可按提示自动安装定制内核"
+        print_warning "当前为官方普通 sing-box 内核：节点创建与代理功能正常"
+        print_info "用户流量统计、流量限额和最近活跃状态不可用；可在内核管理中手动安装定制内核"
         return 1
     fi
 }
@@ -474,8 +474,15 @@ _generate_singbox_config_114() (
     fi
 
     full=$(jq -n --argjson inbounds "$inbounds" --argjson custom "$custom_outbounds" --argjson rules "$route_rules" --argjson endpoints "$endpoints" \
-        --argjson in_tags "$inbound_tags" --argjson out_tags "$outbound_tags" --argjson users "$active_names" --arg listen "$SINGBOX_API_ADDR" \
-        '{log:{level:"info",timestamp:true},dns:{servers:[{type:"https",tag:"dns-remote",server:"1.1.1.1",server_port:443,path:"/dns-query",domain_resolver:"dns-local"},{type:"local",tag:"dns-local"}],final:"dns-remote"},inbounds:$inbounds,endpoints:$endpoints,outbounds:([{type:"direct",tag:"direct-out"}] + $custom),route:{default_domain_resolver:"dns-local",rules:([{protocol:"dns",action:"route",outbound:"direct-out"}] + $rules),final:"direct-out",auto_detect_interface:true},experimental:{v2ray_api:{listen:$listen,stats:{enabled:true,inbounds:$in_tags,outbounds:$out_tags,users:$users}}}}') || return 1
+        '{log:{level:"info",timestamp:true},dns:{servers:[{type:"https",tag:"dns-remote",server:"1.1.1.1",server_port:443,path:"/dns-query",domain_resolver:"dns-local"},{type:"local",tag:"dns-local"}],final:"dns-remote"},inbounds:$inbounds,endpoints:$endpoints,outbounds:([{type:"direct",tag:"direct-out"}] + $custom),route:{default_domain_resolver:"dns-local",rules:([{protocol:"dns",action:"route",outbound:"direct-out"}] + $rules),final:"direct-out",auto_detect_interface:true}}') || return 1
+
+    if singbox_has_stats_capability; then
+        full=$(echo "$full" | jq --argjson in_tags "$inbound_tags" --argjson out_tags "$outbound_tags" \
+            --argjson users "$active_names" --arg listen "$SINGBOX_API_ADDR" \
+            '.experimental.v2ray_api={listen:$listen,stats:{enabled:true,inbounds:$in_tags,outbounds:$out_tags,users:$users}}') || return 1
+    else
+        print_warning "当前为官方普通内核：节点配置将正常生成，流量统计增强功能已停用"
+    fi
 
     local candidate bin
     candidate=$(mktemp "${SINGBOX_CONFIG}.candidate.XXXXXX") || return 1
@@ -483,12 +490,6 @@ _generate_singbox_config_114() (
     chmod 600 "$candidate"
     bin=$(get_singbox_bin)
     if [[ -x "$bin" ]]; then
-        if ! "$bin" version 2>/dev/null | grep -q 'with_v2ray_api'; then
-            print_error "当前 sing-box 内核缺少 with_v2ray_api，无法采集用户流量"
-            print_info "请先通过管理菜单更新 sing-box 定制内核"
-            rm -f "$candidate"
-            return 1
-        fi
         if ! "$bin" check -c "$candidate"; then
             print_error "sing-box check 未通过，保留当前配置"
             rm -f "$candidate"
@@ -1165,6 +1166,7 @@ get_user_email_from_config() {
 
 query_user_raw_traffic() {
     local username=$1 bin stats up down
+    singbox_has_stats_capability || return 1
     bin=$(get_singbox_bin); [[ -x "$bin" ]] || return 1
     stats=$("$bin" api statsquery --server="$SINGBOX_API_ADDR" -pattern "user>>>${username}>>>traffic" 2>/dev/null) || return 1
     up=$(echo "$stats" | jq -r --arg n "user>>>${username}>>>traffic>>>uplink" '[.stat[]? | select(.name==$n) | .value] | add // 0')
@@ -1429,7 +1431,6 @@ add_trojan_outbound() {
 
 add_naive_outbound() {
     local tag server port username password sni insecure=false outbound
-    ensure_singbox_stats_capability || return 1
     if ! singbox_has_build_tag with_naive_outbound; then
         print_error "当前定制内核不包含 with_naive_outbound，无法添加 Naive 出站"
         print_info "上游 Naive 出站需要独立 Chromium/Cronet 工具链和 libcronet.so，不属于官方本地构建能力"
@@ -1583,7 +1584,6 @@ save_node_info() {
 }
 
 generate_singbox_config() {
-    ensure_singbox_stats_capability || return 1
     begin_data_transaction || {
         print_error "无法创建配置事务快照"
         return 1

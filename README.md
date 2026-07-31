@@ -41,9 +41,9 @@ WireGuard 按 sing-box 1.11+ 的新结构保存到顶层 `endpoints`，Selector/
 ### 🔐 用户管理
 
 - 全局用户系统，支持多用户共享节点
-- 流量限制和到期时间设置
+- 流量限制和到期时间设置（普通内核保留到期限制，定制内核额外执行流量限额）
 - 灵活的用户-节点绑定关系
-- 基于定制内核 V2Ray Stats API 的实时流量统计
+- 可选的定制内核 V2Ray Stats API 实时流量统计
 - 使用持久化累计账本，内核重启后流量不会归零
 - systemd 定时器每分钟检查流量额度与有效期，超限用户自动停用
 
@@ -57,6 +57,9 @@ WireGuard 按 sing-box 1.11+ 的新结构保存到顶层 `endpoints`，Selector/
 
 ### 🧩 定制内核与安全更新
 
+- 官方普通 sing-box 内核可正常创建、校验和运行全部受支持节点，不要求 `with_v2ray_api`
+- 普通内核下自动省略 Stats API 配置，仅停用用户流量统计、流量限额和最近活跃状态
+- 定制内核由用户在“sing-box 管理 → 更新/修复定制内核”中手动安装，不再由节点创建流程强制触发
 - 从官方 `SagerNet/sing-box` 对应版本标签构建
 - 按官方 `release/local/common.sh` 使用 `release/DEFAULT_BUILD_TAGS_OTHERS` 和 `release/LDFLAGS`
 - 额外启用 `with_v2ray_api`，供用户流量统计使用

@@ -268,6 +268,12 @@ get_active_traffic_users_count() {
     local api_addr="${SINGBOX_API_ADDR:-127.0.0.1:10085}"
     local stats count
 
+    if declare -f singbox_has_stats_capability >/dev/null 2>&1 \
+        && ! singbox_has_stats_capability; then
+        echo "UNAVAILABLE"
+        return 0
+    fi
+
     if ! command -v timeout >/dev/null 2>&1 \
         || ! command -v jq >/dev/null 2>&1 \
         || ! command -v systemctl >/dev/null 2>&1 \
@@ -309,8 +315,12 @@ show_main_menu() {
     local user_count=$(get_users_count 2>/dev/null || echo "0")
     local active_traffic_count=$(get_active_traffic_users_count 2>/dev/null || echo "N/A")
     local active_traffic_display="${active_traffic_count}"
+    local active_traffic_suffix="${GRAY}(本次运行)${NC}"
     if [[ "$active_traffic_count" =~ ^[0-9]+$ ]]; then
         active_traffic_display="${active_traffic_count}/${user_count}"
+    elif [[ "$active_traffic_count" == "UNAVAILABLE" ]]; then
+        active_traffic_display="不可用（普通内核）"
+        active_traffic_suffix="${GRAY}(节点功能正常)${NC}"
     fi
 
     # 使用统一的UI函数
@@ -324,7 +334,7 @@ show_main_menu() {
     print_menu_info "  运行状态" "${status}"
     print_menu_info "  用户数量" "${BLUE}${user_count}${NC}"
     print_menu_info "  节点总数" "${BLUE}${node_count}${NC}"
-    print_menu_info "  有流量用户" "${GREEN}${active_traffic_display}${NC} ${GRAY}(本次运行)${NC}"
+    print_menu_info "  有流量用户" "${GREEN}${active_traffic_display}${NC} ${active_traffic_suffix}"
     print_section_end
     echo ""
 
@@ -630,13 +640,6 @@ handle_node_menu() {
 
 # 添加节点菜单（协议选择）
 menu_node_add() {
-    if declare -f ensure_singbox_stats_capability >/dev/null 2>&1 \
-        && ! ensure_singbox_stats_capability; then
-        print_error "节点创建已取消：sing-box 定制内核未就绪"
-        wait_for_input
-        return 1
-    fi
-
     while true; do
         clear
         print_header "添加节点"

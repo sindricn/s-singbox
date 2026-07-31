@@ -1812,8 +1812,37 @@ yaml_scalar_equals_114() {
     ' "$file"
 }
 
+clash_line_has_scalar_114() {
+    local line="$1" key="$2" expected="$3"
+    [[ "$line" == *"${key}: \"${expected}\""* \
+        || "$line" == *"${key}: '${expected}'"* \
+        || "$line" == *"${key}: ${expected},"* \
+        || "$line" == *"${key}: ${expected}}"* ]]
+}
+
+clash_contains_reality_proxy_114() {
+    local file="$1" user_id="$2" port="$3" public_key="$4" short_id="$5" server_name="$6" line
+    while IFS= read -r line; do
+        line=${line%$'\r'}
+        [[ "$line" == *"type: vless"* ]] || continue
+        clash_line_has_scalar_114 "$line" uuid "$user_id" \
+            && clash_line_has_scalar_114 "$line" port "$port" \
+            && clash_line_has_scalar_114 "$line" public-key "$public_key" \
+            && clash_line_has_scalar_114 "$line" short-id "$short_id" \
+            && clash_line_has_scalar_114 "$line" servername "$server_name" \
+            && return 0
+    done < "$file"
+
+    # 兼容升级前由旧生成器写出的块状 YAML；新生成器使用上面的单行映射。
+    yaml_scalar_equals_114 "$file" uuid "$user_id" \
+        && yaml_scalar_equals_114 "$file" port "$port" \
+        && yaml_scalar_equals_114 "$file" public-key "$public_key" \
+        && yaml_scalar_equals_114 "$file" short-id "$short_id" \
+        && yaml_scalar_equals_114 "$file" servername "$server_name"
+}
+
 verify_reality_subscription_files_114() {
-    local meta_file="${DATA_DIR}/subscription_metadata.json" entry name user_id type file content node port public_key short_id server_name reality_nodes
+    local meta_file="${DATA_DIR}/subscription_metadata.json" entry name user_id type file content node port subscription_port public_key short_id server_name reality_nodes
     [[ -f "$meta_file" ]] || return 0
     jq -e '.subscriptions | type == "array"' "$meta_file" >/dev/null 2>&1 || {
         print_error "订阅元数据文件损坏: $meta_file"
@@ -1860,6 +1889,8 @@ verify_reality_subscription_files_114() {
             public_key=$(echo "$node" | jq -r '.extra.public_key // ""')
             short_id=$(echo "$node" | jq -r '.extra.short_ids[0] // ""')
             server_name=$(echo "$node" | jq -r '.extra.server_names[0] // ""')
+            subscription_port=$(resolve_subscription_port "$node") || return 1
+            [[ "$subscription_port" =~ ^[0-9]+$ ]] || return 1
             [[ "$public_key" =~ ^[A-Za-z0-9_-]{43}$ \
                 && ( -z "$short_id" || ( "$short_id" =~ ^[0-9A-Fa-f]{2,16}$ && $((${#short_id} % 2)) -eq 0 ) ) \
                 && -n "$server_name" ]] || {
@@ -1873,17 +1904,12 @@ verify_reality_subscription_files_114() {
                         return 1
                     } ;;
                 clash)
-                    yaml_scalar_equals_114 "$file" uuid "$user_id" \
-                        && yaml_scalar_equals_114 "$file" public-key "$public_key" \
-                        && yaml_scalar_equals_114 "$file" short-id "$short_id" \
-                        && yaml_scalar_equals_114 "$file" servername "$server_name" || {
+                    clash_contains_reality_proxy_114 "$file" "$user_id" "$subscription_port" "$public_key" "$short_id" "$server_name" || {
                         print_error "Clash 订阅 $name 的 Reality 凭据与节点 $port 不一致"
                         return 1
                     } ;;
                 singbox)
-                    port=$(resolve_subscription_port "$node") || return 1
-                    [[ "$port" =~ ^[0-9]+$ ]] || return 1
-                    jq -e --arg id "$user_id" --arg pk "$public_key" --arg sid "$short_id" --arg sni "$server_name" --argjson port "$port" '
+                    jq -e --arg id "$user_id" --arg pk "$public_key" --arg sid "$short_id" --arg sni "$server_name" --argjson port "$subscription_port" '
                         .outbounds[] | select(.type=="vless" and .uuid==$id and .server_port==$port) |
                         select(.tls.server_name==$sni and .tls.reality.public_key==$pk and .tls.reality.short_id==$sid)
                     ' "$file" >/dev/null 2>&1 || {

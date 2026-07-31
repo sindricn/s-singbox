@@ -316,17 +316,23 @@ jq -e '.reality.short_id == [""]' <<< "$empty_sid_tls" >/dev/null
     sed -i 's/0123456789abcdef/fedcba9876543210/' "$raw_file"
     ! verify_reality_subscription_files_114 >/dev/null 2>&1
 
+    printf '%s\n' '{"nodes":[
+      {"protocol":"vless","port":"5005","security":"reality","extra":{"server_names":["example.com"],"public_key":"AJx5Xbkv2G-6LAb6MQauMjFB8xu0LkKClSbXbnX-m1Y","short_ids":["0123456789abcdef"]}},
+      {"protocol":"vless","port":"5020","security":"reality","extra":{"server_names":["www.microsoft.com"],"public_key":"AJx5Xbkv2G-6LAb6MQauMjFB8xu0LkKClSbXbnX-m1Y","short_ids":["78dd7bc4b025236a"]}}
+    ]}' > "$NODES_FILE"
+    printf '%s\n' "{\"bindings\":[
+      {\"port\":\"5005\",\"users\":[\"${user_id}\"]},
+      {\"port\":\"5020\",\"users\":[\"${user_id}\"]}
+    ]}" > "$NODE_USERS_FILE"
     printf '%s\n' "proxies:
-  - name: fixture
-    type: vless
-    uuid: ${user_id}
-    servername: example.com
-    reality-opts:
-      public-key: AJx5Xbkv2G-6LAb6MQauMjFB8xu0LkKClSbXbnX-m1Y
-      short-id: 0123456789abcdef" > "$SUBSCRIPTION_DIR/legacy_${user_id}_clash.yaml"
+  - {name: \"legacy-5005\", type: vless, server: \"203.0.113.10\", port: 5005, uuid: \"${user_id}\", servername: \"example.com\", reality-opts: {public-key: \"AJx5Xbkv2G-6LAb6MQauMjFB8xu0LkKClSbXbnX-m1Y\", short-id: \"0123456789abcdef\"}}
+  - {name: \"new-5020\", type: vless, server: \"203.0.113.10\", port: 5020, uuid: \"${user_id}\", servername: \"www.microsoft.com\", reality-opts: {public-key: \"AJx5Xbkv2G-6LAb6MQauMjFB8xu0LkKClSbXbnX-m1Y\", short-id: \"78dd7bc4b025236a\"}}" > "$SUBSCRIPTION_DIR/legacy_${user_id}_clash.yaml"
     jq --arg type clash '.subscriptions[0].type=$type' "$SUBSCRIPTION_META_FILE" > "$SUBSCRIPTION_META_FILE.tmp"
     mv "$SUBSCRIPTION_META_FILE.tmp" "$SUBSCRIPTION_META_FILE"
     verify_reality_subscription_files_114
+    sed -i 's/78dd7bc4b025236a/aaaaaaaaaaaaaaaa/' "$SUBSCRIPTION_DIR/legacy_${user_id}_clash.yaml"
+    ! verify_reality_subscription_files_114 >/dev/null 2>&1
+    sed -i 's/aaaaaaaaaaaaaaaa/78dd7bc4b025236a/' "$SUBSCRIPTION_DIR/legacy_${user_id}_clash.yaml"
 
     jq --arg type general '.subscriptions += [{name:"non-reality-missing",user_id:"unbound-user",type:$type}]' "$SUBSCRIPTION_META_FILE" > "$SUBSCRIPTION_META_FILE.tmp"
     mv "$SUBSCRIPTION_META_FILE.tmp" "$SUBSCRIPTION_META_FILE"

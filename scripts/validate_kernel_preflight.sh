@@ -27,6 +27,20 @@ chmod +x "$SINGBOX_GO_DIR/bin/go"
 resolved_go=$(ensure_singbox_go '1.24.0')
 [[ "$resolved_go" == "$SINGBOX_GO_DIR/bin/go" ]]
 
+# 兼容官方逗号格式、旧换行/空格格式，并输出 Go 1.25 接受的单一逗号列表。
+cat > "$TMP_DIR/build-tags" <<'EOF'
+with_gvisor,with_quic
+with_dhcp with_gvisor
+EOF
+normalized_tags=$(normalize_singbox_build_tags "$TMP_DIR/build-tags")
+[[ "$normalized_tags" == 'with_gvisor,with_quic,with_dhcp,with_v2ray_api' ]]
+[[ "$normalized_tags" != *' '* ]]
+echo 'with_gvisor,@invalid' > "$TMP_DIR/invalid-build-tags"
+if normalize_singbox_build_tags "$TMP_DIR/invalid-build-tags" >/dev/null 2>&1; then
+    echo "非法构建标签未被拒绝" >&2
+    exit 1
+fi
+
 cat > "$TMP_DIR/plain-singbox" <<'EOF'
 #!/bin/sh
 echo 'sing-box version 1.14.0'

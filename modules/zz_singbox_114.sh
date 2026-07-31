@@ -653,6 +653,27 @@ ensure_singbox_go() {
     printf '%s\n' "$SINGBOX_GO_DIR/bin/go"
 }
 
+normalize_singbox_build_tags() {
+    local tags_file=$1 raw token result="" seen=" "
+    local IFS=$' \t\n'
+    [[ -f "$tags_file" ]] || return 1
+
+    # 官方不同版本可能使用逗号、空格或换行分隔；Go 1.25 不接受逗号与空格混用。
+    raw=$(tr ',\r\n\t' '    ' < "$tags_file") || return 1
+    for token in $raw with_v2ray_api; do
+        if [[ ! "$token" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+            print_error "发现非法 Go 构建标签: $token" >&2
+            return 1
+        fi
+        if [[ "$seen" != *" $token "* ]]; then
+            result+="${result:+,}${token}"
+            seen+="$token "
+        fi
+    done
+    [[ -n "$result" ]] || return 1
+    printf '%s\n' "$result"
+}
+
 build_and_install_singbox() {
     local version=$1 start_after_install=${2:-true} go_bin work source tags ldflags candidate target backup required_go was_active=false
     [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || { print_error "非法版本号: $version"; return 1; }
@@ -672,9 +693,14 @@ build_and_install_singbox() {
         print_error "Go 工具链路径无效: ${go_bin//$'\n'/, }"
         return 1
     fi
-    tags="$(tr '\n' ' ' < "$source/release/DEFAULT_BUILD_TAGS") with_v2ray_api"
+    tags=$(normalize_singbox_build_tags "$source/release/DEFAULT_BUILD_TAGS") || {
+        rm -rf "$work"
+        print_error "无法解析官方 sing-box 构建标签"
+        return 1
+    }
     ldflags=$(tr '\n' ' ' < "$source/release/LDFLAGS")
     print_info "编译 sing-box（启用 with_v2ray_api）..."
+    print_info "构建标签: $tags"
     if ! (cd "$source" && CGO_ENABLED=0 "$go_bin" build -trimpath -tags "$tags" -ldflags "$ldflags" -o "$candidate" ./cmd/sing-box); then
         rm -rf "$work"; print_error "sing-box 编译失败"; return 1
     fi

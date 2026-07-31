@@ -189,6 +189,7 @@ grep -q 'ensure_singbox_stats_capability' "$ROOT_DIR/modules/zz_singbox_114.sh"
 grep -q 'ensure_singbox_stats_capability' "$ROOT_DIR/singbox-manager.sh"
 grep -q 'sha256sum -c - >/dev/null' "$ROOT_DIR/modules/zz_singbox_114.sh"
 grep -q 'Go 工具链路径无效' "$ROOT_DIR/modules/zz_singbox_114.sh"
+grep -q 'normalize_singbox_build_tags' "$ROOT_DIR/modules/zz_singbox_114.sh"
 grep -q 'warn_if_stats_capability_missing' "$ROOT_DIR/singbox-manager.sh"
 grep -q 'ensure_subscription_server_runtime' "$ROOT_DIR/singbox-manager.sh"
 (

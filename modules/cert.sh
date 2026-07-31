@@ -364,13 +364,19 @@ generate_self_signed_cert() {
     local cert_path="${cert_dir}/fullchain.pem"
     local key_path="${cert_dir}/${domain}.key"
 
-    # 生成私钥和证书
-    openssl req -x509 -newkey rsa:4096 \
-        -keyout "$key_path" \
-        -out "$cert_path" \
-        -days "$days" \
-        -nodes \
+    # 生成私钥和证书。现代客户端要求 SAN；旧 OpenSSL 不支持 -addext 时兼容回退。
+    local -a openssl_args=(
+        req -x509 -newkey rsa:4096
+        -keyout "$key_path"
+        -out "$cert_path"
+        -days "$days"
+        -nodes
         -subj "/CN=$domain"
+    )
+    if openssl req -help 2>&1 | grep -q -- '-addext'; then
+        openssl_args+=(-addext "subjectAltName=DNS:$domain")
+    fi
+    openssl "${openssl_args[@]}"
 
     if [[ $? -eq 0 ]]; then
         print_success "自签名证书生成成功"

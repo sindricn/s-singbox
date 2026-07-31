@@ -148,14 +148,22 @@ derive_ss2022_key() {
 
 node_tls_insecure() {
     local extra=$1
-    local explicit cert
+    local explicit cert subject issuer
     explicit=$(echo "$extra" | jq -r '.tls_insecure // empty')
     if [[ "$explicit" == "true" || "$explicit" == "false" ]]; then
         echo "$explicit"
         return
     fi
     cert=$(echo "$extra" | jq -r '.tls_cert // ""')
-    [[ "$cert" == "${SINGBOX_DIR}/certs/"* ]] && echo true || echo false
+    if [[ -f "$cert" ]] && command -v openssl >/dev/null 2>&1; then
+        subject=$(openssl x509 -in "$cert" -noout -subject 2>/dev/null | sed -E 's/^subject[= ]*//; s/[[:space:]]//g')
+        issuer=$(openssl x509 -in "$cert" -noout -issuer 2>/dev/null | sed -E 's/^issuer[= ]*//; s/[[:space:]]//g')
+        if [[ -n "$subject" && "$subject" == "$issuer" ]]; then
+            echo true
+            return
+        fi
+    fi
+    echo false
 }
 
 split_host_port() {
@@ -249,7 +257,10 @@ build_114_users() {
         expire=$(echo "$user" | jq -r '.expire_date // "unlimited"')
         [[ "$expire" == unlimited || "$expire" > "$(date +%Y-%m-%d)" ]] || continue
         limit=$(echo "$user" | jq -r '.traffic_limit_gb // "unlimited"'); used=$(echo "$user" | jq -r '.traffic_used_gb // 0')
-        if [[ "$limit" != unlimited ]] && awk -v used="$used" -v limit="$limit" 'BEGIN {exit !(used >= limit)}'; then continue; fi
+        if singbox_has_stats_capability && [[ "$limit" != unlimited ]] \
+            && awk -v used="$used" -v limit="$limit" 'BEGIN {exit !(used >= limit)}'; then
+            continue
+        fi
         username=$(echo "$user" | jq -r '.username // .id')
         password=$(echo "$user" | jq -r '.password // ""')
         case "$protocol" in
@@ -291,7 +302,7 @@ generate_114_inbound() {
     security=$(echo "$node" | jq -r '.security // "none"')
     extra=$(echo "$node" | jq -c '.extra // {}')
     base=$(jq -n --arg type "$protocol" --arg tag "${protocol}-${port}" --argjson port "$port" --argjson users "$users" \
-        '{type:$type,tag:$tag,listen:"::",listen_port:$port,users:$users}') || return 1
+        '{type:$type,tag:$tag,listen:"0.0.0.0",listen_port:$port,users:$users}') || return 1
 
     case "$protocol" in
         vless|vmess|trojan)
@@ -916,12 +927,16 @@ resolve_subscription_host() {
         parsed=$(resolve_tunnel_endpoint "$tunnel") || return 1
         host=${parsed%|*}
     fi
-    [[ -n "$host" ]] || host=$(echo "$node" | jq -r '.extra.tls_domain // ""')
+    [[ -n "$host" ]] || host=$(echo "$node" | jq -r '.extra.server_address // ""')
     [[ -n "$host" ]] || host=$(get_subscription_domain_hint 2>/dev/null || true)
     [[ -n "$host" ]] || host=$(get_public_ip 2>/dev/null || true)
     host=${host#\[}
     host=${host%\]}
-    echo "${host:-127.0.0.1}"
+    if [[ -z "$host" || "$host" == null ]]; then
+        print_error "无法确定节点服务器地址：请先配置服务器域名，或确认服务器可获取公网 IPv4" >&2
+        return 1
+    fi
+    echo "$host"
 }
 
 resolve_subscription_port() {
@@ -958,7 +973,10 @@ generate_share_link_smart() {
     user=$(get_subscription_user "$user_id")
     [[ -n "$user" ]] || return 1
     [[ "$(echo "$node" | jq -r '.enabled // true')" == "true" ]] || return 1
-    protocol=$(echo "$node" | jq -r '.protocol'); host=$(resolve_subscription_host "$node"); uri_host=$(format_uri_host "$host"); port=$(resolve_subscription_port "$node")
+    protocol=$(echo "$node" | jq -r '.protocol')
+    host=$(resolve_subscription_host "$node") || return 1
+    uri_host=$(format_uri_host "$host")
+    port=$(resolve_subscription_port "$node")
     name="$(echo "$node" | jq -r '.name // .tag // .protocol')-$(echo "$user" | jq -r '.username')"
     password=$(echo "$user" | jq -r '.password'); uuid=$(echo "$user" | jq -r '.id')
     extra=$(echo "$node" | jq -c '.extra // {}'); security=$(echo "$node" | jq -r '.security // "none"'); transport=$(echo "$node" | jq -r '.transport // "tcp"')
@@ -1035,7 +1053,9 @@ client_tls_for_node() {
 node_to_singbox_outbound() {
     local node=$1 user=$2 protocol host port tag password uuid username extra security transport out tls trans method
     [[ "$(echo "$node" | jq -r '.enabled // true')" == "true" ]] || return 1
-    protocol=$(echo "$node" | jq -r '.protocol'); host=$(resolve_subscription_host "$node"); port=$(resolve_subscription_port "$node")
+    protocol=$(echo "$node" | jq -r '.protocol')
+    host=$(resolve_subscription_host "$node") || return 1
+    port=$(resolve_subscription_port "$node")
     tag="$(echo "$node" | jq -r '.name // .tag // .protocol')-${port}"; password=$(echo "$user" | jq -r '.password'); uuid=$(echo "$user" | jq -r '.id'); username=$(echo "$user" | jq -r '.username')
     extra=$(echo "$node" | jq -c '.extra // {}'); security=$(echo "$node" | jq -r '.security // "none"'); transport=$(echo "$node" | jq -r '.transport // "tcp"')
     case "$protocol" in
@@ -1098,7 +1118,10 @@ generate_clash_config() {
     local nodes=$1 user_id=$2 ignored=${3:-} user node protocol name host port password uuid extra security transport insecure method ss_password proxies='' names=''
     user=$(get_subscription_user "$user_id"); [[ -n "$user" ]] || return 1
     while IFS= read -r node; do
-        protocol=$(echo "$node" | jq -r '.protocol'); name=$(echo "$node" | jq -r '.name // .tag // .protocol'); host=$(resolve_subscription_host "$node"); port=$(resolve_subscription_port "$node")
+        protocol=$(echo "$node" | jq -r '.protocol')
+        name=$(echo "$node" | jq -r '.name // .tag // .protocol')
+        host=$(resolve_subscription_host "$node") || return 1
+        port=$(resolve_subscription_port "$node")
         password=$(echo "$user" | jq -r '.password'); uuid=$(echo "$user" | jq -r '.id'); extra=$(echo "$node" | jq -c '.extra // {}'); security=$(echo "$node" | jq -r '.security // "none"'); transport=$(echo "$node" | jq -r '.transport // "tcp"'); insecure=$(node_tls_insecure "$extra")
         name="$(escape_yaml_string "$name-$port-$(echo "$user" | jq -r '.username')")"
         case "$protocol" in
@@ -1597,6 +1620,61 @@ generate_singbox_config() {
     return 1
 }
 
+socket_listens_on_port() {
+    local port="$1" network="$2" output=""
+    if command -v ss >/dev/null 2>&1; then
+        case "$network" in
+            tcp) output=$(ss -H -ltn 2>/dev/null) ;;
+            udp) output=$(ss -H -lun 2>/dev/null) ;;
+            both)
+                socket_listens_on_port "$port" tcp && socket_listens_on_port "$port" udp
+                return $?
+                ;;
+            *) return 1 ;;
+        esac
+    elif command -v netstat >/dev/null 2>&1; then
+        case "$network" in
+            tcp) output=$(netstat -ltn 2>/dev/null) ;;
+            udp) output=$(netstat -lun 2>/dev/null) ;;
+            both)
+                socket_listens_on_port "$port" tcp && socket_listens_on_port "$port" udp
+                return $?
+                ;;
+            *) return 1 ;;
+        esac
+    else
+        return 2
+    fi
+    awk -v port="$port" '{address=$4; sub(/^.*:/,"",address); if (address == port) found=1} END {exit !found}' <<< "$output"
+}
+
+verify_configured_inbound_listeners() {
+    [[ -f "$SINGBOX_CONFIG" ]] || return 1
+    if ! command -v ss >/dev/null 2>&1 && ! command -v netstat >/dev/null 2>&1; then
+        print_warning "缺少 ss/netstat，无法执行节点端口监听自检"
+        return 0
+    fi
+
+    local attempt port type network missing
+    for attempt in 1 2 3 4 5; do
+        missing=""
+        while IFS=$'\t' read -r port type; do
+            type=${type%$'\r'}
+            [[ -n "$port" ]] || continue
+            case "$type" in
+                hysteria|hysteria2|tuic) network="udp" ;;
+                naive|shadowsocks) network="both" ;;
+                *) network="tcp" ;;
+            esac
+            socket_listens_on_port "$port" "$network" || missing+=" ${port}/${network}"
+        done < <(jq -r '.inbounds[]? | [(.listen_port|tostring), .type] | @tsv' "$SINGBOX_CONFIG" 2>/dev/null)
+        [[ -z "$missing" ]] && return 0
+        [[ "$attempt" -lt 5 ]] && sleep 1
+    done
+    print_error "以下节点端口未监听:${missing}"
+    return 1
+}
+
 restart_sing-box() {
     print_info "重启 sing-box..."
     if [[ -f "${DATA_DIR}/.config-awaiting-activation" ]] && ! sync_runtime_subscriptions; then
@@ -1605,6 +1683,19 @@ restart_sing-box() {
         return 1
     fi
     if systemctl restart sing-box && { sleep 2; systemctl is-active --quiet sing-box; }; then
+        if ! verify_configured_inbound_listeners; then
+            print_error "sing-box 进程存活，但节点监听未就绪，正在恢复旧配置"
+            rollback_data_transaction
+            systemctl restart sing-box 2>/dev/null || true
+            return 1
+        fi
+        if declare -f sync_active_node_firewall_ports >/dev/null 2>&1 \
+            && ! sync_active_node_firewall_ports; then
+            print_error "节点端口自动放行失败，正在恢复旧配置"
+            rollback_data_transaction
+            systemctl restart sing-box 2>/dev/null || true
+            return 1
+        fi
         if ! commit_data_transaction; then
             print_error "服务已启动，但事务快照提交失败，正在恢复旧配置和数据"
             rollback_data_transaction || print_error "事务回滚失败，请立即检查 $RUNTIME_TX_DIR 和 $RUNTIME_STATE_DIR"
@@ -1613,6 +1704,12 @@ restart_sing-box() {
             return 1
         fi
         print_success "sing-box 重启成功"
+        print_info "节点监听与本机防火墙已检查"
+        if declare -f print_required_cloud_firewall_ports >/dev/null 2>&1; then
+            print_required_cloud_firewall_ports
+        else
+            print_info "云服务器安全组仍需放行对应 TCP/UDP 端口"
+        fi
         return 0
     fi
 

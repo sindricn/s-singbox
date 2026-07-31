@@ -104,6 +104,121 @@ open_port() {
     return 1
 }
 
+# 非交互式放行单个节点端口，供节点激活流程调用。
+ensure_firewall_port_rule() {
+    local port="$1" protocol="$2" fw_type
+    validate_port "$port" || return 1
+    [[ "$protocol" == "tcp" || "$protocol" == "udp" ]] || return 1
+    fw_type=$(detect_firewall)
+
+    case "$fw_type" in
+        ufw)
+            ufw allow "$port/$protocol" >/dev/null 2>&1 || return 1
+            ;;
+        firewalld)
+            if ! systemctl is-active --quiet firewalld 2>/dev/null; then
+                print_warning "firewalld 未运行，跳过本机端口规则"
+                return 0
+            fi
+            firewall-cmd --permanent --add-port="${port}/${protocol}" >/dev/null 2>&1 || return 1
+            firewall-cmd --reload >/dev/null 2>&1 || return 1
+            ;;
+        iptables)
+            iptables -C INPUT -p "$protocol" --dport "$port" -j ACCEPT 2>/dev/null \
+                || iptables -I INPUT -p "$protocol" --dport "$port" -j ACCEPT \
+                || return 1
+            if command -v netfilter-persistent >/dev/null 2>&1; then
+                netfilter-persistent save >/dev/null 2>&1 \
+                    || print_warning "端口 $port/$protocol 已放行，但规则持久化失败"
+            fi
+            ;;
+        none)
+            return 0
+            ;;
+    esac
+}
+
+ensure_firewall_port_range_rule() {
+    local range="$1" protocol="$2" start_port end_port fw_type
+    [[ "$range" =~ ^([0-9]+):([0-9]+)$ ]] || return 1
+    start_port=${BASH_REMATCH[1]}
+    end_port=${BASH_REMATCH[2]}
+    validate_port "$start_port" && validate_port "$end_port" && [[ "$start_port" -le "$end_port" ]] || return 1
+    [[ "$protocol" == "tcp" || "$protocol" == "udp" ]] || return 1
+    fw_type=$(detect_firewall)
+
+    case "$fw_type" in
+        ufw)
+            ufw allow "${start_port}:${end_port}/${protocol}" >/dev/null 2>&1 || return 1
+            ;;
+        firewalld)
+            if ! systemctl is-active --quiet firewalld 2>/dev/null; then
+                print_warning "firewalld 未运行，跳过本机端口范围规则"
+                return 0
+            fi
+            firewall-cmd --permanent --add-port="${start_port}-${end_port}/${protocol}" >/dev/null 2>&1 || return 1
+            firewall-cmd --reload >/dev/null 2>&1 || return 1
+            ;;
+        iptables)
+            iptables -C INPUT -p "$protocol" --dport "${start_port}:${end_port}" -j ACCEPT 2>/dev/null \
+                || iptables -I INPUT -p "$protocol" --dport "${start_port}:${end_port}" -j ACCEPT \
+                || return 1
+            if command -v netfilter-persistent >/dev/null 2>&1; then
+                netfilter-persistent save >/dev/null 2>&1 \
+                    || print_warning "端口范围 ${range}/${protocol} 已放行，但规则持久化失败"
+            fi
+            ;;
+        none)
+            return 0
+            ;;
+    esac
+}
+
+# 按实际生成的入站配置同步本机防火墙。云厂商安全组仍需用户在控制台放行。
+sync_active_node_firewall_ports() {
+    [[ -f "$SINGBOX_CONFIG" ]] || return 0
+    local port type hopping network rules
+    [[ -f "$NODES_FILE" ]] || return 1
+    rules=$(jq -r --slurpfile nodes "$NODES_FILE" '
+        .inbounds[]? |
+        . as $inbound |
+        (($nodes[0].nodes // []) | map(select((.port|tostring) == ($inbound.listen_port|tostring))) | .[0].extra.port_hopping // "") as $hopping |
+        [($inbound.listen_port|tostring), $inbound.type, $hopping] | @tsv
+    ' "$SINGBOX_CONFIG" 2>/dev/null) || return 1
+    while IFS=$'\t' read -r port type hopping; do
+        type=${type%$'\r'}
+        hopping=${hopping%$'\r'}
+        [[ -n "$port" ]] || continue
+        case "$type" in
+            hysteria|hysteria2|tuic)
+                network="udp"
+                if [[ "$type" == "hysteria2" && -n "$hopping" && "$hopping" != "null" ]]; then
+                    ensure_firewall_port_range_rule "$hopping" udp || return 1
+                fi
+                ;;
+            naive|shadowsocks)
+                ensure_firewall_port_rule "$port" tcp || return 1
+                ensure_firewall_port_rule "$port" udp || return 1
+                continue
+                ;;
+            *) network="tcp" ;;
+        esac
+        ensure_firewall_port_rule "$port" "$network" || return 1
+    done <<< "$rules"
+    return 0
+}
+
+print_required_cloud_firewall_ports() {
+    [[ -f "$SINGBOX_CONFIG" ]] || return 0
+    local tcp_ports udp_ports hopping_ranges
+    tcp_ports=$(jq -r '[.inbounds[]? | select(.type != "hysteria" and .type != "hysteria2" and .type != "tuic") | .listen_port] | unique | map(tostring) | join(",")' "$SINGBOX_CONFIG" 2>/dev/null)
+    udp_ports=$(jq -r '[.inbounds[]? | select(.type == "hysteria" or .type == "hysteria2" or .type == "tuic" or .type == "naive" or .type == "shadowsocks") | .listen_port] | unique | map(tostring) | join(",")' "$SINGBOX_CONFIG" 2>/dev/null)
+    hopping_ranges=$(jq -r '[.nodes[]? | select(.protocol == "hysteria2") | .extra.port_hopping // empty] | unique | join(",")' "$NODES_FILE" 2>/dev/null)
+    [[ -z "$tcp_ports" ]] || print_info "云安全组需放行 TCP: $tcp_ports"
+    [[ -z "$udp_ports" ]] || print_info "云安全组需放行 UDP: $udp_ports"
+    [[ -z "$hopping_ranges" ]] || print_info "云安全组还需放行 Hysteria2 UDP 跳跃范围: $hopping_ranges"
+}
+
 # 关闭端口
 close_port() {
     clear

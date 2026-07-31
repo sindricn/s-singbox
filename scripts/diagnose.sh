@@ -141,7 +141,7 @@ check_singbox() {
         if /usr/local/bin/sing-box version 2>/dev/null | grep -q 'with_v2ray_api'; then
             check_item "with_v2ray_api 流量统计能力" "ok"
         else
-            check_item "缺少 with_v2ray_api，用户流量统计不可用" "fail"
+            check_item "普通内核：节点功能正常，用户流量统计不可用" "warn"
         fi
     else
         check_item "二进制文件不存在" "fail"
@@ -183,8 +183,10 @@ check_singbox() {
             if stats_json=$(/usr/local/bin/sing-box api statsquery --server=127.0.0.1:10085 -pattern 'user>>>' 2>/dev/null) \
                 && echo "$stats_json" | jq -e '.stat | type == "array"' >/dev/null 2>&1; then
                 check_item "Stats API 可查询" "ok"
-            else
+            elif /usr/local/bin/sing-box version 2>/dev/null | grep -q 'with_v2ray_api'; then
                 check_item "Stats API 无法查询" "fail"
+            else
+                check_item "普通内核未启用 Stats API（节点功能不受影响）" "warn"
             fi
         else
             check_item "服务未运行" "warn"

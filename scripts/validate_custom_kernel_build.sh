@@ -36,4 +36,7 @@ run_singbox_go_build "$TMP_DIR/source" "$(command -v go)" "$TAGS" "$LDFLAGS" "$T
 VERSION_OUTPUT=$($TMP_DIR/sing-box version)
 echo "$VERSION_OUTPUT"
 grep -q 'with_v2ray_api' <<< "$VERSION_OUTPUT"
+if [[ -n "${SINGBOX_BUILD_TEST_OUTPUT:-}" ]]; then
+    install -m 0755 "$TMP_DIR/sing-box" "$SINGBOX_BUILD_TEST_OUTPUT"
+fi
 echo "定制 sing-box Linux 编译检查通过"

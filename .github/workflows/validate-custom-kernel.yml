@@ -10,8 +10,13 @@ on:
       - install.sh
       - README.md
       - modules/monitor.sh
+      - modules/common.sh
+      - modules/firewall.sh
+      - modules/node.sh
+      - modules/subscription.sh
       - modules/user.sh
       - modules/zz_singbox_114.sh
+      - scripts/diagnose.sh
       - scripts/validate_all.sh
       - scripts/validate_custom_kernel_build.sh
       - scripts/validate_kernel_preflight.sh
@@ -36,9 +41,12 @@ jobs:
         run: |
           bash -n modules/zz_singbox_114.sh
           bash scripts/validate_kernel_preflight.sh
-      - name: Validate ordinary and custom kernel behavior
-        run: bash scripts/validate_all.sh
       - name: Build real custom kernel
         env:
           SINGBOX_BUILD_TEST_VERSION: 1.13.15
+          SINGBOX_BUILD_TEST_OUTPUT: ${{ runner.temp }}/sing-box-custom
         run: bash scripts/validate_custom_kernel_build.sh
+      - name: Validate ordinary and custom kernel behavior
+        env:
+          SINGBOX_VALIDATION_BIN: ${{ runner.temp }}/sing-box-custom
+        run: bash scripts/validate_all.sh

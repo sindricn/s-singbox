@@ -20,7 +20,7 @@
 - **VMess** - V2Ray 经典协议（支持 TLS、TCP/WS/gRPC/HTTP；不再提供 sing-box 不支持的 mKCP）
 - **Trojan** - TLS 伪装协议（支持连接回落）
 - **Shadowsocks** - 默认使用 Shadowsocks 2022 多用户结构与独立主密钥
-- **Hysteria2** - 基于 QUIC 的高性能协议（支持混淆、带宽限制和 UDP 端口跳跃）
+- **Hysteria2** - 基于 QUIC 的高性能协议（支持混淆、带宽限制和 UDP 端口跳跃；快速搭建默认关闭跳跃，避免云安全组未放行时节点不可用）
 - **TUIC** - QUIC 优化协议
 - **Naive** - 强抗审查代理
 - **AnyTLS** - 流量填充混淆（sing-box 1.12.0+）
@@ -54,6 +54,7 @@ WireGuard 按 sing-box 1.11+ 的新结构保存到顶层 `endpoints`，Selector/
 - **批量更新**：一键更新所有用户订阅
 - **元数据管理**：订阅有效期、流量限制
 - **证书策略**：仅自签名节点生成 `insecure/skip-cert-verify`，受信任证书保持严格校验
+- **连接地址策略**：需要 TLS 域名时优先检测已配置的服务器域名，展示 DNS 核对结果并由用户确认；TLS/SNI 域名与客户端实际连接地址分开保存，避免把伪装域名误当成服务器地址
 
 ### 🧩 定制内核与安全更新
 
@@ -67,6 +68,8 @@ WireGuard 按 sing-box 1.11+ 的新结构保存到顶层 `endpoints`，Selector/
 - 更新前先编译候选内核并检查现有配置；启动失败自动回滚二进制
 - 配置生成采用文件锁、临时文件、`sing-box check` 和原子替换
 - 节点、用户、绑定、出站、订阅和配置使用最后可用快照；服务健康检查成功后才提交事务，异常退出会在下次启动自动恢复
+- 节点创建后会检查实际 TCP/UDP 监听，并自动同步 UFW、firewalld 或 iptables 规则；监听或本机防火墙激活失败时自动回滚
+- 云厂商安全组无法由脚本代管，创建成功后会明确列出需要放行的 TCP、UDP 端口及 Hysteria2 UDP 跳跃范围
 
 ### 🌐 高级功能
 
@@ -162,7 +165,7 @@ Go 工具链由安装流程根据目标 sing-box 源码要求自动检查和准�
 bash scripts/validate_all.sh
 ```
 
-验证项包括 Bash 语法、废弃字段/旧路径扫描、11 种入站协议配置矩阵、20 类出站/策略结构、WireGuard Endpoint、Selector/URLTest 依赖闭包、旧 Xray 出站迁移、绑定调用链、首次安装顺序、IPv6/隧道 URL、分享链接特殊字符、Clash/SingBox 协议字段、V2Ray Stats API，以及已安装内核的 `sing-box check`。
+验证项包括 Bash 语法、废弃字段/旧路径扫描、入站协议配置矩阵、出站/策略结构、WireGuard Endpoint、Selector/URLTest 依赖闭包、旧 Xray 出站迁移、绑定调用链、首次安装顺序、IPv6/隧道 URL、服务器域名与连接地址选择、TCP/UDP 实际监听、本机防火墙与端口跳跃范围、分享链接特殊字符、Clash/SingBox 协议字段、V2Ray Stats API，以及真实定制内核的 `sing-box check`。
 
 
 ## 🤝 贡献指南

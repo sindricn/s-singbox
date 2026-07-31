@@ -647,7 +647,8 @@ manage_server_domain() {
                 print_info "正在验证域名解析..."
 
                 # 获取服务器公网IP
-                local server_ip=$(curl -s ip.sb 2>/dev/null || curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null)
+                local server_ip
+                server_ip=$(get_public_ip 2>/dev/null || true)
                 if [[ -z "$server_ip" ]]; then
                     print_warning "无法获取服务器公网IP，跳过DNS验证"
                     read -p "是否继续设置域名？[y/N]: " confirm

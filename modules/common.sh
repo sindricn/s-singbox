@@ -516,25 +516,23 @@ sanitize_input() {
 
 # 获取公网 IP
 get_public_ip() {
-    local ip=""
+    local ip="" endpoint
 
-    # 尝试多个服务
-    ip=$(curl -s -4 --max-time 5 ifconfig.me 2>/dev/null) || \
-    ip=$(curl -s -4 --max-time 5 icanhazip.com 2>/dev/null) || \
-    ip=$(curl -s -4 --max-time 5 api.ipify.org 2>/dev/null) || \
-    ip=$(curl -s -4 --max-time 5 ipinfo.io/ip 2>/dev/null)
+    # 空响应也必须继续尝试，避免 curl 成功但无内容时错误回退到本机地址。
+    for endpoint in \
+        "https://api.ipify.org" \
+        "https://icanhazip.com" \
+        "https://ifconfig.me/ip" \
+        "https://ipinfo.io/ip"; do
+        ip=$(curl -fsS -4 --connect-timeout 3 --max-time 5 "$endpoint" 2>/dev/null | tr -d '[:space:]') || ip=""
+        if [[ -n "$ip" ]] && validate_ip "$ip"; then
+            echo "$ip"
+            return 0
+        fi
+    done
 
-    if [[ -z "$ip" ]]; then
-        log_warn "无法获取公网 IP"
-        return 1
-    fi
-
-    if ! validate_ip "$ip"; then
-        log_warn "获取的公网 IP 格式不正确: $ip"
-        return 1
-    fi
-
-    echo "$ip"
+    log_warn "无法获取有效公网 IPv4" >&2
+    return 1
 }
 
 # 检查端口是否被占用

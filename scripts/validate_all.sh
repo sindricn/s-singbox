@@ -114,6 +114,8 @@ source "$ROOT_DIR/modules/common.sh"
 # shellcheck source=/dev/null
 source "$ROOT_DIR/modules/config_generator_singbox.sh"
 # shellcheck source=/dev/null
+source "$ROOT_DIR/modules/firewall.sh"
+# shellcheck source=/dev/null
 source "$ROOT_DIR/modules/node.sh"
 # shellcheck source=/dev/null
 source "$ROOT_DIR/modules/subscription.sh"
@@ -138,6 +140,7 @@ jq -e '.inbounds[] | select(.type=="hysteria") | (.up_mbps == 100 and .down_mbps
 jq -e '.inbounds[] | select(.type=="shadowtls") | (.version == 3 and .handshake.server == "example.com" and .users[0].password == "fixture-p@ss:#?/+")' "$SINGBOX_CONFIG" >/dev/null
 jq -e '.inbounds[] | select(.type=="snell") | (.version == 6 and .psk == "fixture-snell-psk" and .users[0].userkey == "fixture-p@ss:#?/+")' "$SINGBOX_CONFIG" >/dev/null
 jq -e '.inbounds[] | select(.type=="socks") | (.users[0].username == "fixture" and .users[0].password == "fixture-p@ss:#?/+")' "$SINGBOX_CONFIG" >/dev/null
+jq -e '[.inbounds[] | select(.listen != "0.0.0.0")] | length == 0' "$SINGBOX_CONFIG" >/dev/null
 jq -e '.type == "http" and .path == "/legacy-h2"' <<< "$(generate_114_transport h2 '{"http_path":"/legacy-h2"}')" >/dev/null
 jq -e '[.outbounds[].tag] | (index("strategy-main") != null and index("strategy-auto") != null and index("strategy-leaf") != null)' "$SINGBOX_CONFIG" >/dev/null
 jq -e '[.outbounds[].tag] | (index("fixture-shadowtls") != null and index("fixture-hysteria") == null and index("fixture-ssh") == null and index("fixture-snell") == null and index("fixture-tor") == null)' "$SINGBOX_CONFIG" >/dev/null
@@ -153,6 +156,10 @@ SINGBOX_CONFIG="$SINGBOX_DIR/config-ordinary.json"
 _generate_singbox_config_114
 jq -e '((.experimental // {}) | has("v2ray_api") | not) and (.inbounds | length == 14)' "$SINGBOX_CONFIG" >/dev/null
 grep -q -- '-c .*config-ordinary.json' "$MOCK_CHECK_LOG"
+if [[ -n "${SINGBOX_VALIDATION_BIN:-}" && -x "$SINGBOX_VALIDATION_BIN" ]]; then
+    "$SINGBOX_VALIDATION_BIN" check -c "$stats_config"
+    "$SINGBOX_VALIDATION_BIN" check -c "$SINGBOX_CONFIG"
+fi
 SINGBOX_CONFIG="$stats_config"
 SINGBOX_BIN="$TMP_DIR/mock-sing-box-stats"
 
@@ -210,6 +217,11 @@ grep -q 'local port="${1:-}"' "$ROOT_DIR/modules/user_node_binding.sh"
 ! grep -q 'local admin_info=$(bind_admin_to_node' "$ROOT_DIR/modules/node.sh"
 grep -q 'save_node_and_bind_admin' "$ROOT_DIR/modules/node.sh"
 grep -q 'persist_port_hopping_rules' "$ROOT_DIR/modules/node.sh"
+grep -q 'select_node_tls_domain' "$ROOT_DIR/modules/node.sh"
+grep -q 'sync_active_node_firewall_ports' "$ROOT_DIR/modules/firewall.sh"
+grep -q 'verify_configured_inbound_listeners' "$ROOT_DIR/modules/zz_singbox_114.sh"
+! grep -q 'YOUR_SERVER_IP' "$ROOT_DIR/modules/node.sh"
+! grep -q 'server_ip="127.0.0.1"' "$ROOT_DIR/modules/subscription.sh"
 grep -q 'sync_runtime_subscriptions' "$ROOT_DIR/modules/zz_singbox_114.sh"
 grep -q 'api statsquery' "$ROOT_DIR/modules/monitor.sh"
 ! grep -q 'http://.*\/stats' "$ROOT_DIR/modules/monitor.sh"
@@ -251,6 +263,72 @@ grep -q 'ensure_subscription_server_runtime' "$ROOT_DIR/singbox-manager.sh"
 tunnel_node='{"port":"21001","tunnel_domain":"https://[2001:db8::8]:8443/proxy?token=test"}'
 [[ "$(resolve_subscription_host "$tunnel_node")" == '2001:db8::8' ]]
 [[ "$(resolve_subscription_port "$tunnel_node")" == '8443' ]]
+(
+    get_subscription_domain_hint() { echo 'global.example.com'; }
+    get_public_ip() { echo '203.0.113.10'; }
+    node_with_address='{"extra":{"server_address":"node.example.com","tls_domain":"sni.example.com"}}'
+    legacy_node='{"extra":{"tls_domain":"sni.example.com"}}'
+    [[ "$(resolve_subscription_host "$node_with_address")" == node.example.com ]]
+    [[ "$(resolve_subscription_host "$legacy_node")" == global.example.com ]]
+)
+(
+    domain_dir="$TMP_DIR/domain-choice"
+    mkdir -p "$domain_dir"
+    DATA_DIR="$domain_dir"
+    printf '%s\n' 'server.example.com' > "$DATA_DIR/server_domain.txt"
+    check_server_domain_resolution() { return 0; }
+    select_node_tls_domain TUIC <<< "" >/dev/null
+    [[ "$NODE_TLS_DOMAIN" == server.example.com && "$NODE_SERVER_ADDRESS" == server.example.com ]]
+    select_node_tls_domain TUIC <<< $'n\ncustom.example.com\ny' >/dev/null
+    [[ "$NODE_TLS_DOMAIN" == custom.example.com && "$NODE_SERVER_ADDRESS" == custom.example.com ]]
+    get_public_ip() { echo '203.0.113.10'; }
+    select_node_tls_domain TUIC <<< $'n\nsni.example.com\nn' >/dev/null
+    [[ "$NODE_TLS_DOMAIN" == sni.example.com && "$NODE_SERVER_ADDRESS" == 203.0.113.10 ]]
+)
+(
+    limited_users="$TMP_DIR/limited-users.json"
+    USERS_FILE="$limited_users"
+    printf '%s\n' '{"users":[{"id":"limited","username":"limited","password":"password","enabled":true,"traffic_limit_gb":"1","traffic_used_gb":"2"}]}' > "$USERS_FILE"
+    singbox_has_stats_capability() { return 1; }
+    jq -e 'length == 1' <<< "$(build_114_users vless none '{}' limited)" >/dev/null
+    singbox_has_stats_capability() { return 0; }
+    jq -e 'length == 0' <<< "$(build_114_users vless none '{}' limited)" >/dev/null
+)
+(
+    SINGBOX_CONFIG="$TMP_DIR/listener-config.json"
+    printf '%s\n' '{"inbounds":[{"type":"vless","listen_port":21001},{"type":"shadowsocks","listen_port":21004},{"type":"hysteria2","listen_port":21005},{"type":"naive","listen_port":21007}]}' > "$SINGBOX_CONFIG"
+    ss() {
+        [[ "$*" == *-ltn* ]] && printf '%s\n' 'LISTEN 0 128 0.0.0.0:21001 0.0.0.0:*'
+        [[ "$*" == *-ltn* ]] && printf '%s\n' 'LISTEN 0 128 0.0.0.0:21004 0.0.0.0:*'
+        [[ "$*" == *-ltn* ]] && printf '%s\n' 'LISTEN 0 128 0.0.0.0:21007 0.0.0.0:*'
+        [[ "$*" == *-lun* ]] && printf '%s\n' 'UNCONN 0 0 0.0.0.0:21004 0.0.0.0:*'
+        [[ "$*" == *-lun* ]] && printf '%s\n' 'UNCONN 0 0 0.0.0.0:21005 0.0.0.0:*'
+        [[ "$*" == *-lun* ]] && printf '%s\n' 'UNCONN 0 0 0.0.0.0:21007 0.0.0.0:*'
+    }
+    verify_configured_inbound_listeners
+    ss() {
+        [[ "$*" == *-ltn* ]] && printf '%s\n' 'LISTEN 0 128 0.0.0.0:21001 0.0.0.0:*' 'LISTEN 0 128 0.0.0.0:21004 0.0.0.0:*' 'LISTEN 0 128 0.0.0.0:21007 0.0.0.0:*'
+        [[ "$*" == *-lun* ]] && printf '%s\n' 'UNCONN 0 0 0.0.0.0:21004 0.0.0.0:*' 'UNCONN 0 0 0.0.0.0:21005 0.0.0.0:*'
+    }
+    ! verify_configured_inbound_listeners >/dev/null
+)
+(
+    SINGBOX_CONFIG="$TMP_DIR/firewall-config.json"
+    printf '%s\n' '{"inbounds":[{"type":"vless","listen_port":21001},{"type":"shadowsocks","listen_port":21004},{"type":"hysteria2","listen_port":21005},{"type":"naive","listen_port":21007}]}' > "$SINGBOX_CONFIG"
+    NODES_FILE="$TMP_DIR/firewall-nodes.json"
+    printf '%s\n' '{"nodes":[{"protocol":"hysteria2","port":"21005","extra":{"port_hopping":"22000:22100"}}]}' > "$NODES_FILE"
+    : > "$TMP_DIR/firewall-calls"
+    detect_firewall() { echo ufw; }
+    ufw() { printf '%s\n' "$*" >> "$TMP_DIR/firewall-calls"; }
+    sync_active_node_firewall_ports
+    grep -q 'allow 21001/tcp' "$TMP_DIR/firewall-calls"
+    grep -q 'allow 21004/tcp' "$TMP_DIR/firewall-calls"
+    grep -q 'allow 21004/udp' "$TMP_DIR/firewall-calls"
+    grep -q 'allow 21005/udp' "$TMP_DIR/firewall-calls"
+    grep -q 'allow 22000:22100/udp' "$TMP_DIR/firewall-calls"
+    grep -q 'allow 21007/tcp' "$TMP_DIR/firewall-calls"
+    grep -q 'allow 21007/udp' "$TMP_DIR/firewall-calls"
+)
 
 (
     TRAFFIC_COUNTERS_FILE="$TMP_DIR/activity-counters.json"

@@ -38,6 +38,105 @@ check_port_exists() {
     return 1  # 端口可用
 }
 
+# 获取已配置的服务器域名，仅接受纯域名记录。
+get_configured_server_domain() {
+    local domain_file="${DATA_DIR}/server_domain.txt" domain=""
+    [[ -f "$domain_file" ]] || return 1
+    domain=$(tr -d ' \r\n' < "$domain_file")
+    [[ -n "$domain" && "$domain" != "未设置" ]] || return 1
+    validate_domain "$domain" >/dev/null 2>&1 || return 1
+    echo "$domain"
+}
+
+resolve_domain_ipv4() {
+    local domain="$1" result=""
+    if command -v getent >/dev/null 2>&1; then
+        result=$(getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ')
+    elif command -v dig >/dev/null 2>&1; then
+        result=$(dig +short A "$domain" 2>/dev/null | awk '/^[0-9]+(\.[0-9]+){3}$/' | sort -u | tr '\n' ' ')
+    elif command -v host >/dev/null 2>&1; then
+        result=$(host -t A "$domain" 2>/dev/null | awk '/has address/ {print $NF}' | sort -u | tr '\n' ' ')
+    fi
+    result=${result% }
+    [[ -n "$result" ]] || return 1
+    echo "$result"
+}
+
+# 返回 0 表示域名 A 记录包含本机公网 IPv4，1 表示明确不匹配，2 表示无法验证。
+check_server_domain_resolution() {
+    local domain="$1" server_ip="" resolved_ips=""
+    server_ip=$(get_public_ip 2>/dev/null || true)
+    resolved_ips=$(resolve_domain_ipv4 "$domain" 2>/dev/null || true)
+    if [[ -z "$server_ip" || -z "$resolved_ips" ]]; then
+        print_warning "暂时无法自动核对 $domain 的 DNS 解析，请确认它可从公网访问本服务器"
+        return 2
+    fi
+    if [[ " $resolved_ips " == *" $server_ip "* ]]; then
+        print_success "域名解析校验通过: $domain → $server_ip"
+        return 0
+    fi
+    print_warning "域名当前解析为: $resolved_ips"
+    print_warning "本服务器公网 IPv4 为: $server_ip；两者不一致可能导致客户端连接失败"
+    return 1
+}
+
+# TLS 节点统一域名选择。结果写入 NODE_TLS_DOMAIN 和 NODE_SERVER_ADDRESS，
+# 后者用于订阅连接地址，避免把伪装/SNI 域名误当成服务器地址。
+select_node_tls_domain() {
+    local protocol_name="$1" configured_domain="" answer="" custom_domain="" resolution_status=2 fallback_address=""
+    NODE_TLS_DOMAIN=""
+    NODE_SERVER_ADDRESS=""
+
+    configured_domain=$(get_configured_server_domain 2>/dev/null || true)
+    if [[ -n "$configured_domain" ]]; then
+        echo -e "${CYAN}检测到已配置的服务器域名: ${YELLOW}${configured_domain}${NC}"
+        print_info "请确保该域名直连本服务器；非 WebSocket/CDN 节点不要开启 Cloudflare 橙云代理"
+        check_server_domain_resolution "$configured_domain" || resolution_status=$?
+        if [[ "$resolution_status" -eq 1 ]]; then
+            read -r -p "解析结果不一致，仍将该域名用于 ${protocol_name} 的服务器地址和 TLS 域名? [y/N]: " answer
+        else
+            read -r -p "是否将该域名用于 ${protocol_name} 的服务器地址和 TLS 域名? [Y/n]: " answer
+        fi
+        if [[ "$resolution_status" -eq 1 && ! "$answer" =~ ^[Yy]$ ]]; then
+            answer="n"
+        fi
+        if [[ ! "$answer" =~ ^[Nn]$ ]]; then
+            NODE_TLS_DOMAIN="$configured_domain"
+            NODE_SERVER_ADDRESS="$configured_domain"
+            print_info "将使用服务器域名: $configured_domain"
+            return 0
+        fi
+    fi
+
+    read -r -p "请输入 ${protocol_name} TLS 域名: " custom_domain
+    if ! validate_domain "$custom_domain"; then
+        print_error "TLS 域名格式不正确"
+        return 1
+    fi
+    NODE_TLS_DOMAIN="$custom_domain"
+
+    read -r -p "该域名是否已直连本服务器，并作为客户端连接地址? [y/N]: " answer
+    if [[ "$answer" =~ ^[Yy]$ ]]; then
+        NODE_SERVER_ADDRESS="$custom_domain"
+        check_server_domain_resolution "$custom_domain" || true
+        return 0
+    fi
+
+    fallback_address=$(get_public_ip 2>/dev/null || true)
+    if [[ -n "$fallback_address" ]]; then
+        NODE_SERVER_ADDRESS="$fallback_address"
+        print_info "客户端将连接服务器公网 IPv4: $fallback_address，TLS SNI 使用: $custom_domain"
+        return 0
+    fi
+
+    read -r -p "无法自动获取公网 IPv4，请输入客户端可直连的服务器域名或 IPv4: " fallback_address
+    if ! validate_domain "$fallback_address" && ! validate_ip "$fallback_address"; then
+        print_error "服务器连接地址格式不正确"
+        return 1
+    fi
+    NODE_SERVER_ADDRESS="$fallback_address"
+}
+
 # 持久化端口跳跃规则。没有可靠持久化后端时返回失败，避免重启后规则静默丢失。
 persist_port_hopping_rules() {
     if command -v netfilter-persistent >/dev/null 2>&1; then
@@ -748,11 +847,21 @@ generate_vless_reality_share() {
     local public_key=$5
     local short_id=$6
 
-    # 获取服务器 IP
-    local server_ip=$(curl -s ip.sb 2>/dev/null || echo "YOUR_SERVER_IP")
+    # Reality 的 SNI 是伪装目标，连接地址必须是本服务器公网地址。
+    local server_ip uri_host
+    server_ip=$(get_public_ip 2>/dev/null || true)
+    if [[ -z "$server_ip" ]]; then
+        print_error "无法获取服务器公网 IPv4，未生成可能无效的 Reality 分享链接"
+        return 1
+    fi
+    if declare -f format_uri_host >/dev/null 2>&1; then
+        uri_host=$(format_uri_host "$server_ip")
+    else
+        uri_host="$server_ip"
+    fi
 
     # 构建分享链接
-    local share_link="vless://${uuid}@${server_ip}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=tcp&headerType=none#${email}"
+    local share_link="vless://${uuid}@${uri_host}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=tcp&headerType=none#${email}"
 
     echo ""
     echo -e "${CYAN}分享链接：${NC}"
@@ -824,7 +933,9 @@ add_vless_node() {
 
     if [[ "$enable_tls" == "y" || "$enable_tls" == "Y" ]]; then
         security="tls"
-        read -p "请输入域名: " tls_domain
+        select_node_tls_domain "VLESS" || return 1
+        tls_domain="$NODE_TLS_DOMAIN"
+        local server_address="$NODE_SERVER_ADDRESS"
         read -p "请输入证书路径 [留空使用自签名]: " tls_cert
 
         if [[ -n "$tls_cert" ]]; then
@@ -849,6 +960,7 @@ add_vless_node() {
         --arg http_path "$http_path" \
         --arg http_host "$http_host" \
         --arg tls_domain "$tls_domain" \
+        --arg server_address "${server_address:-}" \
         --arg tls_cert "$tls_cert" \
         --arg tls_key "$tls_key" \
         '{
@@ -858,6 +970,7 @@ add_vless_node() {
             http_path: $http_path,
             http_host: $http_host,
             tls_domain: $tls_domain,
+            server_address: $server_address,
             tls_cert: $tls_cert,
             tls_key: $tls_key
         }')
@@ -964,7 +1077,9 @@ add_vmess_node() {
     read -p "是否启用 TLS? [y/N]: " enable_tls
     if [[ "$enable_tls" =~ ^[Yy]$ ]]; then
         security="tls"
-        read -p "请输入域名: " tls_domain
+        select_node_tls_domain "VMess" || return 1
+        tls_domain="$NODE_TLS_DOMAIN"
+        local server_address="$NODE_SERVER_ADDRESS"
         read -p "请输入证书路径 [留空使用自签名]: " tls_cert
         if [[ -n "$tls_cert" ]]; then
             read -p "请输入密钥路径: " tls_key
@@ -989,6 +1104,7 @@ add_vmess_node() {
         --arg http_path "$http_path" \
         --arg http_host "$http_host" \
         --arg tls_domain "$tls_domain" \
+        --arg server_address "${server_address:-}" \
         --arg tls_cert "$tls_cert" \
         --arg tls_key "$tls_key" \
         '{
@@ -1000,6 +1116,7 @@ add_vmess_node() {
             http_path: $http_path,
             http_host: $http_host,
             tls_domain: $tls_domain,
+            server_address: $server_address,
             tls_cert: $tls_cert,
             tls_key: $tls_key
         }')
@@ -1052,11 +1169,9 @@ add_trojan_node() {
     fi
 
     # TLS 配置（Trojan 必须使用 TLS）
-    read -p "请输入域名: " tls_domain
-    while [[ -z "$tls_domain" ]]; do
-        print_error "域名不能为空"
-        read -p "请输入域名: " tls_domain
-    done
+    select_node_tls_domain "Trojan" || return 1
+    tls_domain="$NODE_TLS_DOMAIN"
+    local server_address="$NODE_SERVER_ADDRESS"
 
     read -p "请输入证书路径 [留空使用自签名]: " tls_cert
     if [[ -n "$tls_cert" ]]; then
@@ -1089,12 +1204,14 @@ add_trojan_node() {
     # 构建extra_config JSON (包含Trojan特定参数)
     local extra_config=$(jq -n \
         --arg tls_domain "$tls_domain" \
+        --arg server_address "$server_address" \
         --arg tls_cert "$tls_cert" \
         --arg tls_key "$tls_key" \
         --arg fallback_dest "$fallback_dest" \
         --arg fallback_port "$fallback_port" \
         '{
             tls_domain: $tls_domain,
+            server_address: $server_address,
             tls_cert: $tls_cert,
             tls_key: $tls_key,
             fallback_dest: $fallback_dest,
@@ -2195,7 +2312,9 @@ add_http_inbound_node() {
     read -p "是否启用 HTTPS/TLS? [y/N]: " enable_tls
     if [[ "$enable_tls" =~ ^[Yy]$ ]]; then
         security="tls"
-        read -p "请输入域名: " tls_domain
+        select_node_tls_domain "HTTP" || return 1
+        tls_domain="$NODE_TLS_DOMAIN"
+        local server_address="$NODE_SERVER_ADDRESS"
         read -p "请输入证书路径 [留空使用自签名]: " tls_cert
         if [[ -n "$tls_cert" ]]; then
             read -p "请输入密钥路径: " tls_key
@@ -2210,8 +2329,8 @@ add_http_inbound_node() {
         fi
     fi
     local extra_config
-    extra_config=$(jq -n --arg tls_domain "$tls_domain" --arg tls_cert "$tls_cert" --arg tls_key "$tls_key" \
-        '{tls_domain:$tls_domain,tls_cert:$tls_cert,tls_key:$tls_key}') || return 1
+    extra_config=$(jq -n --arg tls_domain "$tls_domain" --arg server_address "${server_address:-}" --arg tls_cert "$tls_cert" --arg tls_key "$tls_key" \
+        '{tls_domain:$tls_domain,server_address:$server_address,tls_cert:$tls_cert,tls_key:$tls_key}') || return 1
     if ! save_node_and_bind_admin "http" "$port" "tcp" "$security" "$extra_config" "http-$port"; then
         return 1
     fi
@@ -2321,12 +2440,8 @@ generate_and_show_node_link() {
 # 收集必须的 TLS 证书，结果写入 NODE_TLS_DOMAIN/NODE_TLS_CERT/NODE_TLS_KEY。
 collect_required_tls_material() {
     local protocol_name="$1"
-    NODE_TLS_DOMAIN="" NODE_TLS_CERT="" NODE_TLS_KEY=""
-    read -p "请输入 ${protocol_name} TLS 域名: " NODE_TLS_DOMAIN
-    if ! validate_domain "$NODE_TLS_DOMAIN"; then
-        print_error "TLS 域名格式不正确"
-        return 1
-    fi
+    NODE_TLS_DOMAIN="" NODE_TLS_CERT="" NODE_TLS_KEY="" NODE_SERVER_ADDRESS=""
+    select_node_tls_domain "$protocol_name" || return 1
     read -p "请输入证书路径 [留空生成自签名证书]: " NODE_TLS_CERT
     if [[ -n "$NODE_TLS_CERT" ]]; then
         read -p "请输入密钥路径: " NODE_TLS_KEY
@@ -2359,9 +2474,9 @@ add_hysteria_node() {
         print_error "上下行速率必须为正整数"; return 1
     }
     read -p "混淆密码 [留空禁用]: " obfs
-    extra_config=$(jq -n --arg tls_domain "$NODE_TLS_DOMAIN" --arg tls_cert "$NODE_TLS_CERT" --arg tls_key "$NODE_TLS_KEY" \
+    extra_config=$(jq -n --arg tls_domain "$NODE_TLS_DOMAIN" --arg server_address "$NODE_SERVER_ADDRESS" --arg tls_cert "$NODE_TLS_CERT" --arg tls_key "$NODE_TLS_KEY" \
         --argjson up "$up_mbps" --argjson down "$down_mbps" --arg obfs "$obfs" \
-        '{tls_domain:$tls_domain,tls_cert:$tls_cert,tls_key:$tls_key,up_mbps:$up,down_mbps:$down} + (if $obfs != "" then {obfs:$obfs} else {} end)') || return 1
+        '{tls_domain:$tls_domain,server_address:$server_address,tls_cert:$tls_cert,tls_key:$tls_key,up_mbps:$up,down_mbps:$down} + (if $obfs != "" then {obfs:$obfs} else {} end)') || return 1
     save_node_and_bind_admin "hysteria" "$port" "udp" "tls" "$extra_config" "hysteria-$port" || return 1
     generate_singbox_config && restart_sing-box || return 1
     print_success "Hysteria v1 节点添加成功"
@@ -2447,11 +2562,9 @@ add_hysteria2_node() {
 
     # TLS 配置（必须）
     echo -e "\n${CYAN}TLS 配置（Hysteria2 必须启用 TLS）：${NC}"
-    read -p "请输入域名: " tls_domain
-    if [[ -z "$tls_domain" ]]; then
-        print_error "Hysteria2 必须配置域名"
-        return 1
-    fi
+    select_node_tls_domain "Hysteria2" || return 1
+    tls_domain="$NODE_TLS_DOMAIN"
+    local server_address="$NODE_SERVER_ADDRESS"
 
     read -p "请输入证书路径 [留空使用自签名]: " tls_cert
     local tls_key=""
@@ -2525,6 +2638,7 @@ ${CYAN}端口跳跃配置（可选）：${NC}"
     # 构建 extra_config
     local extra_config=$(jq -n \
         --arg tls_domain "$tls_domain" \
+        --arg server_address "$server_address" \
         --arg tls_cert "$tls_cert" \
         --arg tls_key "$tls_key" \
         --argjson up_mbps "$up_mbps" \
@@ -2533,6 +2647,7 @@ ${CYAN}端口跳跃配置（可选）：${NC}"
         --arg port_hopping "$port_hopping" \
         '{
             tls_domain: $tls_domain,
+            server_address: $server_address,
             tls_cert: $tls_cert,
             tls_key: $tls_key,
             up_mbps: $up_mbps,
@@ -2604,11 +2719,9 @@ add_tuic_node() {
 
     # TLS 配置（必须）
     echo -e "\n${CYAN}TLS 配置（TUIC 必须启用 TLS）：${NC}"
-    read -p "请输入域名: " tls_domain
-    if [[ -z "$tls_domain" ]]; then
-        print_error "TUIC 必须配置域名"
-        return 1
-    fi
+    select_node_tls_domain "TUIC" || return 1
+    tls_domain="$NODE_TLS_DOMAIN"
+    local server_address="$NODE_SERVER_ADDRESS"
 
     read -p "请输入证书路径 [留空使用自签名]: " tls_cert
     local tls_key=""
@@ -2654,12 +2767,14 @@ add_tuic_node() {
     # 构建 extra_config
     local extra_config=$(jq -n \
         --arg tls_domain "$tls_domain" \
+        --arg server_address "$server_address" \
         --arg tls_cert "$tls_cert" \
         --arg tls_key "$tls_key" \
         --arg congestion_control "$congestion_control" \
         --arg zero_rtt "$zero_rtt" \
         '{
             tls_domain: $tls_domain,
+            server_address: $server_address,
             tls_cert: $tls_cert,
             tls_key: $tls_key,
             congestion_control: $congestion_control,
@@ -2716,11 +2831,9 @@ add_naive_node() {
 
     # TLS 配置（必须）
     echo -e "\n${CYAN}TLS 配置（Naive 必须启用 TLS）：${NC}"
-    read -p "请输入域名: " tls_domain
-    if [[ -z "$tls_domain" ]]; then
-        print_error "Naive 必须配置域名"
-        return 1
-    fi
+    select_node_tls_domain "Naive" || return 1
+    tls_domain="$NODE_TLS_DOMAIN"
+    local server_address="$NODE_SERVER_ADDRESS"
 
     read -p "请输入证书路径 [留空使用自签名]: " tls_cert
     local tls_key=""
@@ -2744,10 +2857,12 @@ add_naive_node() {
     # 构建 extra_config
     local extra_config=$(jq -n \
         --arg tls_domain "$tls_domain" \
+        --arg server_address "$server_address" \
         --arg tls_cert "$tls_cert" \
         --arg tls_key "$tls_key" \
         '{
             tls_domain: $tls_domain,
+            server_address: $server_address,
             tls_cert: $tls_cert,
             tls_key: $tls_key
         }')
@@ -2850,11 +2965,9 @@ add_anytls_node() {
     local tls_cert=""
     local tls_key=""
 
-    read -p "请输入域名: " tls_domain
-    if [[ -z "$tls_domain" ]]; then
-        print_error "AnyTLS 必须配置域名"
-        return 1
-    fi
+    select_node_tls_domain "AnyTLS" || return 1
+    tls_domain="$NODE_TLS_DOMAIN"
+    local server_address="$NODE_SERVER_ADDRESS"
 
     read -p "请输入证书路径 [留空使用自签名]: " tls_cert
 
@@ -2916,8 +3029,8 @@ add_anytls_node() {
     elif [[ "$use_padding" == "true" ]]; then
         padding_scheme='["stop=8","0=30-30","1=100-400","2=400-500,c,500-1000,c,500-1000,c,500-1000,c,500-1000","3=9-9,500-1000","4=500-1000","5=500-1000","6=500-1000","7=500-1000"]'
     fi
-    local extra_config=$(jq -n --arg tls_domain "$tls_domain" --arg tls_cert "$tls_cert" --arg tls_key "$tls_key" --argjson padding "$padding_scheme" \
-        '{tls_domain:$tls_domain,tls_cert:$tls_cert,tls_key:$tls_key,padding_scheme:$padding}')
+    local extra_config=$(jq -n --arg tls_domain "$tls_domain" --arg server_address "$server_address" --arg tls_cert "$tls_cert" --arg tls_key "$tls_key" --argjson padding "$padding_scheme" \
+        '{tls_domain:$tls_domain,server_address:$server_address,tls_cert:$tls_cert,tls_key:$tls_key,padding_scheme:$padding}')
 
     if ! save_node_and_bind_admin "anytls" "$port" "tcp" "$security" "$extra_config" "anytls-$port"; then
         return 1
@@ -3238,64 +3351,11 @@ quick_setup_hysteria2() {
     print_success "端口: $port"
     echo ""
 
-    # 步骤 2/6: 伪装域名选择
-    echo -e "${BLUE}步骤 2/6: 选择伪装域名${NC}"
-    echo -e "${YELLOW}伪装域名选项：${NC}"
-    echo -e "  1. 使用默认域名 (cdn.jsdelivr.net)"
-    echo -e "  2. 自动优选最佳域名（延迟测试）"
-    echo -e "  3. 手动输入域名"
-    echo ""
-    read -p "请选择 [1-3，默认: 2]: " domain_choice
-    domain_choice=${domain_choice:-2}
-
-    local tls_domain=""
-    case $domain_choice in
-        1)
-            tls_domain="cdn.jsdelivr.net"
-            print_info "使用默认域名: $tls_domain"
-            ;;
-        2)
-            print_info "开始智能优选伪装域名..."
-            local test_domains=(
-                www.cloudflare.com
-                cdn.jsdelivr.net
-                www.microsoft.com
-                www.apple.com
-                www.bing.com
-                www.mozilla.org
-            )
-
-            local best_latency=9999
-            local best_domain="cdn.jsdelivr.net"
-
-            for domain in "${test_domains[@]}"; do
-                local latency=$(ping -c 1 -W 1 "$domain" 2>/dev/null | grep 'time=' | awk -F'time=' '{print $2}' | awk '{print $1}' | cut -d'.' -f1)
-                if [[ -n "$latency" && "$latency" =~ ^[0-9]+$ ]]; then
-                    echo "  测试 $domain: ${latency}ms"
-                    if [[ $latency -lt $best_latency ]]; then
-                        best_latency=$latency
-                        best_domain="$domain"
-                    fi
-                fi
-            done
-
-            tls_domain="$best_domain"
-            print_success "优选域名: $tls_domain (${best_latency}ms)"
-            ;;
-        3)
-            read -p "请输入自定义域名: " custom_domain
-            if [[ -n "$custom_domain" ]]; then
-                tls_domain="$custom_domain"
-            else
-                tls_domain="cdn.jsdelivr.net"
-                print_warning "未输入域名，使用默认: $tls_domain"
-            fi
-            ;;
-        *)
-            tls_domain="cdn.jsdelivr.net"
-            print_warning "无效选择，使用默认: $tls_domain"
-            ;;
-    esac
+    # 步骤 2/6: 服务器与 TLS 域名
+    echo -e "${BLUE}步骤 2/6: 选择服务器与 TLS 域名${NC}"
+    select_node_tls_domain "Hysteria2" || return 1
+    local tls_domain="$NODE_TLS_DOMAIN"
+    local server_address="$NODE_SERVER_ADDRESS"
     echo ""
 
     # 步骤 3/6: 生成混淆密码（认证密码将使用admin用户密码）
@@ -3344,10 +3404,10 @@ quick_setup_hysteria2() {
     # 跳跃端口（Port Hopping）
     echo ""
     echo -e "${YELLOW}跳跃端口设置：${NC}"
-    read -p "是否启用端口跳跃? [Y/n]: " enable_hopping
+    read -p "是否启用端口跳跃? [y/N]: " enable_hopping
 
     local port_hopping=""
-    if [[ "$enable_hopping" != "n" && "$enable_hopping" != "N" ]]; then
+    if [[ "$enable_hopping" == "y" || "$enable_hopping" == "Y" ]]; then
         while true; do
             read -p "跳跃端口范围 [默认: 2000:3000]: " hopping_range
 
@@ -3403,14 +3463,16 @@ quick_setup_hysteria2() {
     # 构建 extra_config（使用标准字段名）
     local extra_config_base=$(jq -n \
         --arg tls_domain "$tls_domain" \
+        --arg server_address "$server_address" \
         --arg tls_cert "$tls_cert" \
         --arg tls_key "$tls_key" \
         --argjson up_mbps "$up_mbps" \
         --argjson down_mbps "$down_mbps" \
         --arg obfs_password "$obfs_password" \
-        --arg masquerade "https://${tls_domain}/" \
+        --arg masquerade "https://www.microsoft.com/" \
         '{
             tls_domain: $tls_domain,
+            server_address: $server_address,
             tls_cert: $tls_cert,
             tls_key: $tls_key,
             up_mbps: $up_mbps,
@@ -3475,7 +3537,8 @@ quick_setup_hysteria2() {
         echo -e "  跳跃端口: ${YELLOW}$port_hopping${NC}"
     fi
     echo -e "  协议: ${YELLOW}Hysteria2${NC}"
-    echo -e "  伪装域名: ${YELLOW}$tls_domain${NC}"
+    echo -e "  TLS 域名: ${YELLOW}$tls_domain${NC}"
+    echo -e "  客户端连接地址: ${YELLOW}$server_address${NC}"
     echo -e "  默认用户: ${YELLOW}admin${NC}"
     echo -e "  认证密码: ${YELLOW}$admin_password${NC}"
     echo -e "  混淆类型: ${YELLOW}Salamander${NC}"

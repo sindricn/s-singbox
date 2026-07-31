@@ -291,12 +291,24 @@ tunnel_node='{"port":"21001","tunnel_domain":"https://[2001:db8::8]:8443/proxy?t
     get_subscription_domain_hint() { echo 'global.example.com'; }
     get_public_ip() { echo '203.0.113.10'; }
     node_with_address='{"extra":{"server_address":"node.example.com","tls_domain":"sni.example.com"}}'
-    legacy_tls_node='{"security":"tls","extra":{"tls_domain":"sni.example.com"}}'
-    plain_node='{"security":"none","extra":{}}'
-    reality_node='{"security":"reality","extra":{"tls_domain":"www.example.com"}}'
     [[ "$(resolve_subscription_host "$node_with_address")" == node.example.com ]]
+)
+(
+    get_subscription_domain_hint() { echo 'global.example.com'; }
+    get_public_ip() { echo '203.0.113.10'; }
+    legacy_tls_node='{"security":"tls","extra":{"tls_domain":"sni.example.com"}}'
     [[ "$(resolve_subscription_host "$legacy_tls_node")" == global.example.com ]]
+)
+(
+    get_subscription_domain_hint() { echo 'global.example.com'; }
+    get_public_ip() { echo '203.0.113.10'; }
+    plain_node='{"security":"none","extra":{}}'
     [[ "$(resolve_subscription_host "$plain_node")" == 203.0.113.10 ]]
+)
+(
+    get_subscription_domain_hint() { echo 'global.example.com'; }
+    get_public_ip() { echo '203.0.113.10'; }
+    reality_node='{"security":"reality","extra":{"tls_domain":"www.example.com"}}'
     [[ "$(resolve_subscription_host "$reality_node")" == 203.0.113.10 ]]
 )
 (

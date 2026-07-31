@@ -9,6 +9,23 @@
 DOMAIN_FILE="${DATA_DIR}/domains.json"
 CERT_DIR="${SINGBOX_DIR}/certs"
 DEFAULT_DOMAIN_FILE="${DATA_DIR}/default_domain.txt"
+REALITY_SAFE_DEFAULT_DOMAIN="www.cloudflare.com"
+
+# www.microsoft.com currently returns a ServerHello/Certificate shape that is
+# incompatible with REALITY implementations used by sing-box/Xray. The only
+# server-side symptom can be "REALITY: processed invalid connection", and the
+# result may appear client-specific because fingerprints produce different TLS
+# handshakes.
+# See: https://github.com/SagerNet/sing-box/issues/4290
+is_reality_handshake_domain_compatible() {
+    local domain="${1:-}"
+    domain=${domain,,}
+    domain=${domain%.}
+    case "$domain" in
+        www.microsoft.com) return 1 ;;
+        *) return 0 ;;
+    esac
+}
 
 # 初始化域名数据文件
 init_domain_file() {
@@ -49,11 +66,13 @@ safe_remove_certificate_file() {
 
 # 获取默认伪装域名
 get_default_domain() {
-    if [[ -f "$DEFAULT_DOMAIN_FILE" ]]; then
-        cat "$DEFAULT_DOMAIN_FILE"
-    else
-        echo "www.microsoft.com"
+    local domain=""
+    [[ -f "$DEFAULT_DOMAIN_FILE" ]] && domain=$(tr -d '\r\n' < "$DEFAULT_DOMAIN_FILE")
+    if [[ -z "$domain" ]] || ! is_reality_handshake_domain_compatible "$domain"; then
+        echo "$REALITY_SAFE_DEFAULT_DOMAIN"
+        return
     fi
+    echo "$domain"
 }
 
 # 设置默认伪装域名
@@ -61,6 +80,11 @@ set_default_domain() {
     local domain=$1
     if ! validate_domain "$domain"; then
         print_error "域名格式不正确: $domain"
+        return 1
+    fi
+    if ! is_reality_handshake_domain_compatible "$domain"; then
+        print_error "该域名存在已知 REALITY 握手兼容问题: $domain"
+        print_info "请改用 $REALITY_SAFE_DEFAULT_DOMAIN、www.apple.com 或 www.bing.com"
         return 1
     fi
     echo "$domain" > "$DEFAULT_DOMAIN_FILE"
@@ -90,7 +114,6 @@ test_best_reality_domains() {
     local domains=(
         www.cloudflare.com
         www.apple.com
-        www.microsoft.com
         www.bing.com
         developer.apple.com
         www.gstatic.com
@@ -748,7 +771,6 @@ auto_select_sni_domain() {
 
     # 高质量域名列表（CDN节点多、稳定性高）
     local premium_domains=(
-        www.microsoft.com
         www.apple.com
         www.cloudflare.com
         www.bing.com
@@ -757,7 +779,6 @@ auto_select_sni_domain() {
         www.intel.com
         www.amd.com
         www.nvidia.com
-        login.microsoftonline.com
     )
 
     echo -e "${YELLOW}正在测试高质量域名...${NC}"
@@ -793,7 +814,7 @@ auto_select_sni_domain() {
     if [[ ! -s "$temp_file" ]]; then
         print_error "所有域名测试失败，使用默认域名"
         rm -f "$temp_file"
-        set_default_domain "www.microsoft.com"
+        set_default_domain "$REALITY_SAFE_DEFAULT_DOMAIN"
         return 1
     fi
 
@@ -934,9 +955,8 @@ manage_sni_domain() {
                 cat "${DATA_DIR}/recommended_domains.txt"
             else
                 echo -e "${YELLOW}常用 SNI 域名推荐：${NC}"
-                echo -e "  • www.microsoft.com"
-                echo -e "  • www.apple.com"
                 echo -e "  • www.cloudflare.com"
+                echo -e "  • www.apple.com"
                 echo -e "  • www.bing.com"
                 echo -e "  • aws.amazon.com"
             fi

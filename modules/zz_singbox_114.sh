@@ -1633,6 +1633,7 @@ commit_data_transaction() {
 
 repair_reality_node_credentials_114() {
     local data entry index node port private_key public_key derived_public_key short_id server_name normalized_server_name changed=false
+    local handshake_server replacement_server
     jq -e '.nodes | type == "array"' "$NODES_FILE" >/dev/null 2>&1 || {
         print_error "节点数据文件损坏: $NODES_FILE"
         return 1
@@ -1648,6 +1649,7 @@ repair_reality_node_credentials_114() {
         public_key=$(echo "$node" | jq -r '.extra.public_key // ""')
         short_id=$(echo "$node" | jq -r '.extra.short_ids[0] // .extra.short_id // ""')
         server_name=$(echo "$node" | jq -r '.extra.server_names[0] // .extra.tls_domain // ""')
+        handshake_server=$(echo "$node" | jq -r '.extra.dest_server // ((.extra.dest // "") | split(":")[0]) // ""')
 
         [[ "$private_key" =~ ^[A-Za-z0-9_-]{43}$ ]] || {
             print_error "节点 $port 的 Reality 私钥格式无效"
@@ -1678,6 +1680,21 @@ repair_reality_node_credentials_114() {
                 '.nodes[$index].extra.server_names=[$server_name]') || return 1
             changed=true
             print_warning "已规范化节点 $port 的 Reality server_name: $normalized_server_name"
+        fi
+
+        if declare -f is_reality_handshake_domain_compatible >/dev/null 2>&1 \
+            && { ! is_reality_handshake_domain_compatible "$normalized_server_name" \
+                || { [[ -n "$handshake_server" ]] && ! is_reality_handshake_domain_compatible "$handshake_server"; }; }; then
+            replacement_server=$(get_default_domain)
+            data=$(echo "$data" | jq --argjson index "$index" --arg server "$replacement_server" '
+                .nodes[$index].extra.server_names=[$server]
+                | .nodes[$index].extra.dest=($server + ":443")
+                | .nodes[$index].extra.dest_server=$server
+                | .nodes[$index].extra.dest_port=443
+            ') || return 1
+            changed=true
+            print_warning "已将节点 $port 的已知不兼容 Reality 伪装目标迁移为: $replacement_server"
+            print_warning "节点密钥与 Short ID 保持不变，激活前将同步刷新订阅"
         fi
     done < <(echo "$data" | jq -c '.nodes | to_entries[] | select(.value.protocol=="vless" and .value.security=="reality" and (.value.enabled // true)==true)')
 

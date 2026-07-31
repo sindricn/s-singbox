@@ -113,6 +113,8 @@ source "$ROOT_DIR/modules/common.sh"
 # shellcheck source=/dev/null
 source "$ROOT_DIR/modules/config_generator_singbox.sh"
 # shellcheck source=/dev/null
+source "$ROOT_DIR/modules/domain.sh"
+# shellcheck source=/dev/null
 source "$ROOT_DIR/modules/firewall.sh"
 # shellcheck source=/dev/null
 source "$ROOT_DIR/modules/node.sh"
@@ -124,6 +126,10 @@ source "$ROOT_DIR/modules/user.sh"
 source "$ROOT_DIR/modules/zz_singbox_114.sh"
 # shellcheck source=/dev/null
 source "$ROOT_DIR/modules/zzz_outbound_extended.sh"
+
+[[ "$(get_default_domain)" == "www.cloudflare.com" ]]
+! is_reality_handshake_domain_compatible "www.microsoft.com"
+is_reality_handshake_domain_compatible "www.cloudflare.com"
 
 generate_singbox_config
 jq -e '.inbounds | length == 13' "$SINGBOX_CONFIG" >/dev/null
@@ -194,12 +200,12 @@ vless_node=$(jq -c '.nodes[] | select(.protocol=="vless")' "$NODES_FILE")
 vless_link=$(generate_share_link_smart "059032a9-7d40-4a96-9bb1-36823d848068" "" "$vless_node")
 [[ "$vless_link" == *'allowInsecure=1'* && "$vless_link" == *'type=ws'* && "$vless_link" == *'packetEncoding=xudp'* && "$vless_link" == *'path=%2Fws'* ]]
 
-reality_node='[{"name":"reality","protocol":"vless","port":"21014","transport":"tcp","security":"reality","extra":{"server_address":"203.0.113.10","server_names":["www.microsoft.com"],"public_key":"fixture-public-key","short_ids":["0123456789abcdef"]}}]'
+reality_node='[{"name":"reality","protocol":"vless","port":"21014","transport":"tcp","security":"reality","extra":{"server_address":"203.0.113.10","server_names":["www.cloudflare.com"],"public_key":"fixture-public-key","short_ids":["0123456789abcdef"]}}]'
 generate_clash_config "$reality_node" "059032a9-7d40-4a96-9bb1-36823d848068" > "$TMP_DIR/reality-clash.yaml"
 grep -q 'type: vless.*packet-encoding: xudp.*flow: xtls-rprx-vision.*reality-opts:' "$TMP_DIR/reality-clash.yaml"
 (
     get_public_ip() { echo '203.0.113.10'; }
-    direct_reality_output=$(generate_vless_reality_share "059032a9-7d40-4a96-9bb1-36823d848068" "fixture" "21014" "www.microsoft.com" "fixture-public-key" "0123456789abcdef")
+    direct_reality_output=$(generate_vless_reality_share "059032a9-7d40-4a96-9bb1-36823d848068" "fixture" "21014" "www.cloudflare.com" "fixture-public-key" "0123456789abcdef")
     [[ "$direct_reality_output" == *'packetEncoding=xudp'* ]]
 )
 
@@ -303,6 +309,15 @@ jq -e '.reality.short_id == [""]' <<< "$empty_sid_tls" >/dev/null
 ! validate_reality_keypair \
     'iH1wT46Q_W-grVuEQGP-mUNnY-5f_gk9_8jr_LM26Fw' \
     'BJx5Xbkv2G-6LAb6MQauMjFB8xu0LkKClSbXbnX-m1Y' >/dev/null 2>&1
+(
+    DATA_DIR="$TMP_DIR/reality-target-migration"
+    NODES_FILE="$DATA_DIR/nodes.json"
+    DEFAULT_DOMAIN_FILE="$DATA_DIR/default_domain.txt"
+    mkdir -p "$DATA_DIR"
+    printf '%s\n' '{"nodes":[{"protocol":"vless","port":"5005","security":"reality","extra":{"dest":"www.microsoft.com:443","server_names":["www.microsoft.com"],"private_key":"iH1wT46Q_W-grVuEQGP-mUNnY-5f_gk9_8jr_LM26Fw","public_key":"AJx5Xbkv2G-6LAb6MQauMjFB8xu0LkKClSbXbnX-m1Y","short_ids":["0123456789abcdef"]}}]}' > "$NODES_FILE"
+    repair_reality_node_credentials_114
+    jq -e '.nodes[0].extra | (.server_names == ["www.cloudflare.com"] and .dest == "www.cloudflare.com:443" and .dest_server == "www.cloudflare.com" and .dest_port == 443)' "$NODES_FILE" >/dev/null
+)
 (
     DATA_DIR="$TMP_DIR/reality-subscription-repair"
     USERS_FILE="$DATA_DIR/users.json"

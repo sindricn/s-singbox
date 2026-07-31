@@ -665,7 +665,6 @@ quick_add_vless_reality() {
             local test_domains=(
                 www.cloudflare.com
                 www.apple.com
-                www.microsoft.com
                 www.bing.com
                 aws.amazon.com
                 cdn.jsdelivr.net
@@ -787,6 +786,12 @@ quick_add_vless_reality() {
 
     if ! server_names=$(normalize_reality_server_name "$server_names"); then
         print_error "Reality 伪装域名格式无效，请使用纯域名（不要包含协议、路径或端口）"
+        return 1
+    fi
+    if declare -f is_reality_handshake_domain_compatible >/dev/null 2>&1 \
+        && ! is_reality_handshake_domain_compatible "$server_names"; then
+        print_error "该域名存在已知 REALITY 握手兼容问题: $server_names"
+        print_info "请改用 $(get_default_domain)、www.apple.com 或 www.bing.com"
         return 1
     fi
     dest_server="$server_names"
@@ -3143,7 +3148,7 @@ quick_setup_vless_reality() {
     echo -e "${CYAN}Reality 配置：${NC}"
     echo ""
     echo -e "${YELLOW}伪装域名 (SNI) 设置：${NC}"
-    echo -e "  1. 使用默认伪装域名 (www.microsoft.com)"
+    echo -e "  1. 使用默认伪装域名 ($(get_default_domain))"
     echo -e "  2. 自动优选最佳域名（智能延迟测试）"
     echo -e "  3. 手动输入域名"
     echo ""
@@ -3156,7 +3161,7 @@ quick_setup_vless_reality() {
     case $domain_choice in
         1)
             # 使用默认域名
-            dest_server="www.microsoft.com"
+            dest_server=$(get_default_domain)
             server_names=$dest_server
             print_info "使用默认伪装域名: $dest_server"
             ;;
@@ -3170,7 +3175,6 @@ quick_setup_vless_reality() {
             local test_domains=(
                 www.cloudflare.com
                 www.apple.com
-                www.microsoft.com
                 www.bing.com
                 aws.amazon.com
                 cdn.jsdelivr.net
@@ -3230,7 +3234,7 @@ quick_setup_vless_reality() {
                 echo ""
             else
                 print_warning "自动优选失败，使用默认域名"
-                dest_server="www.microsoft.com"
+                dest_server=$(get_default_domain)
                 server_names=$dest_server
             fi
 
@@ -3257,13 +3261,19 @@ quick_setup_vless_reality() {
             ;;
         *)
             # 默认
-            dest_server="www.microsoft.com"
+            dest_server=$(get_default_domain)
             server_names=$dest_server
             ;;
     esac
 
     if ! server_names=$(normalize_reality_server_name "$server_names"); then
         print_error "Reality 伪装域名格式无效，请使用纯域名（不要包含协议、路径或端口）"
+        return 1
+    fi
+    if declare -f is_reality_handshake_domain_compatible >/dev/null 2>&1 \
+        && ! is_reality_handshake_domain_compatible "$server_names"; then
+        print_error "该域名存在已知 REALITY 握手兼容问题: $server_names"
+        print_info "请改用 $(get_default_domain)、www.apple.com 或 www.bing.com"
         return 1
     fi
     dest_server="$server_names"

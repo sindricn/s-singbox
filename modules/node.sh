@@ -480,8 +480,9 @@ generate_reality_keypair() {
     fi
 
     # 尝试生成密钥对
-    local output=$(sing-box generate reality-keypair 2>&1)
-    local exit_code=$?
+    local output="" exit_code=0
+    output=$(sing-box generate reality-keypair 2>&1)
+    exit_code=$?
 
     # 如果新命令失败，尝试旧命令
     if [[ $exit_code -ne 0 ]]; then
@@ -496,11 +497,110 @@ generate_reality_keypair() {
         return 1
     fi
 
-    # 调试：显示原始输出
-    echo "$output" >&2
-
     # 返回结果
     echo "$output"
+}
+
+# Reality 凭据由同一次 sing-box 输出生成，并在落盘前验证公私钥配对。
+REALITY_PRIVATE_KEY=""
+REALITY_PUBLIC_KEY=""
+REALITY_SHORT_ID=""
+
+parse_reality_keypair_output() {
+    local output="$1" private_key="" public_key=""
+    private_key=$(printf '%s\n' "$output" | awk -F: '
+        { key=tolower($1); gsub(/[[:space:]]/, "", key) }
+        key == "privatekey" { value=$0; sub(/^[^:]*:[[:space:]]*/, "", value); gsub(/[[:space:]]/, "", value); print value; exit }
+    ')
+    public_key=$(printf '%s\n' "$output" | awk -F: '
+        { key=tolower($1); gsub(/[[:space:]]/, "", key) }
+        key == "publickey" { value=$0; sub(/^[^:]*:[[:space:]]*/, "", value); gsub(/[[:space:]]/, "", value); print value; exit }
+    ')
+
+    [[ "$private_key" =~ ^[A-Za-z0-9_-]{43}$ ]] || {
+        print_error "Reality 私钥输出格式无效"
+        return 1
+    }
+    [[ "$public_key" =~ ^[A-Za-z0-9_-]{43}$ ]] || {
+        print_error "Reality 公钥输出格式无效"
+        return 1
+    }
+    REALITY_PRIVATE_KEY="$private_key"
+    REALITY_PUBLIC_KEY="$public_key"
+}
+
+derive_reality_public_key() {
+    local private_key="$1" encoded derived
+    command -v openssl >/dev/null 2>&1 && command -v base64 >/dev/null 2>&1 && command -v tail >/dev/null 2>&1 || return 1
+    encoded=${private_key//-/+}
+    encoded=${encoded//_/\/}
+    case $((${#encoded} % 4)) in
+        2) encoded+="==" ;;
+        3) encoded+="=" ;;
+        0) ;;
+        *) return 1 ;;
+    esac
+    derived=$(
+        {
+            # RFC 8410 PKCS#8 X25519 私钥 DER 前缀，后接 32 字节原始私钥。
+            printf '\x30\x2e\x02\x01\x00\x30\x05\x06\x03\x2b\x65\x6e\x04\x22\x04\x20'
+            printf '%s' "$encoded" | base64 -d
+        } | openssl pkey -inform DER -pubout -outform DER 2>/dev/null \
+          | tail -c 32 | base64 | tr -d '=\r\n' | tr '+/' '-_'
+    ) || return 1
+    [[ "$derived" =~ ^[A-Za-z0-9_-]{43}$ ]] || return 1
+    printf '%s\n' "$derived"
+}
+
+validate_reality_keypair() {
+    local private_key="$1" public_key="$2" derived
+    [[ "$private_key" =~ ^[A-Za-z0-9_-]{43}$ && "$public_key" =~ ^[A-Za-z0-9_-]{43}$ ]] || return 1
+    derived=$(derive_reality_public_key "$private_key") || {
+        print_error "无法使用 OpenSSL 校验 Reality 公私钥配对"
+        return 1
+    }
+    if [[ "$derived" != "$public_key" ]]; then
+        print_error "Reality 公钥与私钥不匹配，拒绝生成无效节点"
+        return 1
+    fi
+}
+
+generate_reality_credentials() {
+    local keypair="" short_id=""
+    REALITY_PRIVATE_KEY=""
+    REALITY_PUBLIC_KEY=""
+    REALITY_SHORT_ID=""
+
+    if ! keypair=$(generate_reality_keypair); then
+        return 1
+    fi
+    parse_reality_keypair_output "$keypair" || return 1
+    validate_reality_keypair "$REALITY_PRIVATE_KEY" "$REALITY_PUBLIC_KEY" || return 1
+    if ! short_id=$(openssl rand -hex 8 2>/dev/null); then
+        print_error "Reality Short ID 生成失败"
+        return 1
+    fi
+    [[ "$short_id" =~ ^[0-9a-f]{16}$ ]] || {
+        print_error "Reality Short ID 格式无效"
+        return 1
+    }
+    REALITY_SHORT_ID="$short_id"
+}
+
+# Reality 服务端会按 SNI 精确匹配 server_name。统一转为小写并移除 DNS
+# 绝对域名尾点，避免客户端 TLS 栈规范化后与服务端保存值不一致。
+normalize_reality_server_name() {
+    local server_name="$1"
+    server_name=$(printf '%s' "$server_name" | tr -d ' \t\r\n')
+    server_name=${server_name%.}
+    server_name=${server_name,,}
+    [[ -n "$server_name" ]] || return 1
+    if declare -f validate_domain >/dev/null 2>&1; then
+        validate_domain "$server_name" >/dev/null 2>&1 || return 1
+    else
+        [[ "$server_name" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] || return 1
+    fi
+    printf '%s\n' "$server_name"
 }
 
 # 一键搭建 VLESS + Reality + TCP 节点
@@ -685,6 +785,12 @@ quick_add_vless_reality() {
             ;;
     esac
 
+    if ! server_names=$(normalize_reality_server_name "$server_names"); then
+        print_error "Reality 伪装域名格式无效，请使用纯域名（不要包含协议、路径或端口）"
+        return 1
+    fi
+    dest_server="$server_names"
+
     # 确认最终配置
     echo ""
     echo -e "${CYAN}最终 Reality 配置：${NC}"
@@ -703,8 +809,7 @@ quick_add_vless_reality() {
         return 1
     fi
 
-    local keypair=$(generate_reality_keypair)
-    if [[ $? -ne 0 ]]; then
+    if ! generate_reality_credentials; then
         print_error "密钥生成失败"
         echo ""
         print_info "调试信息："
@@ -716,70 +821,10 @@ quick_add_vless_reality() {
         echo "  运行命令: sing-box x25519"
         return 1
     fi
-
-    # 解析密钥 - 尝试多种格式
-    local private_key=""
-    local public_key=""
-
-    # 格式1: "PrivateKey: xxx" (新版sing-box)
-    if [[ -z "$private_key" ]]; then
-        private_key=$(echo "$keypair" | grep -i "^PrivateKey:" | cut -d: -f2- | tr -d ' ')
-        public_key=$(echo "$keypair" | grep -i "^PublicKey:" | cut -d: -f2- | tr -d ' ')
-    fi
-
-    # 格式2: "Private key: xxx" (旧版sing-box)
-    if [[ -z "$private_key" ]]; then
-        private_key=$(echo "$keypair" | grep -i "Private key:" | sed 's/.*Private key:[[:space:]]*//' | tr -d ' ')
-        public_key=$(echo "$keypair" | grep -i "Public key:" | sed 's/.*Public key:[[:space:]]*//' | tr -d ' ')
-    fi
-
-    # 格式3: 纯两行base64字符串（每行40-50个字符）
-    if [[ -z "$private_key" ]]; then
-        local line1=$(echo "$keypair" | sed -n '1p' | tr -d ' ')
-        local line2=$(echo "$keypair" | sed -n '2p' | tr -d ' ')
-        # 验证是否为base64格式且长度合理
-        if [[ "$line1" =~ ^[A-Za-z0-9+/=]{40,}$ ]] && [[ "$line2" =~ ^[A-Za-z0-9+/=]{40,}$ ]]; then
-            private_key="$line1"
-            public_key="$line2"
-        fi
-    fi
-
-    # 验证密钥有效性
-    if [[ -z "$private_key" || -z "$public_key" ]]; then
-        print_error "无法解析密钥对"
-        echo ""
-        print_info "原始输出："
-        echo "$keypair"
-        echo ""
-        print_info "尝试手动生成密钥："
-        echo "  运行: sing-box generate reality-keypair"
-        echo "  或: sing-box x25519"
-        return 1
-    fi
-
-    # 验证密钥格式（base64或base64url）
-    # Reality使用base64url格式：- 代替 +，_ 代替 /
-    if ! [[ "$private_key" =~ ^[A-Za-z0-9+/_=-]{40,}$ ]]; then
-        print_error "私钥格式无效（不是base64/base64url）: $private_key"
-        echo ""
-        print_info "原始输出："
-        echo "$keypair"
-        return 1
-    fi
-
-    if ! [[ "$public_key" =~ ^[A-Za-z0-9+/_=-]{40,}$ ]]; then
-        print_error "公钥格式无效（不是base64/base64url）: $public_key"
-        echo ""
-        print_info "原始输出："
-        echo "$keypair"
-        return 1
-    fi
-
-    print_success "私钥: $private_key"
-    print_success "公钥: $public_key"
-
-    # 生成 shortId (8-16位十六进制)
-    local short_id=$(openssl rand -hex 8)
+    local private_key="$REALITY_PRIVATE_KEY"
+    local public_key="$REALITY_PUBLIC_KEY"
+    local short_id="$REALITY_SHORT_ID"
+    print_success "Reality 密钥对已生成并通过配对校验"
     print_info "ShortId: $short_id"
 
     # 构建Reality额外配置（JSON格式）
@@ -3217,6 +3262,12 @@ quick_setup_vless_reality() {
             ;;
     esac
 
+    if ! server_names=$(normalize_reality_server_name "$server_names"); then
+        print_error "Reality 伪装域名格式无效，请使用纯域名（不要包含协议、路径或端口）"
+        return 1
+    fi
+    dest_server="$server_names"
+
     # 确认最终配置
     echo ""
     echo -e "${CYAN}最终 Reality 配置：${NC}"
@@ -3233,8 +3284,7 @@ quick_setup_vless_reality() {
         return 1
     fi
 
-    local keypair=$(generate_reality_keypair)
-    if [[ $? -ne 0 ]]; then
+    if ! generate_reality_credentials; then
         print_error "密钥生成失败"
         echo ""
         print_info "调试信息："
@@ -3246,37 +3296,10 @@ quick_setup_vless_reality() {
         echo "  运行命令: sing-box generate reality-keypair"
         return 1
     fi
-
-    # 解析密钥 - 多种格式兼容
-    local private_key=$(echo "$keypair" | grep -i "Private key:" | awk '{print $3}')
-    local public_key=$(echo "$keypair" | grep -i "Public key:" | awk '{print $3}')
-
-    # 如果第一种格式失败，尝试其他格式
-    if [[ -z "$private_key" || -z "$public_key" ]]; then
-        private_key=$(echo "$keypair" | grep -i "PrivateKey:" | awk '{print $2}')
-        public_key=$(echo "$keypair" | grep -i "PublicKey:" | awk '{print $2}')
-    fi
-
-    # 如果还是失败，直接按行解析
-    if [[ -z "$private_key" || -z "$public_key" ]]; then
-        private_key=$(echo "$keypair" | sed -n '1p' | awk '{print $NF}')
-        public_key=$(echo "$keypair" | sed -n '2p' | awk '{print $NF}')
-    fi
-
-    # 最后检查
-    if [[ -z "$private_key" || -z "$public_key" ]]; then
-        print_error "无法解析密钥对"
-        echo ""
-        print_info "原始输出："
-        echo "$keypair"
-        return 1
-    fi
-
-    print_success "私钥: $private_key"
-    print_success "公钥: $public_key"
-
-    # 4. 生成 shortId (8-16位十六进制)
-    local short_id=$(openssl rand -hex 8)
+    local private_key="$REALITY_PRIVATE_KEY"
+    local public_key="$REALITY_PUBLIC_KEY"
+    local short_id="$REALITY_SHORT_ID"
+    print_success "Reality 密钥对已生成并通过配对校验"
     print_info "ShortId: $short_id"
 
     # 5. 构建 Reality 额外配置（JSON格式，sing-box格式）

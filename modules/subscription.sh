@@ -120,7 +120,7 @@ init_subscription_metadata() {
 }
 
 # 保存订阅元数据
-# 参数: sub_name, expire_date, traffic_limit_gb, traffic_used_gb, user_id
+# 参数: sub_name, user_id, sub_type
 save_subscription_metadata() {
     local sub_name="$1"
     local user_id="$2"        # 用户ID
@@ -137,11 +137,15 @@ save_subscription_metadata() {
         '{name: $name, user_id: $user_id, type: $type, created: $created, updated: $updated}')
 
     # 检查订阅是否已存在
-    local existing=$(jq -r ".subscriptions[] | select(.name == \"$sub_name\") | .name" "$SUBSCRIPTION_META_FILE" 2>/dev/null)
+    local existing
+    existing=$(jq -r --arg name "$sub_name" '.subscriptions[] | select(.name == $name) | .name' "$SUBSCRIPTION_META_FILE" 2>/dev/null)
 
     if [[ -n "$existing" ]]; then
-        # 更新现有元数据
-        if ! jq ".subscriptions |= map(if .name == \"$sub_name\" then . + {type: \"$sub_type\", updated: \"$(date '+%Y-%m-%d %H:%M:%S')\"} else . end)" \
+        # 更新现有元数据时必须同时修复用户关联，避免旧订阅永远无法自动刷新。
+        local updated_at
+        updated_at=$(date '+%Y-%m-%d %H:%M:%S')
+        if ! jq --arg name "$sub_name" --arg user_id "$user_id" --arg type "$sub_type" --arg updated "$updated_at" \
+            '.subscriptions |= map(if .name == $name then . + {user_id: $user_id, type: $type, updated: $updated} else . end)' \
             "$SUBSCRIPTION_META_FILE" > "${SUBSCRIPTION_META_FILE}.tmp"; then
             print_error "更新订阅元数据失败"
             rm -f "${SUBSCRIPTION_META_FILE}.tmp"
@@ -156,7 +160,11 @@ save_subscription_metadata() {
         fi
     fi
 
-    mv "${SUBSCRIPTION_META_FILE}.tmp" "$SUBSCRIPTION_META_FILE"
+    if ! mv "${SUBSCRIPTION_META_FILE}.tmp" "$SUBSCRIPTION_META_FILE"; then
+        rm -f "${SUBSCRIPTION_META_FILE}.tmp"
+        print_error "保存订阅元数据失败"
+        return 1
+    fi
 }
 
 # 获取订阅元数据
@@ -2416,13 +2424,13 @@ generate_subscription_with_user() {
     local sub_url="http://${sub_domain}:${sub_port}/sub/${sub_filename}"
 
     # 保存订阅信息到数据库
-    save_subscription_info "$sub_name" "$sub_url" "$sub_file" "$sub_type" "$sub_user_email"
+    save_subscription_info "$sub_name" "$sub_url" "$sub_file" "$sub_type" "$sub_user_email" || return 1
 
     # 保存订阅元数据（用户ID和订阅类型）
-    save_subscription_metadata "$sub_name" "$sub_user_id" "$sub_type"
+    save_subscription_metadata "$sub_name" "$sub_user_id" "$sub_type" || return 1
 
     # 启动订阅服务
-    setup_subscription_server "$sub_port"
+    setup_subscription_server "$sub_port" || return 1
 
     # 显示结果
     echo ""
@@ -3439,7 +3447,11 @@ save_subscription_info() {
         fi
     fi
 
-    mv "${sub_db}.tmp" "$sub_db"
+    if ! mv "${sub_db}.tmp" "$sub_db"; then
+        rm -f "${sub_db}.tmp"
+        print_error "保存订阅索引失败"
+        return 1
+    fi
 }
 
 # 删除订阅信息
@@ -3699,17 +3711,16 @@ regenerate_subscription_content() {
     local sub_filename=$(basename "$sub_file")
     local sub_url="http://${server_ip}:${port}/sub/${sub_filename}"
 
-    # 使用正确的元数据文件（SUBSCRIPTION_META_FILE而不是subscriptions.json）
-    if [[ ! -f "$SUBSCRIPTION_META_FILE" ]]; then
-        print_warning "元数据文件不存在，跳过元数据更新"
-        return 0
-    fi
+    # 同步更新两个订阅索引，避免内容已刷新但公开 URL 仍指向旧凭据文件。
+    save_subscription_info "$sub_name" "$sub_url" "$sub_file" "$sub_type" "$sub_user_email" || return 1
+    save_subscription_metadata "$sub_name" "$sub_user_id" "$sub_type" || return 1
 
     # 更新元数据：URL、文件路径和更新时间
     if jq --arg name "$sub_name" --arg url "$sub_url" --arg file "$sub_file" \
        '(.subscriptions[] | select(.name == $name)) |= (. + {url: $url, file: $file, updated: (now|todate)})' \
-       "$SUBSCRIPTION_META_FILE" > "${SUBSCRIPTION_META_FILE}.tmp"; then
-        mv "${SUBSCRIPTION_META_FILE}.tmp" "$SUBSCRIPTION_META_FILE"
+       "$SUBSCRIPTION_META_FILE" > "${SUBSCRIPTION_META_FILE}.tmp" \
+       && mv "${SUBSCRIPTION_META_FILE}.tmp" "$SUBSCRIPTION_META_FILE"; then
+        :
     else
         print_error "更新元数据失败"
         rm -f "${SUBSCRIPTION_META_FILE}.tmp"

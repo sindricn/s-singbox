@@ -282,6 +282,56 @@ grep -q 'ensure_subscription_server_runtime' "$ROOT_DIR/singbox-manager.sh"
     rollback_data_transaction() { :; }
     ! save_node_and_bind_admin vless 443 tcp none '{}' fixture
 )
+validate_reality_keypair \
+    'iH1wT46Q_W-grVuEQGP-mUNnY-5f_gk9_8jr_LM26Fw' \
+    'AJx5Xbkv2G-6LAb6MQauMjFB8xu0LkKClSbXbnX-m1Y'
+[[ "$(normalize_reality_server_name 'EXAMPLE.COM.')" == 'example.com' ]]
+! normalize_reality_server_name 'https://example.com' >/dev/null 2>&1
+empty_sid_tls=$(generate_114_tls_server reality '{"dest":"example.com:443","server_names":["example.com"],"private_key":"iH1wT46Q_W-grVuEQGP-mUNnY-5f_gk9_8jr_LM26Fw","public_key":"AJx5Xbkv2G-6LAb6MQauMjFB8xu0LkKClSbXbnX-m1Y","short_ids":[""]}')
+jq -e '.reality.short_id == [""]' <<< "$empty_sid_tls" >/dev/null
+! validate_reality_keypair \
+    'iH1wT46Q_W-grVuEQGP-mUNnY-5f_gk9_8jr_LM26Fw' \
+    'BJx5Xbkv2G-6LAb6MQauMjFB8xu0LkKClSbXbnX-m1Y' >/dev/null 2>&1
+(
+    DATA_DIR="$TMP_DIR/reality-subscription-repair"
+    USERS_FILE="$DATA_DIR/users.json"
+    NODES_FILE="$DATA_DIR/nodes.json"
+    NODE_USERS_FILE="$DATA_DIR/node_users.json"
+    SUBSCRIPTION_DIR="$DATA_DIR/subscriptions"
+    SUBSCRIPTION_META_FILE="$DATA_DIR/subscription_metadata.json"
+    mkdir -p "$SUBSCRIPTION_DIR"
+    user_id='059032a9-7d40-4a96-9bb1-36823d848068'
+    printf '%s\n' '{"users":[{"id":"059032a9-7d40-4a96-9bb1-36823d848068","username":"fixture","email":"fixture@example.com","password":"password","enabled":true}]}' > "$USERS_FILE"
+    printf '%s\n' '{"subscriptions":[{"name":"legacy","type":"raw"}]}' > "$SUBSCRIPTION_META_FILE"
+    raw_file="$SUBSCRIPTION_DIR/legacy_${user_id}_raw.txt"
+    printf '%s\n' "vless://${user_id}@203.0.113.10:5005?security=reality&sni=example.com&pbk=AJx5Xbkv2G-6LAb6MQauMjFB8xu0LkKClSbXbnX-m1Y&sid=0123456789abcdef" > "$raw_file"
+    jq -n --arg file "$raw_file" '{subscriptions:[{name:"legacy",file:$file,type:"raw",user:"fixture"}]}' > "$DATA_DIR/subscriptions.json"
+    printf '%s\n' '{"nodes":[{"protocol":"vless","port":"5005","security":"reality","extra":{"server_names":["EXAMPLE.COM."],"private_key":"iH1wT46Q_W-grVuEQGP-mUNnY-5f_gk9_8jr_LM26Fw","public_key":"BJx5Xbkv2G-6LAb6MQauMjFB8xu0LkKClSbXbnX-m1Y","short_ids":["0123456789abcdef"]}}]}' > "$NODES_FILE"
+    printf '%s\n' '{"bindings":[{"port":"5005","users":["059032a9-7d40-4a96-9bb1-36823d848068"]}]}' > "$NODE_USERS_FILE"
+    repair_reality_node_credentials_114
+    jq -e '.nodes[0].extra.public_key=="AJx5Xbkv2G-6LAb6MQauMjFB8xu0LkKClSbXbnX-m1Y" and .nodes[0].extra.server_names[0]=="example.com"' "$NODES_FILE" >/dev/null
+    repair_subscription_metadata_114
+    jq -e --arg id "$user_id" '.subscriptions[] | select(.name=="legacy" and .user_id==$id and .type=="raw")' "$SUBSCRIPTION_META_FILE" >/dev/null
+    verify_reality_subscription_files_114
+    sed -i 's/0123456789abcdef/fedcba9876543210/' "$raw_file"
+    ! verify_reality_subscription_files_114 >/dev/null 2>&1
+
+    printf '%s\n' "proxies:
+  - name: fixture
+    type: vless
+    uuid: ${user_id}
+    servername: example.com
+    reality-opts:
+      public-key: AJx5Xbkv2G-6LAb6MQauMjFB8xu0LkKClSbXbnX-m1Y
+      short-id: 0123456789abcdef" > "$SUBSCRIPTION_DIR/legacy_${user_id}_clash.yaml"
+    jq --arg type clash '.subscriptions[0].type=$type' "$SUBSCRIPTION_META_FILE" > "$SUBSCRIPTION_META_FILE.tmp"
+    mv "$SUBSCRIPTION_META_FILE.tmp" "$SUBSCRIPTION_META_FILE"
+    verify_reality_subscription_files_114
+
+    jq --arg type general '.subscriptions += [{name:"non-reality-missing",user_id:"unbound-user",type:$type}]' "$SUBSCRIPTION_META_FILE" > "$SUBSCRIPTION_META_FILE.tmp"
+    mv "$SUBSCRIPTION_META_FILE.tmp" "$SUBSCRIPTION_META_FILE"
+    verify_reality_subscription_files_114
+)
 [[ "$(split_host_port '[2001:db8::1]:8443' 443)" == '2001:db8::1|8443' ]]
 [[ "$(format_uri_host '2001:db8::1')" == '[2001:db8::1]' ]]
 tunnel_node='{"port":"21001","tunnel_domain":"https://[2001:db8::8]:8443/proxy?token=test"}'

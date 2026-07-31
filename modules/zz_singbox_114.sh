@@ -215,18 +215,42 @@ generate_114_tls_server() {
     local security=$1
     local extra=$2
     if [[ "$security" == "reality" ]]; then
-        local server server_port private_key short_id server_name endpoint parsed
+        local server server_port private_key public_key short_id server_name normalized_server_name endpoint parsed
         endpoint=$(echo "$extra" | jq -r '.dest // .handshake_server // ""')
         parsed=$(split_host_port "$endpoint" 443)
         server=${parsed%|*}
         server_port=${parsed##*|}
         private_key=$(echo "$extra" | jq -r '.private_key // ""')
+        public_key=$(echo "$extra" | jq -r '.public_key // ""')
         short_id=$(echo "$extra" | jq -r '.short_ids[0] // .short_id // ""')
         server_name=$(echo "$extra" | jq -r '.server_names[0] // .tls_domain // ""')
-        [[ -n "$server" && -n "$private_key" && -n "$server_name" ]] || {
-            print_error "Reality 缺少 dest/private_key/server_names"
+        [[ -n "$server" && -n "$private_key" && -n "$public_key" && -n "$server_name" ]] || {
+            print_error "Reality 缺少 dest/private_key/public_key/server_names"
             return 1
         }
+        [[ "$server_port" =~ ^[0-9]+$ && "$server_port" -ge 1 && "$server_port" -le 65535 ]] || {
+            print_error "Reality 握手服务器端口无效: $server_port"
+            return 1
+        }
+        if declare -f normalize_reality_server_name >/dev/null 2>&1; then
+            normalized_server_name=$(normalize_reality_server_name "$server_name") || {
+                print_error "Reality server_name 格式无效: $server_name"
+                return 1
+            }
+            [[ "$normalized_server_name" == "$server_name" ]] || {
+                print_error "Reality server_name 未规范化，请改为: $normalized_server_name"
+                return 1
+            }
+        fi
+        [[ -z "$short_id" || ( "$short_id" =~ ^[0-9A-Fa-f]{2,16}$ && $((${#short_id} % 2)) -eq 0 ) ]] || {
+            print_error "Reality Short ID 格式无效: $short_id"
+            return 1
+        }
+        if ! declare -f validate_reality_keypair >/dev/null 2>&1 \
+            || ! validate_reality_keypair "$private_key" "$public_key"; then
+            print_error "Reality 公私钥一致性校验失败"
+            return 1
+        fi
         jq -n --arg sn "$server_name" --arg server "$server" --argjson port "$server_port" \
             --arg key "$private_key" --arg sid "$short_id" \
             '{enabled:true,server_name:$sn,reality:{enabled:true,handshake:{server:$server,server_port:$port},private_key:$key,short_id:[$sid]}}'
@@ -1607,12 +1631,280 @@ commit_data_transaction() {
     rm -f "${DATA_DIR}/.config-awaiting-activation"
 }
 
+repair_reality_node_credentials_114() {
+    local data entry index node port private_key public_key derived_public_key short_id server_name normalized_server_name changed=false
+    jq -e '.nodes | type == "array"' "$NODES_FILE" >/dev/null 2>&1 || {
+        print_error "节点数据文件损坏: $NODES_FILE"
+        return 1
+    }
+    data=$(cat "$NODES_FILE") || return 1
+
+    while IFS= read -r entry; do
+        [[ -n "$entry" ]] || continue
+        index=$(echo "$entry" | jq -r '.key')
+        node=$(echo "$entry" | jq -c '.value')
+        port=$(echo "$node" | jq -r '.port // "unknown"')
+        private_key=$(echo "$node" | jq -r '.extra.private_key // ""')
+        public_key=$(echo "$node" | jq -r '.extra.public_key // ""')
+        short_id=$(echo "$node" | jq -r '.extra.short_ids[0] // .extra.short_id // ""')
+        server_name=$(echo "$node" | jq -r '.extra.server_names[0] // .extra.tls_domain // ""')
+
+        [[ "$private_key" =~ ^[A-Za-z0-9_-]{43}$ ]] || {
+            print_error "节点 $port 的 Reality 私钥格式无效"
+            return 1
+        }
+        derived_public_key=$(derive_reality_public_key "$private_key") || {
+            print_error "无法从节点 $port 的 Reality 私钥推导公钥"
+            return 1
+        }
+        if [[ "$public_key" != "$derived_public_key" ]]; then
+            data=$(echo "$data" | jq --argjson index "$index" --arg public_key "$derived_public_key" \
+                '.nodes[$index].extra.public_key=$public_key') || return 1
+            public_key="$derived_public_key"
+            changed=true
+            print_warning "已修复节点 $port 的 Reality 公钥，并将在激活前刷新订阅"
+        fi
+
+        [[ -z "$short_id" || ( "$short_id" =~ ^[0-9A-Fa-f]{2,16}$ && $((${#short_id} % 2)) -eq 0 ) ]] || {
+            print_error "节点 $port 的 Reality Short ID 格式无效"
+            return 1
+        }
+        normalized_server_name=$(normalize_reality_server_name "$server_name") || {
+            print_error "节点 $port 的 Reality server_name 格式无效: $server_name"
+            return 1
+        }
+        if [[ "$server_name" != "$normalized_server_name" ]]; then
+            data=$(echo "$data" | jq --argjson index "$index" --arg server_name "$normalized_server_name" \
+                '.nodes[$index].extra.server_names=[$server_name]') || return 1
+            changed=true
+            print_warning "已规范化节点 $port 的 Reality server_name: $normalized_server_name"
+        fi
+    done < <(echo "$data" | jq -c '.nodes | to_entries[] | select(.value.protocol=="vless" and .value.security=="reality" and (.value.enabled // true)==true)')
+
+    [[ "$changed" == true ]] || return 0
+    atomic_write_json "$NODES_FILE" "$data"
+}
+
+normalize_subscription_type_114() {
+    case "$1" in
+        general|1|base64) echo general ;;
+        raw|2) echo raw ;;
+        clash|3) echo clash ;;
+        singbox|4) echo singbox ;;
+        *) return 1 ;;
+    esac
+}
+
+# 修复升级遗留订阅的 user_id/type 元数据，使 Reality 密钥轮换后旧订阅也会被强制刷新。
+repair_subscription_metadata_114() {
+    local meta_file="${DATA_DIR}/subscription_metadata.json" sub_db="${DATA_DIR}/subscriptions.json"
+    local data entry name type user_id username file base candidate_id updated
+    updated=$(date '+%Y-%m-%d %H:%M:%S')
+
+    if [[ -f "$meta_file" ]]; then
+        jq -e '.subscriptions | type == "array"' "$meta_file" >/dev/null 2>&1 || {
+            print_error "订阅元数据文件损坏: $meta_file"
+            return 1
+        }
+        data=$(jq '{subscriptions:[.subscriptions[] | select((.name // "") != "")]}' "$meta_file") || return 1
+    else
+        data='{"subscriptions":[]}'
+    fi
+
+    if [[ -f "$sub_db" ]]; then
+        jq -e '.subscriptions | type == "array"' "$sub_db" >/dev/null 2>&1 || {
+            print_error "订阅索引文件损坏: $sub_db"
+            return 1
+        }
+        while IFS= read -r entry; do
+            [[ -n "$entry" ]] || continue
+            name=$(echo "$entry" | jq -r '.name // ""')
+            type=$(normalize_subscription_type_114 "$(echo "$entry" | jq -r '.type // "general"')" 2>/dev/null || echo general)
+            username=$(echo "$entry" | jq -r '.user // ""')
+            file=$(echo "$entry" | jq -r '.file // ""')
+            user_id=$(echo "$data" | jq -r --arg name "$name" '.subscriptions[] | select(.name==$name) | .user_id // empty' | head -1)
+            if [[ -z "$user_id" ]] || ! jq -e --arg id "$user_id" '.users[] | select(.id==$id)' "$USERS_FILE" >/dev/null 2>&1; then
+                user_id=$(jq -r --arg key "$username" '.users[] | select(.id==$key or .username==$key or .email==$key) | .id' "$USERS_FILE" 2>/dev/null | head -1)
+            fi
+            if [[ -z "$user_id" && -n "$file" ]]; then
+                base=$(basename "$file")
+                while IFS= read -r candidate_id; do
+                    [[ -n "$candidate_id" ]] || continue
+                    if [[ "$base" == *"_${candidate_id}_"* ]]; then
+                        user_id="$candidate_id"
+                        break
+                    fi
+                done < <(jq -r '.users[].id' "$USERS_FILE" 2>/dev/null)
+            fi
+            [[ -n "$name" && -n "$user_id" ]] || continue
+            data=$(echo "$data" | jq --arg name "$name" --arg user_id "$user_id" --arg type "$type" --arg updated "$updated" '
+                (.subscriptions | map(select(.name==$name)) | first // {created:$updated}) as $old |
+                .subscriptions = ([.subscriptions[] | select(.name!=$name)] + [$old + {name:$name,user_id:$user_id,type:$type,updated:$updated}])
+            ') || return 1
+        done < <(jq -c '.subscriptions[]' "$sub_db")
+    fi
+
+    if [[ -d "$SUBSCRIPTION_DIR" ]]; then
+        while IFS= read -r user_id; do
+            [[ -n "$user_id" ]] || continue
+            while IFS= read -r file; do
+                [[ -n "$file" ]] || continue
+                base=$(basename "$file")
+                case "$base" in
+                    *"_${user_id}_base64.txt") type=general; name=${base%_${user_id}_base64.txt} ;;
+                    *"_${user_id}_raw.txt") type=raw; name=${base%_${user_id}_raw.txt} ;;
+                    *"_${user_id}_clash.yaml") type=clash; name=${base%_${user_id}_clash.yaml} ;;
+                    *"_${user_id}_singbox.json") type=singbox; name=${base%_${user_id}_singbox.json} ;;
+                    *) continue ;;
+                esac
+                [[ -n "$name" ]] || continue
+                # subscriptions.json/现有元数据是权威来源。只有名称尚未恢复时
+                # 才从遗留文件名补录，避免多个旧格式文件导致类型被随机覆盖。
+                if echo "$data" | jq -e --arg name "$name" '.subscriptions[] | select(.name==$name and (.user_id // "") != "")' >/dev/null 2>&1; then
+                    continue
+                fi
+                data=$(echo "$data" | jq --arg name "$name" --arg user_id "$user_id" --arg type "$type" --arg updated "$updated" '
+                    (.subscriptions | map(select(.name==$name)) | first // {created:$updated}) as $old |
+                    .subscriptions = ([.subscriptions[] | select(.name!=$name)] + [$old + {name:$name,user_id:$user_id,type:$type,updated:$updated}])
+                ') || return 1
+            done < <(find "$SUBSCRIPTION_DIR" -maxdepth 1 -type f -name "*_${user_id}_*" -print 2>/dev/null)
+        done < <(jq -r '.users[].id' "$USERS_FILE" 2>/dev/null)
+    fi
+
+    data=$(echo "$data" | jq '.subscriptions |= (sort_by(.name) | unique_by(.name))') || return 1
+    atomic_write_json "$meta_file" "$data"
+}
+
+subscription_contains_reality_uri_114() {
+    local content="$1" user_id="$2" public_key="$3" short_id="$4" server_name="$5" line
+    local encoded_public_key encoded_short_id encoded_server_name
+    encoded_public_key=$(urlencode "$public_key") || return 1
+    encoded_short_id=$(urlencode "$short_id") || return 1
+    encoded_server_name=$(urlencode "$server_name") || return 1
+    while IFS= read -r line; do
+        line=${line%$'\r'}
+        [[ "$line" == vless://${user_id}@* ]] || continue
+        [[ "$line" == *"pbk=${encoded_public_key}"* \
+            && "$line" == *"sid=${encoded_short_id}"* \
+            && "$line" == *"sni=${encoded_server_name}"* ]] && return 0
+    done <<< "$content"
+    return 1
+}
+
+yaml_scalar_equals_114() {
+    local file="$1" key="$2" expected="$3"
+    awk -v wanted_key="$key" -v expected="$expected" '
+        {
+            line=$0
+            sub(/^[[:space:]]*/, "", line)
+            prefix=wanted_key ":"
+            if (index(line, prefix) != 1) next
+            value=substr(line, length(prefix) + 1)
+            sub(/^[[:space:]]*/, "", value)
+            sub(/[[:space:]]*$/, "", value)
+            if ((substr(value,1,1) == "\"" && substr(value,length(value),1) == "\"") ||
+                (substr(value,1,1) == "\047" && substr(value,length(value),1) == "\047")) {
+                value=substr(value,2,length(value)-2)
+            }
+            if (value == expected) found=1
+        }
+        END { exit(found ? 0 : 1) }
+    ' "$file"
+}
+
+verify_reality_subscription_files_114() {
+    local meta_file="${DATA_DIR}/subscription_metadata.json" entry name user_id type file content node port public_key short_id server_name reality_nodes
+    [[ -f "$meta_file" ]] || return 0
+    jq -e '.subscriptions | type == "array"' "$meta_file" >/dev/null 2>&1 || {
+        print_error "订阅元数据文件损坏: $meta_file"
+        return 1
+    }
+    jq -e '.nodes | type == "array"' "$NODES_FILE" >/dev/null 2>&1 || return 1
+    jq -e '.bindings | type == "array"' "$NODE_USERS_FILE" >/dev/null 2>&1 || return 1
+    while IFS= read -r entry; do
+        [[ -n "$entry" ]] || continue
+        name=$(echo "$entry" | jq -r '.name // ""')
+        user_id=$(echo "$entry" | jq -r '.user_id // ""')
+        type=$(normalize_subscription_type_114 "$(echo "$entry" | jq -r '.type // "general"')" 2>/dev/null || echo general)
+        [[ -n "$name" && -n "$user_id" ]] || continue
+        reality_nodes=$(jq -c '
+            .nodes[] | select(.protocol=="vless" and .security=="reality" and (.enabled // true)==true)
+        ' "$NODES_FILE" 2>/dev/null | while IFS= read -r node; do
+            port=$(echo "$node" | jq -r '.port | tostring')
+            jq -e --arg port "$port" --arg id "$user_id" '.bindings[] | select((.port|tostring)==$port and ((.users // []) | index($id)))' "$NODE_USERS_FILE" >/dev/null 2>&1 \
+                && echo "$node"
+        done) || reality_nodes=""
+        # 本订阅不包含 Reality 节点时无需进行 Reality 文件检查。订阅刷新
+        # 本身的失败仍由 update_user_subscriptions 返回，不会被这里静默忽略。
+        [[ -n "$reality_nodes" ]] || continue
+        case "$type" in
+            general) file="${SUBSCRIPTION_DIR}/${name}_${user_id}_base64.txt" ;;
+            raw) file="${SUBSCRIPTION_DIR}/${name}_${user_id}_raw.txt" ;;
+            clash) file="${SUBSCRIPTION_DIR}/${name}_${user_id}_clash.yaml" ;;
+            singbox) file="${SUBSCRIPTION_DIR}/${name}_${user_id}_singbox.json" ;;
+            *) continue ;;
+        esac
+        [[ -f "$file" ]] || {
+            print_error "订阅文件缺失: $file"
+            return 1
+        }
+        case "$type" in
+            general) content=$(base64 -d < "$file" 2>/dev/null) || { print_error "订阅 Base64 解码失败: $file"; return 1; } ;;
+            raw|clash) content=$(cat "$file") || return 1 ;;
+            singbox) content="" ;;
+        esac
+
+        while IFS= read -r node; do
+            [[ -n "$node" ]] || continue
+            port=$(echo "$node" | jq -r '.port')
+            public_key=$(echo "$node" | jq -r '.extra.public_key // ""')
+            short_id=$(echo "$node" | jq -r '.extra.short_ids[0] // ""')
+            server_name=$(echo "$node" | jq -r '.extra.server_names[0] // ""')
+            [[ "$public_key" =~ ^[A-Za-z0-9_-]{43}$ \
+                && ( -z "$short_id" || ( "$short_id" =~ ^[0-9A-Fa-f]{2,16}$ && $((${#short_id} % 2)) -eq 0 ) ) \
+                && -n "$server_name" ]] || {
+                print_error "节点 $port 的 Reality 公开凭据不完整或格式无效"
+                return 1
+            }
+            case "$type" in
+                general|raw)
+                    subscription_contains_reality_uri_114 "$content" "$user_id" "$public_key" "$short_id" "$server_name" || {
+                        print_error "订阅 $name 的 Reality 凭据与节点 $port 不一致"
+                        return 1
+                    } ;;
+                clash)
+                    yaml_scalar_equals_114 "$file" uuid "$user_id" \
+                        && yaml_scalar_equals_114 "$file" public-key "$public_key" \
+                        && yaml_scalar_equals_114 "$file" short-id "$short_id" \
+                        && yaml_scalar_equals_114 "$file" servername "$server_name" || {
+                        print_error "Clash 订阅 $name 的 Reality 凭据与节点 $port 不一致"
+                        return 1
+                    } ;;
+                singbox)
+                    port=$(resolve_subscription_port "$node") || return 1
+                    [[ "$port" =~ ^[0-9]+$ ]] || return 1
+                    jq -e --arg id "$user_id" --arg pk "$public_key" --arg sid "$short_id" --arg sni "$server_name" --argjson port "$port" '
+                        .outbounds[] | select(.type=="vless" and .uuid==$id and .server_port==$port) |
+                        select(.tls.server_name==$sni and .tls.reality.public_key==$pk and .tls.reality.short_id==$sid)
+                    ' "$file" >/dev/null 2>&1 || {
+                        print_error "sing-box 订阅 $name 的 Reality 凭据与节点 $port 不一致"
+                        return 1
+                    } ;;
+            esac
+        done <<< "$reality_nodes"
+    done < <(jq -c '.subscriptions[]' "$meta_file" 2>/dev/null)
+}
+
 # 在配置事务提交前同步现有订阅，防止节点增删、禁用或用户解绑后继续分发旧节点。
 sync_runtime_subscriptions() {
     local meta_file="${DATA_DIR}/subscription_metadata.json" user_id port active
-    [[ -f "$meta_file" ]] || return 0
     declare -f update_user_subscriptions >/dev/null 2>&1 || return 0
     declare -f remove_user_subscriptions_by_id >/dev/null 2>&1 || return 0
+    repair_subscription_metadata_114 || {
+        print_error "订阅元数据修复失败，拒绝继续激活可能分发旧 Reality 凭据的配置"
+        return 1
+    }
+    [[ -f "$meta_file" ]] || return 0
 
     while IFS= read -r user_id; do
         [[ -n "$user_id" ]] || continue
@@ -1636,6 +1928,10 @@ sync_runtime_subscriptions() {
             remove_user_subscriptions_by_id "$user_id" || return 1
         fi
     done < <(jq -r '[.subscriptions[].user_id] | unique[]?' "$meta_file" 2>/dev/null)
+    verify_reality_subscription_files_114 || {
+        print_error "Reality 订阅一致性检查失败，已阻止服务加载与订阅不一致的新凭据"
+        return 1
+    }
 }
 
 save_node_info() {
@@ -1650,6 +1946,11 @@ save_node_info() {
 generate_singbox_config() {
     begin_data_transaction || {
         print_error "无法创建配置事务快照"
+        return 1
+    }
+    repair_reality_node_credentials_114 || {
+        rollback_data_transaction
+        print_error "Reality 节点凭据修复失败，数据文件已自动回滚"
         return 1
     }
     if _generate_singbox_config_114; then

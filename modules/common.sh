@@ -129,6 +129,14 @@ handle_error() {
     log_error "命令执行失败 (退出码: $error_code)"
     log_error "  行号: $lineno"
     log_error "  命令: $command"
+    if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+        local annotation_file=${BASH_SOURCE[1]:-scripts/validate_all.sh}
+        local annotation_command=${command//'%'/'%25'}
+        [[ -z "${ROOT_DIR:-}" ]] || annotation_file=${annotation_file#"${ROOT_DIR}/"}
+        annotation_command=${annotation_command//$'\r'/'%0D'}
+        annotation_command=${annotation_command//$'\n'/'%0A'}
+        echo "::error file=${annotation_file},line=${lineno},title=Shell validation failed::${annotation_command} (exit ${error_code})"
+    fi
 
     # 打印调用栈
     log_debug "调用栈:"

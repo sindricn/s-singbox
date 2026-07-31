@@ -29,7 +29,7 @@ if grep -RInE 'settings\.(clients|servers|vnext)|sniff:[[:space:]]*true|insecure
 fi
 grep -q 'with_v2ray_api' "$ROOT_DIR/modules/zz_singbox_114.sh"
 
-echo "[3/8] 14 协议配置生成矩阵"
+echo "[3/8] 13 协议稳定版配置生成矩阵"
 export RED='' GREEN='' YELLOW='' BLUE='' CYAN='' GRAY='' NC=''
 export LOG_FILE="$TMP_DIR/manager.log" LOG_LEVEL=3
 SINGBOX_DIR="$TMP_DIR/etc/sing-box"
@@ -46,7 +46,7 @@ export MOCK_CHECK_LOG="$TMP_DIR/sing-box-check.log"
 cat > "$TMP_DIR/mock-sing-box-stats" <<'SH'
 #!/bin/bash
 case "${1:-}" in
-    version) printf '%s\n' 'sing-box version 1.14.0' 'Tags: with_v2ray_api' ;;
+    version) printf '%s\n' 'sing-box version 1.13.15' 'Tags: with_v2ray_api' ;;
     check) printf '%s\n' "${*:2}" >> "${MOCK_CHECK_LOG:?}" ;;
     api) printf '%s\n' '{"stat":[]}' ;;
     *) exit 1 ;;
@@ -55,7 +55,7 @@ SH
 cat > "$TMP_DIR/mock-sing-box-ordinary" <<'SH'
 #!/bin/bash
 case "${1:-}" in
-    version) printf '%s\n' 'sing-box version 1.14.0' 'Tags: with_quic,with_utls' ;;
+    version) printf '%s\n' 'sing-box version 1.13.15' 'Tags: with_quic,with_utls' ;;
     check) printf '%s\n' "${*:2}" >> "${MOCK_CHECK_LOG:?}" ;;
     *) exit 1 ;;
 esac
@@ -85,11 +85,10 @@ jq -n --arg cert "$TMP_DIR/cert.pem" --arg key "$TMP_DIR/key.pem" '
     {name:"socks",protocol:"socks",port:"21010",transport:"tcp",security:"none",extra:{}},
     {name:"anytls",protocol:"anytls",port:"21011",transport:"tcp",security:"tls",extra:(tls+{padding_scheme:["stop=8","0=30-30"]})},
     {name:"hysteria",protocol:"hysteria",port:"21012",transport:"udp",security:"tls",extra:(tls+{up_mbps:100,down_mbps:100,obfs:"fixture-hy-obfs"})},
-    {name:"shadowtls",protocol:"shadowtls",port:"21013",transport:"tcp",security:"none",extra:{version:3,handshake_server:"example.com",handshake_port:443,strict_mode:true,wildcard_sni:"off",tls_domain:"example.com"}},
-    {name:"snell",protocol:"snell",port:"21014",transport:"tcp",security:"none",extra:{version:6,psk:"fixture-snell-psk",mode:"default"}}
+    {name:"shadowtls",protocol:"shadowtls",port:"21013",transport:"tcp",security:"none",extra:{version:3,handshake_server:"example.com",handshake_port:443,strict_mode:true,wildcard_sni:"off",tls_domain:"example.com"}}
   ]}' > "$NODES_FILE"
 
-jq -n '{bindings:([range(21001;21015) | {port:(tostring),protocol:"fixture",users:["059032a9-7d40-4a96-9bb1-36823d848068"]}])}' > "$NODE_USERS_FILE"
+jq -n '{bindings:([range(21001;21014) | {port:(tostring),protocol:"fixture",users:["059032a9-7d40-4a96-9bb1-36823d848068"]}])}' > "$NODE_USERS_FILE"
 jq '.nodes[0].outbound_tag="strategy-main"' "$NODES_FILE" > "$NODES_FILE.tmp"
 mv "$NODES_FILE.tmp" "$NODES_FILE"
 cat > "$DATA_DIR/outbounds.json" <<'JSON'
@@ -127,8 +126,8 @@ source "$ROOT_DIR/modules/zz_singbox_114.sh"
 source "$ROOT_DIR/modules/zzz_outbound_extended.sh"
 
 generate_singbox_config
-jq -e '.inbounds | length == 14' "$SINGBOX_CONFIG" >/dev/null
-for protocol in vless vmess trojan shadowsocks hysteria2 tuic naive mixed http socks anytls hysteria shadowtls snell; do
+jq -e '.inbounds | length == 13' "$SINGBOX_CONFIG" >/dev/null
+for protocol in vless vmess trojan shadowsocks hysteria2 tuic naive mixed http socks anytls hysteria shadowtls; do
     jq -e --arg p "$protocol" '.inbounds[] | select(.type==$p)' "$SINGBOX_CONFIG" >/dev/null
 done
 jq -e '.experimental.v2ray_api.stats.enabled == true and (.experimental.v2ray_api.stats.users | index("fixture"))' "$SINGBOX_CONFIG" >/dev/null
@@ -138,7 +137,6 @@ jq -e '.inbounds[] | select(.type=="trojan") | (.fallback.server == "127.0.0.1" 
 jq -e '.inbounds[] | select(.type=="hysteria2") | .masquerade == "https://example.com/"' "$SINGBOX_CONFIG" >/dev/null
 jq -e '.inbounds[] | select(.type=="hysteria") | (.up_mbps == 100 and .down_mbps == 100 and .users[0].auth_str == "fixture-p@ss:#?/+")' "$SINGBOX_CONFIG" >/dev/null
 jq -e '.inbounds[] | select(.type=="shadowtls") | (.version == 3 and .handshake.server == "example.com" and .users[0].password == "fixture-p@ss:#?/+")' "$SINGBOX_CONFIG" >/dev/null
-jq -e '.inbounds[] | select(.type=="snell") | (.version == 6 and .psk == "fixture-snell-psk" and .users[0].userkey == "fixture-p@ss:#?/+")' "$SINGBOX_CONFIG" >/dev/null
 jq -e '.inbounds[] | select(.type=="socks") | (.users[0].username == "fixture" and .users[0].password == "fixture-p@ss:#?/+")' "$SINGBOX_CONFIG" >/dev/null
 jq -e '[.inbounds[] | select(.listen != "0.0.0.0")] | length == 0' "$SINGBOX_CONFIG" >/dev/null
 jq -e '.type == "http" and .path == "/legacy-h2"' <<< "$(generate_114_transport h2 '{"http_path":"/legacy-h2"}')" >/dev/null
@@ -154,9 +152,17 @@ stats_config="$SINGBOX_CONFIG"
 SINGBOX_BIN="$TMP_DIR/mock-sing-box-ordinary"
 SINGBOX_CONFIG="$SINGBOX_DIR/config-ordinary.json"
 _generate_singbox_config_114
-jq -e '((.experimental // {}) | has("v2ray_api") | not) and (.inbounds | length == 14)' "$SINGBOX_CONFIG" >/dev/null
+jq -e '((.experimental // {}) | has("v2ray_api") | not) and (.inbounds | length == 13)' "$SINGBOX_CONFIG" >/dev/null
 grep -q -- '-c .*config-ordinary.json' "$MOCK_CHECK_LOG"
 if [[ -n "${SINGBOX_VALIDATION_BIN:-}" && -x "$SINGBOX_VALIDATION_BIN" ]]; then
+    validation_version=$("$SINGBOX_VALIDATION_BIN" version | sed -n 's/^sing-box version[[:space:]]\+v\?\([^[:space:]]\+\).*/\1/p' | head -1)
+    if ! version_ge "$validation_version" 1.14.0; then
+        old_validation_bin="$SINGBOX_BIN"
+        SINGBOX_BIN="$SINGBOX_VALIDATION_BIN"
+        snell_fixture='{"name":"snell","protocol":"snell","port":"21014","transport":"tcp","security":"none","extra":{"version":6,"psk":"fixture-snell-psk","mode":"default"}}'
+        ! generate_114_inbound "$snell_fixture" '[{"name":"fixture","userkey":"fixture-p@ss:#?/+"}]' >/dev/null 2>&1
+        SINGBOX_BIN="$old_validation_bin"
+    fi
     "$SINGBOX_VALIDATION_BIN" check -c "$stats_config"
     "$SINGBOX_VALIDATION_BIN" check -c "$SINGBOX_CONFIG"
 fi
@@ -173,7 +179,6 @@ grep -q 'obfs-password: "fixture-obfs"' "$TMP_DIR/clash.yaml"
 grep -q 'ports: "22000-22100"' "$TMP_DIR/clash.yaml"
 grep -q 'up: "100 Mbps"' "$TMP_DIR/clash.yaml"
 grep -q 'type: hysteria' "$TMP_DIR/clash.yaml"
-grep -q 'type: snell' "$TMP_DIR/clash.yaml"
 
 generate_singbox_subscription_config "$nodes" "059032a9-7d40-4a96-9bb1-36823d848068" > "$TMP_DIR/client.json"
 jq -e '.outbounds[] | select(.type=="hysteria2") | (.server_ports == ["22000:22100"] and (has("server_port")|not) and .hop_interval == "30s" and .obfs.type == "salamander")' "$TMP_DIR/client.json" >/dev/null
@@ -181,7 +186,6 @@ jq -e '.outbounds[] | select(.type=="vmess") | (.alter_id == 7 and .transport.ty
 jq -e '.outbounds[] | select(.type=="trojan") | (.transport.type == "grpc" and .transport.service_name == "trojan-grpc")' "$TMP_DIR/client.json" >/dev/null
 jq -e '.outbounds[] | select(.type=="hysteria") | (.auth_str == "fixture-p@ss:#?/+" and .up_mbps == 100 and .tls.server_name == "example.com")' "$TMP_DIR/client.json" >/dev/null
 jq -e '.outbounds[] | select(.type=="shadowtls") | (.version == 3 and .password == "fixture-p@ss:#?/+" and .tls.server_name == "example.com")' "$TMP_DIR/client.json" >/dev/null
-jq -e '.outbounds[] | select(.type=="snell") | (.version == 6 and .psk == "fixture-snell-psk" and .userkey == "fixture-p@ss:#?/+")' "$TMP_DIR/client.json" >/dev/null
 
 hy2_node=$(jq -c '.nodes[] | select(.protocol=="hysteria2")' "$NODES_FILE")
 hy2_link=$(generate_share_link_smart "059032a9-7d40-4a96-9bb1-36823d848068" "" "$hy2_node")
@@ -210,7 +214,10 @@ grep -q 'readonly SINGBOX_DATA_DIR="/var/lib/sing-box"' "$ROOT_DIR/scripts/backu
 grep -q 'readonly SINGBOX_DATA_DIR="/var/lib/sing-box"' "$ROOT_DIR/uninstall.sh"
 grep -q 'add_hysteria_node' "$ROOT_DIR/singbox-manager.sh"
 grep -q 'add_shadowtls_node' "$ROOT_DIR/singbox-manager.sh"
-grep -q 'add_snell_node' "$ROOT_DIR/singbox-manager.sh"
+! grep -q 'add_snell_node' "$ROOT_DIR/singbox-manager.sh"
+! grep -q 'add_snell_node' "$ROOT_DIR/modules/quick_wizard.sh"
+grep -q 'singbox_supports_snell_inbound' "$ROOT_DIR/modules/zz_singbox_114.sh"
+grep -q 'add_snell_outbound' "$ROOT_DIR/modules/zzz_outbound_extended.sh"
 grep -q 'bind_users_to_node_smart; wait_for_input' "$ROOT_DIR/singbox-manager.sh"
 grep -q 'local port="${1:-}"' "$ROOT_DIR/modules/user_node_binding.sh"
 ! grep -q 'transport="h2"' "$ROOT_DIR/modules/node.sh"
@@ -398,7 +405,7 @@ grep -q 'add_urltest_outbound' "$ROOT_DIR/modules/zzz_outbound_extended.sh"
 (
     SINGBOX_CONFIG="$TMP_DIR/fresh-install-config.json"
     prepare_singbox_storage() { :; }
-    resolve_singbox_version() { echo "1.14.0-beta.3"; }
+    resolve_singbox_version() { echo "1.13.15"; }
     build_and_install_singbox() { printf '%s' "$2" > "$TMP_DIR/fresh-install-start-flag"; }
     create_default_config() { echo '{}' > "$SINGBOX_CONFIG"; }
     generate_singbox_config() { :; }

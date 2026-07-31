@@ -9,13 +9,13 @@
 
 ## 🎯 核心特性
 
-**一键搭建、校验并管理基于 sing-box 1.14 配置模型的代理节点。**
+**一键搭建、校验并管理适配 sing-box 1.13.15 稳定版的代理节点。**
 
 > TLS 必选协议（Trojan、Hysteria2、TUIC、Naive、AnyTLS）必须提供有效证书，或由脚本生成自签名证书。
 
 ### 📡 协议支持
 
-**入站协议**（11种）：
+**入站协议**（13种）：
 - **VLESS** - 轻量级高性能协议（支持 Reality/TLS/TCP/WS/gRPC/HTTP）
 - **VMess** - V2Ray 经典协议（支持 TLS、TCP/WS/gRPC/HTTP；不再提供 sing-box 不支持的 mKCP）
 - **Trojan** - TLS 伪装协议（支持连接回落）
@@ -27,6 +27,10 @@
 - **HTTP** - HTTP 代理
 - **SOCKS** - SOCKS5 代理
 - **Mixed** - HTTP + SOCKS5 混合代理
+- **Hysteria v1** - QUIC 高性能经典协议
+- **ShadowTLS v3** - TLS 流量伪装协议
+
+> Snell 入站仅存在于 sing-box 1.14 测试版本，未纳入当前 1.13.15 稳定版节点菜单；Snell v4/v6 出站仍按稳定内核能力保留。
 
 **默认定制内核出站协议与策略**（19 类）：HTTP、SOCKS、VLESS、VMess、Trojan、Shadowsocks、Hysteria v1、Hysteria2、TUIC、AnyTLS、ShadowTLS、SSH、Snell v4/v6、Tor、WireGuard Endpoint、Selector、URLTest、Direct、Block
 
@@ -182,9 +186,9 @@ bash scripts/validate_all.sh
 
 ### V1.1.0 (2026-07-27)
 
-- 适配仓库内官方 sing-box 1.14 文档和配置 Schema
+- 适配 sing-box 1.13.15 稳定版文档和配置 Schema
 - 使用带 `with_v2ray_api` 的官方源码定制构建
-- 完成 11 种入站协议、分享链接、Clash 和 SingBox 订阅支持
+- 完成 13 种稳定版入站协议、分享链接、Clash 和 SingBox 订阅支持
 - 移除 `sniff`、Xray `.settings.*`、旧安装路径和无关 systemd capabilities
 - 修复在线安装误判成功、更新无回滚、Shadowsocks 多用户和匿名 HTTP/SOCKS/Mixed 问题
 - 新增累计流量账本和完整验证脚本

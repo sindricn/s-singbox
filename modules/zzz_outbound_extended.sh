@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# sing-box 1.14+ 出站扩展与统一管理层。
+# sing-box 1.13.15 稳定版出站扩展与统一管理层。
 # 本模块按文件名最后加载，用于覆盖旧版 outbound.sh 中的 Xray 字段和仅-outbound 假设。
 
 if [[ -n "${OUTBOUND_EXTENDED_MODULE_LOADED:-}" ]]; then
@@ -683,7 +683,7 @@ outbound_management_menu() {
     local choice protocol_choice
     while true; do
         clear
-        print_header "出站规则管理（sing-box 1.14+）"
+        print_header "出站规则管理（sing-box 稳定版）"
         show_outbound_status
         echo "1. 查看  2. 添加  3. 应用到节点  4. 恢复直连  5. 修改  6. 删除  7. 一致性检查  0. 返回"
         read -p "请选择 [0-7]: " choice

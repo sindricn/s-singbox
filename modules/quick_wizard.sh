@@ -148,9 +148,9 @@ wizard_step_add_node() {
     echo -e "  ${CYAN}7)${NC} Naive           ${CYAN}8)${NC} Mixed"
     echo -e "  ${CYAN}9)${NC} HTTP            ${CYAN}10)${NC} SOCKS"
     echo -e "  ${CYAN}11)${NC} AnyTLS         ${CYAN}12)${NC} Hysteria v1"
-    echo -e "  ${CYAN}13)${NC} ShadowTLS v3   ${CYAN}14)${NC} Snell v5/v6"
+    echo -e "  ${CYAN}13)${NC} ShadowTLS v3"
     echo ""
-    read -p "$(echo -e ${CYAN}请选择协议 [1-14]: ${NC})" protocol_choice
+    read -p "$(echo -e ${CYAN}请选择协议 [1-13]: ${NC})" protocol_choice
 
     local add_function=""
     case "$protocol_choice" in
@@ -160,7 +160,7 @@ wizard_step_add_node() {
         7) add_function=add_naive_node ;; 8) add_function=add_mixed_node ;;
         9) add_function=add_http_inbound_node ;; 10) add_function=add_socks_inbound_node ;;
         11) add_function=add_anytls_node ;; 12) add_function=add_hysteria_node ;;
-        13) add_function=add_shadowtls_node ;; 14) add_function=add_snell_node ;;
+        13) add_function=add_shadowtls_node ;;
         *) print_error "无效选择"; return 1 ;;
     esac
     if ! declare -f "$add_function" >/dev/null 2>&1; then

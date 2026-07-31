@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# sing-box 1.14 compatibility layer.
-# This file is loaded last and intentionally overrides legacy implementations.
+# sing-box 1.13.15 stable compatibility layer.
+# The legacy filename is retained to preserve module load order and upgrade compatibility.
 
 SINGBOX_API_ADDR="${SINGBOX_API_ADDR:-127.0.0.1:10085}"
 TRAFFIC_COUNTERS_FILE="${TRAFFIC_COUNTERS_FILE:-${DATA_DIR}/traffic_counters.json}"
@@ -21,6 +21,25 @@ get_singbox_bin() {
     else
         printf '%s\n' "/usr/local/bin/sing-box"
     fi
+}
+
+get_singbox_version_number() {
+    local bin version
+    bin=$(get_singbox_bin)
+    [[ -x "$bin" ]] || return 1
+    version=$("$bin" version 2>/dev/null | sed -n 's/^sing-box version[[:space:]]\+v\?\([^[:space:]]\+\).*/\1/p' | head -1)
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || return 1
+    echo "$version"
+}
+
+singbox_version_at_least() {
+    local minimum="$1" current
+    current=$(get_singbox_version_number) || return 1
+    version_ge "$current" "$minimum"
+}
+
+singbox_supports_snell_inbound() {
+    singbox_version_at_least 1.14.0
 }
 
 warn_if_stats_capability_missing() {
@@ -358,6 +377,10 @@ generate_114_inbound() {
                 --argjson strict "$(echo "$extra" | jq -r '.strict_mode // true')" --arg wildcard "$(echo "$extra" | jq -r '.wildcard_sni // "off"')" \
                 '.version=$version | .handshake={server:$server,server_port:$server_port} | .strict_mode=$strict | if $wildcard != "off" then .wildcard_sni=$wildcard else . end') || return 1 ;;
         snell)
+            if ! singbox_supports_snell_inbound; then
+                print_error "Snell 入站需要 sing-box 1.14.0 或更高版本；当前内核不支持"
+                return 1
+            fi
             version=$(echo "$extra" | jq -r '.version // 5')
             psk=$(echo "$extra" | jq -r '.psk // ""')
             [[ "$version" == "5" || "$version" == "6" ]] || { print_error "Snell 入站版本必须为 5 或 6"; return 1; }
@@ -509,7 +532,7 @@ _generate_singbox_config_114() (
     fi
     mv -f "$candidate" "$SINGBOX_CONFIG"
     chmod 600 "$SINGBOX_CONFIG" "$USERS_FILE" "$NODES_FILE" "$NODE_USERS_FILE" "$outbounds_file" 2>/dev/null || true
-    print_success "sing-box 1.14 配置已生成并通过检查: $SINGBOX_CONFIG"
+    print_success "sing-box 稳定版配置已生成并通过检查: $SINGBOX_CONFIG"
 )
 
 create_user_limits_units() {
@@ -880,7 +903,7 @@ install_sing-box() {
     case "$choice" in
         1) channel=stable ;;
         2) channel=beta ;;
-        3) read -p "版本号（如 1.14.0-beta.3）: " explicit ;;
+        3) read -p "版本号（如 1.13.15）: " explicit ;;
         *) print_error "无效选择"; return 1 ;;
     esac
     version=$(resolve_singbox_version "$channel" "$explicit") || { print_error "无法解析目标版本"; return 1; }

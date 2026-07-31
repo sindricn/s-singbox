@@ -68,15 +68,15 @@ SINGBOX_BUILD_HEARTBEAT_SECONDS=1 SINGBOX_BUILD_TIMEOUT=10s \
 
 cat > "$TMP_DIR/plain-singbox" <<'EOF'
 #!/bin/sh
-echo 'sing-box version 1.14.0'
+echo 'sing-box version 1.13.15'
 EOF
 cat > "$TMP_DIR/stats-singbox" <<'EOF'
 #!/bin/sh
-echo 'sing-box version 1.14.0 Tags: with_v2ray_api'
+echo 'sing-box version 1.13.15 Tags: with_v2ray_api'
 EOF
 cat > "$TMP_DIR/full-singbox" <<'EOF'
 #!/bin/sh
-echo 'sing-box version 1.14.0 Tags: with_v2ray_api,with_naive_outbound'
+echo 'sing-box version 1.13.15 Tags: with_v2ray_api,with_naive_outbound'
 EOF
 chmod +x "$TMP_DIR/plain-singbox" "$TMP_DIR/stats-singbox" "$TMP_DIR/full-singbox"
 
@@ -90,7 +90,7 @@ get_singbox_bin() {
         echo "$TMP_DIR/plain-singbox"
     fi
 }
-resolve_singbox_version() { echo '1.14.0'; }
+resolve_singbox_version() { echo '1.13.15'; }
 build_and_install_singbox() {
     last_start_mode=${2:-true}
     kernel_state=stats

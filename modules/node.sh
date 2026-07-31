@@ -2509,6 +2509,16 @@ add_shadowtls_node() {
 add_snell_node() {
     clear
     print_header "添加 Snell 节点"
+    if declare -f singbox_supports_snell_inbound >/dev/null 2>&1 \
+        && ! singbox_supports_snell_inbound; then
+        local current_version="未知"
+        if declare -f get_singbox_version_number >/dev/null 2>&1; then
+            current_version=$(get_singbox_version_number 2>/dev/null || echo "未知")
+        fi
+        print_error "Snell 入站需要 sing-box 1.14.0+，当前内核版本: $current_version"
+        print_info "稳定版 1.13.x 可继续使用其他节点协议；如需 Snell，请在内核管理中安装 1.14 测试版或更高版本"
+        return 1
+    fi
     local port version psk mode extra_config
     read -p "请输入监听端口 [8010]: " port; port=${port:-8010}
     validate_port "$port" && ! check_port_exists "$port" || { print_error "端口无效、已占用或已存在"; return 1; }

@@ -667,7 +667,6 @@ menu_node_add() {
         print_menu_item "11" "AnyTLS" " - 流量填充混淆（sing-box 1.12.0+）"
         print_menu_item "12" "Hysteria v1" " - QUIC 高性能经典版"
         print_menu_item "13" "ShadowTLS v3" " - TLS 流量伪装"
-        print_menu_item "14" "Snell v5/v6" " - sing-box 1.14.0+"
         print_section_end
 
         print_nav_options "true" "true"
@@ -697,7 +696,6 @@ menu_node_add() {
             11) add_anytls_node ;;
             12) add_hysteria_node ;;
             13) add_shadowtls_node ;;
-            14) add_snell_node ;;
             *) print_error "无效选择" ;;
         esac
 

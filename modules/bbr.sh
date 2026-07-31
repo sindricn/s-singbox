@@ -693,8 +693,9 @@ test_bbr_performance() {
     echo ""
 
     print_nav_options "true" "true"
-    local test_choice=$(read_menu_choice "请选择")
-    local ret=$?
+    local test_choice ret
+    test_choice=$(read_menu_choice "请选择")
+    ret=$?
 
     # 处理导航
     [[ $ret -eq 99 ]] && return 0  # 返回上级
@@ -718,8 +719,9 @@ test_bbr_performance() {
             echo ""
 
             print_nav_options "true" "true"
-            local region_choice=$(read_menu_choice "请选择")
-            local ret=$?
+            local region_choice
+            region_choice=$(read_menu_choice "请选择")
+            ret=$?
 
             # 处理导航
             [[ $ret -eq 99 ]] && return 0  # 返回上级

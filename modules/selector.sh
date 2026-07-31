@@ -3,7 +3,7 @@
 #================================================================
 # 统一选择器模块
 # 功能：提供统一的单选和多选交互界面
-# 版本：v1.0.0
+# 版本：v2.0.0
 #================================================================
 
 # 注意：颜色变量已在 sing-box-manager.sh 中定义为 readonly
@@ -25,20 +25,30 @@ select_single() {
     fi
 
     # 显示列表
-    echo ""
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo "" >&2
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}" >&2
     for i in "${!items[@]}"; do
-        echo -e "${CYAN}[$((i+1))]${NC} ${items[$i]}"
+        echo -e "${CYAN}[$((i+1))]${NC} ${items[$i]}" >&2
     done
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}" >&2
+    echo -e "${GRAY}提示: 输入 'b' 返回上级, 'm' 返回主菜单, 'q' 取消${NC}" >&2
+    echo "" >&2
 
     # 获取选择
     local max_attempts=3
     local attempt=0
 
     while [[ $attempt -lt $max_attempts ]]; do
-        read -p "$prompt [1-${#items[@]}]: " choice
+        printf '%s [1-%s]: ' "$prompt" "${#items[@]}" >&2
+        if ! IFS= read -r choice; then
+            return "${UI_CANCEL:-97}"
+        fi
+
+        case "$choice" in
+            b|B) return "${UI_BACK:-99}" ;;
+            m|M) return "${UI_MAIN_MENU:-98}" ;;
+            q|Q) return "${UI_CANCEL:-97}" ;;
+        esac
 
         # 验证输入
         if [[ "$choice" =~ ^[0-9]+$ ]] && [[ $choice -ge 1 ]] && [[ $choice -le ${#items[@]} ]]; then
@@ -48,7 +58,7 @@ select_single() {
 
         ((attempt++))
         if [[ $attempt -lt $max_attempts ]]; then
-            echo -e "${YELLOW}无效选择，请重新输入 (${attempt}/${max_attempts})${NC}"
+            echo -e "${YELLOW}无效选择，请重新输入 (${attempt}/${max_attempts})${NC}" >&2
         fi
     done
 
@@ -77,35 +87,45 @@ select_multiple() {
     fi
 
     # 显示列表
-    echo ""
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo "" >&2
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}" >&2
     for i in "${!items[@]}"; do
-        echo -e "${CYAN}[$((i+1))]${NC} ${items[$i]}"
+        echo -e "${CYAN}[$((i+1))]${NC} ${items[$i]}" >&2
     done
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-    echo -e "${YELLOW}支持格式：${NC}"
-    echo "  单个: 1"
-    echo "  多个: 1,3,5"
-    echo "  范围: 1-3"
-    echo "  全部: all"
-    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}" >&2
+    echo "" >&2
+    echo -e "${YELLOW}支持格式：${NC}" >&2
+    echo "  单个: 1" >&2
+    echo "  多个: 1,3,5" >&2
+    echo "  范围: 1-3" >&2
+    echo "  全部: all" >&2
+    echo -e "${GRAY}导航: 'b' 返回上级, 'm' 返回主菜单, 'q' 取消${NC}" >&2
+    echo "" >&2
 
     local max_attempts=3
     local attempt=0
 
     while [[ $attempt -lt $max_attempts ]]; do
-        read -p "$prompt: " input
+        printf '%s: ' "$prompt" >&2
+        if ! IFS= read -r input; then
+            return "${UI_CANCEL:-97}"
+        fi
+
+        case "$input" in
+            b|B) return "${UI_BACK:-99}" ;;
+            m|M) return "${UI_MAIN_MENU:-98}" ;;
+            q|Q) return "${UI_CANCEL:-97}" ;;
+        esac
 
         # 处理空输入
         if [[ -z "$input" ]]; then
             ((attempt++))
-            echo -e "${YELLOW}请输入选择${NC}"
+            echo -e "${YELLOW}请输入选择${NC}" >&2
             continue
         fi
 
         # 处理 all
-        if [[ "$input" == "all" ]]; then
+        if [[ "$input" == "all" || "$input" == "ALL" ]]; then
             local all_indices=()
             for i in "${!items[@]}"; do
                 all_indices+=("$i")
@@ -122,7 +142,7 @@ select_multiple() {
 
         for part in "${parts[@]}"; do
             # 去除空格
-            part=$(echo "$part" | tr -d ' ')
+            part="${part//[[:space:]]/}"
 
             if [[ "$part" =~ ^([0-9]+)-([0-9]+)$ ]]; then
                 # 范围选择
@@ -159,7 +179,7 @@ select_multiple() {
 
         ((attempt++))
         if [[ $attempt -lt $max_attempts ]]; then
-            echo -e "${YELLOW}无效选择，请重新输入 (${attempt}/${max_attempts})${NC}"
+            echo -e "${YELLOW}无效选择，请重新输入 (${attempt}/${max_attempts})${NC}" >&2
         fi
     done
 
@@ -364,16 +384,22 @@ test_selector() {
     # 测试单选
     echo "测试 1: 单选"
     local test_items=("选项A" "选项B" "选项C")
-    local selected=$(select_single "请选择一项" "${test_items[@]}")
-    if [[ $? -eq 0 ]]; then
+    local selected selector_status
+    selected=$(select_single "请选择一项" "${test_items[@]}")
+    selector_status=$?
+    if [[ $selector_status -eq 0 ]]; then
         echo "你选择了: ${test_items[$selected]}"
     fi
     echo ""
 
     # 测试多选
     echo "测试 2: 多选"
-    local selected_multiple=($(select_multiple "请选择多项" "${test_items[@]}"))
-    if [[ $? -eq 0 ]]; then
+    local selected_output
+    selected_output=$(select_multiple "请选择多项" "${test_items[@]}")
+    selector_status=$?
+    local selected_multiple=()
+    [[ -n "$selected_output" ]] && read -r -a selected_multiple <<< "$selected_output"
+    if [[ $selector_status -eq 0 ]]; then
         echo "你选择了 ${#selected_multiple[@]} 项:"
         for idx in "${selected_multiple[@]}"; do
             echo "  - ${test_items[$idx]}"

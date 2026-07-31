@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 DATA_DIR="$PROJECT_ROOT/data"
 NODES_FILE="$DATA_DIR/nodes.json"
-CONFIG_FILE="/opt/s-singbox/config.json"
+CONFIG_FILE="/etc/sing-box/config.json"
 
 echo "======================================"
 echo "  Hysteria2 配置诊断工具"

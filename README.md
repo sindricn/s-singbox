@@ -9,24 +9,34 @@
 
 ## 🎯 核心特性
 
-**"一键搭建高性能代理节点，无需域名和证书"**
+**一键搭建、校验并管理适配 sing-box 1.13.15 稳定版的代理节点。**
+
+> TLS 必选协议（Trojan、Hysteria2、TUIC、Naive、AnyTLS）必须提供有效证书，或由脚本生成自签名证书。
 
 ### 📡 协议支持
 
-**入站协议**（11种）：
-- **VLESS** - 轻量级高性能协议（支持 Reality/TLS/TCP/WS）
-- **VMess** - V2Ray 经典协议
-- **Trojan** - TLS 伪装协议
-- **Shadowsocks** - 经典代理协议
-- **Hysteria2** - 基于 QUIC 的高性能协议
+**入站协议**（13种）：
+- **VLESS** - 轻量级高性能协议（支持 Reality/TLS/TCP/WS/gRPC/HTTP）
+- **VMess** - V2Ray 经典协议（支持 TLS、TCP/WS/gRPC/HTTP；不再提供 sing-box 不支持的 mKCP）
+- **Trojan** - TLS 伪装协议（支持连接回落）
+- **Shadowsocks** - 默认使用 Shadowsocks 2022 多用户结构与独立主密钥
+- **Hysteria2** - 基于 QUIC 的高性能协议（支持混淆、带宽限制和 UDP 端口跳跃；快速搭建默认关闭跳跃，避免云安全组未放行时节点不可用）
 - **TUIC** - QUIC 优化协议
 - **Naive** - 强抗审查代理
 - **AnyTLS** - 流量填充混淆（sing-box 1.12.0+）
 - **HTTP** - HTTP 代理
 - **SOCKS** - SOCKS5 代理
 - **Mixed** - HTTP + SOCKS5 混合代理
+- **Hysteria v1** - QUIC 高性能经典协议
+- **ShadowTLS v3** - TLS 流量伪装协议
 
-**出站协议**：支持所有主流协议出站配置，实现代理链和分流功能
+> Snell 入站仅存在于 sing-box 1.14 测试版本，未纳入当前 1.13.15 稳定版节点菜单；Snell v4/v6 出站仍按稳定内核能力保留。
+
+**默认定制内核出站协议与策略**（19 类）：HTTP、SOCKS、VLESS、VMess、Trojan、Shadowsocks、Hysteria v1、Hysteria2、TUIC、AnyTLS、ShadowTLS、SSH、Snell v4/v6、Tor、WireGuard Endpoint、Selector、URLTest、Direct、Block
+
+> Naive 入站可正常使用。Naive 出站依赖上游独立 Chromium/Cronet 工具链和 `libcronet.so`，不属于官方本地构建标签集合；仅在外部内核包含 `with_naive_outbound` 时开放。
+
+WireGuard 按 sing-box 1.11+ 的新结构保存到顶层 `endpoints`，Selector/URLTest 会自动解析并带入依赖出站。Bridge 仅适用于 L3/TUN 转发，不适合作为当前 L4 节点的普通链式出站；旧 DNS outbound 已废弃，因此不在菜单中提供。
 
 **传输协议**：TCP、WebSocket、gRPC、HTTP/2、QUIC
 
@@ -35,9 +45,11 @@
 ### 🔐 用户管理
 
 - 全局用户系统，支持多用户共享节点
-- 流量限制和到期时间设置
+- 流量限制和到期时间设置（普通内核保留到期限制，定制内核额外执行流量限额）
 - 灵活的用户-节点绑定关系
-- 实时流量统计和连接监控
+- 可选的定制内核 V2Ray Stats API 实时流量统计
+- 使用持久化累计账本，内核重启后流量不会归零
+- systemd 定时器每分钟检查流量额度与有效期，超限用户自动停用
 
 ### 🔗 订阅管理
 
@@ -45,6 +57,24 @@
 - **自动生成**：支持按用户生成专属订阅链接
 - **批量更新**：一键更新所有用户订阅
 - **元数据管理**：订阅有效期、流量限制
+- **自动选择**：Clash 与 SingBox 订阅内置 URLTest 自动测速组，并保留手动节点和直连选择
+- **证书策略**：仅自签名节点生成 `insecure/skip-cert-verify`，受信任证书保持严格校验
+- **连接地址策略**：需要 TLS 域名时优先检测已配置的服务器域名，展示 DNS 核对结果并由用户确认；TLS/SNI 域名与客户端实际连接地址分开保存，避免把伪装域名误当成服务器地址
+
+### 🧩 定制内核与安全更新
+
+- 官方普通 sing-box 内核可正常创建、校验和运行全部受支持节点，不要求 `with_v2ray_api`
+- 普通内核下自动省略 Stats API 配置，仅停用用户流量统计、流量限额和最近活跃状态
+- 定制内核由用户在“sing-box 管理 → 更新/修复定制内核”中手动安装，不再由节点创建流程强制触发
+- 从官方 `SagerNet/sing-box` 对应版本标签构建
+- 按官方 `release/local/common.sh` 使用 `release/DEFAULT_BUILD_TAGS_OTHERS` 和 `release/LDFLAGS`
+- 额外启用 `with_v2ray_api`，供用户流量统计使用
+- 自动读取目标版本 `go.mod` 的 Go/toolchain 要求；本机版本不足时下载官方稳定工具链并校验 SHA256
+- 更新前先编译候选内核并检查现有配置；启动失败自动回滚二进制
+- 配置生成采用文件锁、临时文件、`sing-box check` 和原子替换
+- 节点、用户、绑定、出站、订阅和配置使用最后可用快照；服务健康检查成功后才提交事务，异常退出会在下次启动自动恢复
+- 节点创建后会检查实际 TCP/UDP 监听，并自动同步 UFW、firewalld 或 iptables 规则；监听或本机防火墙激活失败时自动回滚
+- 云厂商安全组无法由脚本代管，创建成功后会明确列出需要放行的 TCP、UDP 端口及 Hysteria2 UDP 跳跃范围
 
 ### 🌐 高级功能
 
@@ -65,13 +95,25 @@
 
 ### 一键安装
 
-**推荐安装方式**（使用 curl）：
+**稳定版**（main）：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/sindricn/s-singbox/main/install.sh)
 ```
 
-或使用 wget：
+**开发验证版**（dev）：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/sindricn/s-singbox/dev/install.sh) dev
+```
+
+也可以通过环境变量明确指定分支：
+
+```bash
+S_SINGBOX_BRANCH=dev bash <(curl -fsSL https://raw.githubusercontent.com/sindricn/s-singbox/dev/install.sh)
+```
+
+使用 wget 安装稳定版：
 
 ```bash
 bash <(wget -qO- https://raw.githubusercontent.com/sindricn/s-singbox/main/install.sh)
@@ -107,7 +149,28 @@ singbox-manager
   - curl 或 wget
   - tar / unzip
   - jq (JSON 处理)
+  - git、openssl、ca-certificates
+  - gzip、coreutils（SHA256 校验）、util-linux（文件锁）
   - systemctl (systemd)
+
+Go 工具链由安装流程根据目标 sing-box 源码要求自动检查和准备，无需手动安装。
+
+### 标准路径
+
+- 管理器：`/opt/s-singbox`
+- sing-box 配置：`/etc/sing-box/config.json`
+- 用户、节点、订阅和流量账本：`/var/lib/sing-box`
+- 二进制：优先使用环境变量 `SINGBOX_BIN` 或 `command -v sing-box`
+
+### 验证
+
+在 Linux 上执行：
+
+```bash
+bash scripts/validate_all.sh
+```
+
+验证项包括 Bash 语法、废弃字段/旧路径扫描、入站协议配置矩阵、出站/策略结构、WireGuard Endpoint、Selector/URLTest 依赖闭包、旧 Xray 出站迁移、绑定调用链、首次安装顺序、IPv6/隧道 URL、服务器域名与连接地址选择、TCP/UDP 实际监听、本机防火墙与端口跳跃范围、分享链接特殊字符、Clash/SingBox 协议字段、V2Ray Stats API，以及真实定制内核的 `sing-box check`。
 
 
 ## 🤝 贡献指南
@@ -121,6 +184,19 @@ singbox-manager
 5. 开启 Pull Request
 
 ## 📜 更新日志
+
+### V1.1.0 (2026-07-27)
+
+- 适配 sing-box 1.13.15 稳定版文档和配置 Schema
+- 使用带 `with_v2ray_api` 的官方源码定制构建
+- 完成 13 种稳定版入站协议、分享链接、Clash 和 SingBox 订阅支持
+- 移除 `sniff`、Xray `.settings.*`、旧安装路径和无关 systemd capabilities
+- 修复在线安装误判成功、更新无回滚、Shadowsocks 多用户和匿名 HTTP/SOCKS/Mixed 问题
+- 新增累计流量账本和完整验证脚本
+- 修复首次安装过早启动、绑定菜单参数错误和配置生成函数名不一致
+- 增加配置/数据/服务健康检查事务与最后可用快照回滚
+- 补齐 VMess/Trojan WS/gRPC、Hysteria2 混淆/带宽/端口跳跃订阅字段
+- 增加用户限制 systemd 定时器、并发锁、IPv6 URI 和完整 URL 编码
 
 ### V1.0.0 (2025-11-25)
 

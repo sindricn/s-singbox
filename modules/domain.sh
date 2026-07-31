@@ -9,26 +9,100 @@
 DOMAIN_FILE="${DATA_DIR}/domains.json"
 CERT_DIR="${SINGBOX_DIR}/certs"
 DEFAULT_DOMAIN_FILE="${DATA_DIR}/default_domain.txt"
+REALITY_SAFE_DEFAULT_DOMAIN="www.cloudflare.com"
+
+# www.microsoft.com currently returns a ServerHello/Certificate shape that is
+# incompatible with REALITY implementations used by sing-box/Xray. The only
+# server-side symptom can be "REALITY: processed invalid connection", and the
+# result may appear client-specific because fingerprints produce different TLS
+# handshakes.
+# See: https://github.com/SagerNet/sing-box/issues/4290
+is_reality_handshake_domain_compatible() {
+    local domain="${1:-}"
+    domain=${domain,,}
+    domain=${domain%.}
+    case "$domain" in
+        www.microsoft.com) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+# A successful TLS connection already proves that DNS resolution works.  Do
+# not add a second dependency on host/dig here: minimal server installations
+# often have OpenSSL and getent but no bind-utils/dnsutils package.
+measure_reality_domain_latency() {
+    local domain="${1:-}" started finished
+    [[ -n "$domain" ]] || return 1
+    is_reality_handshake_domain_compatible "$domain" || return 2
+    command -v openssl >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1 || return 3
+
+    started=$(date +%s%3N) || return 1
+    timeout 3 openssl s_client -tls1_3 -connect "$domain:443" -servername "$domain" \
+        </dev/null >/dev/null 2>&1 || return 1
+    finished=$(date +%s%3N) || return 1
+    echo $((finished - started))
+}
 
 # 初始化域名数据文件
 init_domain_file() {
     if [[ ! -f "$DOMAIN_FILE" ]]; then
         echo '{"domains":[],"certificates":[]}' > "$DOMAIN_FILE"
+    elif jq -e . "$DOMAIN_FILE" >/dev/null 2>&1; then
+        # 兼容旧版 cert/key 字段，并确保数组始终存在。
+        jq '(.domains //= [])
+            | (.certificates //= [])
+            | .certificates |= map(
+                .cert_file = (.cert_file // .cert // "")
+                | .key_file = (.key_file // .key // "")
+                | .type = (.type // (if (.auto // false) then "acme" else "imported" end))
+                | .auto = (.auto // false)
+                | del(.cert, .key)
+              )' "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp" && mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE"
     fi
+}
+
+certificate_path_is_safe() {
+    local candidate="$1"
+    [[ -n "$candidate" ]] || return 1
+    local base resolved
+    base=$(readlink -m -- "$CERT_DIR") || return 1
+    resolved=$(readlink -m -- "$candidate") || return 1
+    [[ "$resolved" == "$base"/* ]]
+}
+
+safe_remove_certificate_file() {
+    local candidate="$1"
+    [[ -z "$candidate" ]] && return 0
+    if ! certificate_path_is_safe "$candidate"; then
+        print_warning "拒绝删除证书目录外的文件: $candidate"
+        return 1
+    fi
+    rm -f -- "$(readlink -m -- "$candidate")"
 }
 
 # 获取默认伪装域名
 get_default_domain() {
-    if [[ -f "$DEFAULT_DOMAIN_FILE" ]]; then
-        cat "$DEFAULT_DOMAIN_FILE"
-    else
-        echo "www.microsoft.com"
+    local domain=""
+    [[ -f "$DEFAULT_DOMAIN_FILE" ]] && domain=$(tr -d '\r\n' < "$DEFAULT_DOMAIN_FILE")
+    if [[ -z "$domain" ]] || ! is_reality_handshake_domain_compatible "$domain"; then
+        echo "$REALITY_SAFE_DEFAULT_DOMAIN"
+        return
     fi
+    echo "$domain"
 }
 
 # 设置默认伪装域名
 set_default_domain() {
     local domain=$1
+    if ! validate_domain "$domain"; then
+        print_error "域名格式不正确: $domain"
+        return 1
+    fi
+    if ! is_reality_handshake_domain_compatible "$domain"; then
+        print_error "该域名存在已知 REALITY 握手兼容问题: $domain"
+        print_info "请改用 $REALITY_SAFE_DEFAULT_DOMAIN、www.apple.com 或 www.bing.com"
+        return 1
+    fi
     echo "$domain" > "$DEFAULT_DOMAIN_FILE"
     print_success "默认伪装域名已设置为: $domain"
 }
@@ -56,7 +130,6 @@ test_best_reality_domains() {
     local domains=(
         www.cloudflare.com
         www.apple.com
-        www.microsoft.com
         www.bing.com
         developer.apple.com
         www.gstatic.com
@@ -86,32 +159,21 @@ test_best_reality_domains() {
     echo ""
 
     for domain in "${domains[@]}"; do
-        ((count++))
+        ((count+=1))
 
-        # 记录开始时间（毫秒）
-        local t1=$(date +%s%3N)
+        local latency=""
+        if latency=$(measure_reality_domain_latency "$domain"); then
+            echo "$latency $domain" >> "$temp_file"
+            ((success_count+=1))
 
-        # 测试连接（超时2秒）
-        if timeout 2 openssl s_client -connect "$domain:443" -servername "$domain" </dev/null >/dev/null 2>&1; then
-            local t2=$(date +%s%3N)
-            local latency=$((t2 - t1))
-
-            # 验证 DNS 解析（静默模式）
-            if host "$domain" >/dev/null 2>&1; then
-                echo "$latency $domain" >> "$temp_file"
-                ((success_count++))
-
-                # 更新最佳域名
-                if [[ $latency -lt $best_latency ]]; then
-                    best_latency=$latency
-                    best_domain=$domain
-                fi
-
-                # 实时显示成功结果
-                printf "  ${GREEN}✔${NC} [%2d/%2d] %-35s ${CYAN}%4d ms${NC}\n" "$count" "$total" "$domain" "$latency"
+            if [[ $latency -lt $best_latency ]]; then
+                best_latency=$latency
+                best_domain=$domain
             fi
+
+            printf "  ${GREEN}✔${NC} [%2d/%2d] %-35s ${CYAN}%4d ms${NC}\n" "$count" "$total" "$domain" "$latency"
         else
-            printf "  ${RED}✘${NC} [%2d/%2d] %-35s ${YELLOW}超时${NC}\n" "$count" "$total" "$domain"
+            printf "  ${RED}✘${NC} [%2d/%2d] %-35s ${YELLOW}TLS 1.3 握手失败或超时${NC}\n" "$count" "$total" "$domain"
         fi
     done
 
@@ -199,21 +261,15 @@ test_custom_domain() {
         return 1
     fi
 
-    # 验证域名格式
-    if ! [[ "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
-        print_error "域名格式不正确"
-        return 1
-    fi
-
     echo ""
     print_info "开始测试域名: $domain"
     echo ""
 
     # DNS 解析测试
     print_info "1. DNS 解析测试..."
-    if host "$domain" &>/dev/null; then
-        local ip=$(host "$domain" | grep "has address" | awk '{print $4}' | head -1)
-        print_success "DNS 解析成功: $ip"
+    local resolved_ips=""
+    if resolved_ips=$(resolve_domain_ipv4 "$domain"); then
+        print_success "DNS 解析成功: $resolved_ips"
     else
         print_error "DNS 解析失败"
         return 1
@@ -221,11 +277,9 @@ test_custom_domain() {
 
     # TLS 握手测试
     print_info "2. TLS 握手测试..."
-    local t1=$(date +%s%3N)
+    local latency=""
 
-    if timeout 3 openssl s_client -connect "$domain:443" -servername "$domain" </dev/null &>/dev/null; then
-        local t2=$(date +%s%3N)
-        local latency=$((t2 - t1))
+    if latency=$(measure_reality_domain_latency "$domain"); then
         print_success "TLS 握手成功，延迟: ${latency}ms"
 
         # 询问是否设置为默认伪装域名
@@ -256,28 +310,12 @@ test_dns_resolution() {
     print_info "测试域名: $domain"
     echo ""
 
-    # 使用 host 命令测试
-    print_info "使用 host 命令测试..."
-    if host "$domain"; then
-        print_success "DNS 解析成功"
+    local resolved_ips=""
+    print_info "使用系统可用的 DNS 解析器测试..."
+    if resolved_ips=$(resolve_domain_ipv4 "$domain"); then
+        print_success "DNS 解析成功: $resolved_ips"
     else
         print_error "DNS 解析失败"
-    fi
-
-    echo ""
-
-    # 使用 dig 命令测试（如果可用）
-    if command -v dig &>/dev/null; then
-        print_info "使用 dig 命令测试..."
-        dig "$domain" +short
-    fi
-
-    echo ""
-
-    # 使用 nslookup 命令测试（如果可用）
-    if command -v nslookup &>/dev/null; then
-        print_info "使用 nslookup 命令测试..."
-        nslookup "$domain"
     fi
 }
 
@@ -288,8 +326,8 @@ add_custom_domain() {
     echo ""
 
     read -p "请输入域名: " domain
-    if [[ -z "$domain" ]]; then
-        print_error "域名不能为空"
+    if ! validate_domain "$domain"; then
+        print_error "域名格式不正确"
         return 1
     fi
 
@@ -301,9 +339,9 @@ add_custom_domain() {
 
     # 测试 DNS 解析
     print_info "测试 DNS 解析..."
-    if host "$domain" &>/dev/null; then
-        local ip=$(host "$domain" | grep "has address" | awk '{print $4}' | head -1)
-        print_success "DNS 解析成功: $ip"
+    local resolved_ips=""
+    if resolved_ips=$(resolve_domain_ipv4 "$domain"); then
+        print_success "DNS 解析成功: $resolved_ips"
     else
         print_warning "DNS 解析失败，但仍可添加"
     fi
@@ -317,8 +355,8 @@ add_custom_domain() {
         --arg note "$note" \
         '{domain: $domain, note: $note, type: "custom", created: now|todate}')
 
-    local current_data=$(cat "$DOMAIN_FILE")
-    echo "$current_data" | jq ".domains += [$domain_data]" > "$DOMAIN_FILE"
+    jq --argjson domain_data "$domain_data" '.domains += [$domain_data]' "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp" \
+        && mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE" || { rm -f "${DOMAIN_FILE}.tmp"; return 1; }
 
     print_success "域名添加成功！"
 }
@@ -373,8 +411,8 @@ delete_domain() {
     fi
 
     # 删除域名
-    jq ".domains = [.domains[] | select(.domain != \"$domain\")]" "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp"
-    mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE"
+    jq --arg domain "$domain" '.domains |= map(select(.domain != $domain))' "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp" \
+        && mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE" || { rm -f "${DOMAIN_FILE}.tmp"; return 1; }
 
     print_success "域名删除成功！"
 }
@@ -386,8 +424,8 @@ add_certificate() {
     echo ""
 
     read -p "请输入域名: " domain
-    if [[ -z "$domain" ]]; then
-        print_error "域名不能为空"
+    if ! validate_domain "$domain"; then
+        print_error "域名格式不正确"
         return 1
     fi
 
@@ -405,11 +443,14 @@ add_certificate() {
         print_info "生成自签名证书..."
         mkdir -p "$CERT_DIR"
 
-        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        if ! openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
             -keyout "${CERT_DIR}/${domain}.key" \
             -out "${CERT_DIR}/${domain}.pem" \
             -subj "/C=US/ST=State/L=City/O=Organization/CN=${domain}" \
-            2>/dev/null
+            2>/dev/null; then
+            print_error "证书生成失败"
+            return 1
+        fi
 
         cert_file="${CERT_DIR}/${domain}.pem"
         key_file="${CERT_DIR}/${domain}.key"
@@ -432,14 +473,18 @@ add_certificate() {
 
         # 复制到证书目录
         mkdir -p "$CERT_DIR"
-        cp "$cert_file" "${CERT_DIR}/${domain}.pem"
-        cp "$key_file" "${CERT_DIR}/${domain}.key"
+        if ! cp -- "$cert_file" "${CERT_DIR}/${domain}.pem" || ! cp -- "$key_file" "${CERT_DIR}/${domain}.key"; then
+            print_error "复制证书文件失败"
+            return 1
+        fi
 
         cert_file="${CERT_DIR}/${domain}.pem"
         key_file="${CERT_DIR}/${domain}.key"
 
         print_success "证书导入成功"
     fi
+
+    chmod 600 "$cert_file" "$key_file" 2>/dev/null || true
 
     # 保存证书信息
     init_domain_file
@@ -448,10 +493,10 @@ add_certificate() {
         --arg cert_file "$cert_file" \
         --arg key_file "$key_file" \
         --arg type "$([ "$cert_type" == "1" ] && echo "self-signed" || echo "imported")" \
-        '{domain: $domain, cert_file: $cert_file, key_file: $key_file, type: $type, created: now|todate}')
+        '{domain: $domain, cert_file: $cert_file, key_file: $key_file, type: $type, auto: false, created: now|todate}')
 
-    local current_data=$(cat "$DOMAIN_FILE")
-    echo "$current_data" | jq ".certificates += [$cert_data]" > "$DOMAIN_FILE"
+    jq --argjson cert_data "$cert_data" '.certificates += [$cert_data]' "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp" \
+        && mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE" || { rm -f "${DOMAIN_FILE}.tmp"; return 1; }
 
     echo ""
     echo -e "${CYAN}证书信息：${NC}"
@@ -482,6 +527,7 @@ list_certificates() {
         local type_display="未知"
         [[ "$type" == "self-signed" ]] && type_display="自签名"
         [[ "$type" == "imported" ]] && type_display="导入"
+        [[ "$type" == "acme" ]] && type_display="ACME 自动"
 
         printf "%-5s %-40s %-20s %-50s\n" "$index" "$domain" "$type_display" "$cert_file"
         ((index++))
@@ -494,8 +540,8 @@ delete_certificate() {
 
     echo ""
     read -p "请输入要删除的证书序号: " index
-    if [[ -z "$index" ]]; then
-        print_error "序号不能为空"
+    if [[ ! "$index" =~ ^[0-9]+$ || "$index" -lt 1 ]]; then
+        print_error "无效的序号"
         return 1
     fi
 
@@ -513,13 +559,14 @@ delete_certificate() {
     read -p "是否同时删除证书文件? [y/N]: " delete_files
 
     # 删除证书记录
-    jq ".certificates = [.certificates[] | select(.domain != \"$domain\")]" "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp"
-    mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE"
+    jq --arg domain "$domain" '.certificates |= map(select(.domain != $domain))' "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp" \
+        && mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE" || { rm -f "${DOMAIN_FILE}.tmp"; return 1; }
 
     # 删除文件
     if [[ "$delete_files" == "y" || "$delete_files" == "Y" ]]; then
-        rm -f "$cert_file" "$key_file"
-        print_success "证书记录和文件已删除"
+        safe_remove_certificate_file "$cert_file"
+        safe_remove_certificate_file "$key_file"
+        print_success "证书记录已删除，安全路径内的证书文件已清理"
     else
         print_success "证书记录已删除（文件保留）"
     fi
@@ -581,8 +628,9 @@ manage_server_domain() {
     echo ""
 
     print_nav_options "true" "true"
-    local choice=$(read_menu_choice "请选择")
-    local ret=$?
+    local choice ret
+    choice=$(read_menu_choice "请选择")
+    ret=$?
 
     # 处理导航
     [[ $ret -eq 99 ]] && return 0  # 返回上级
@@ -609,7 +657,8 @@ manage_server_domain() {
                 print_info "正在验证域名解析..."
 
                 # 获取服务器公网IP
-                local server_ip=$(curl -s ip.sb 2>/dev/null || curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null)
+                local server_ip
+                server_ip=$(get_public_ip 2>/dev/null || true)
                 if [[ -z "$server_ip" ]]; then
                     print_warning "无法获取服务器公网IP，跳过DNS验证"
                     read -p "是否继续设置域名？[y/N]: " confirm
@@ -622,33 +671,8 @@ manage_server_domain() {
                     echo -e "  服务器IP: ${YELLOW}$server_ip${NC}"
 
                     # 解析域名
-                    if ! command -v host &>/dev/null && ! command -v dig &>/dev/null && ! command -v nslookup &>/dev/null; then
-                        print_warning "未找到DNS查询工具，跳过DNS验证"
-                        read -p "是否继续设置域名？[y/N]: " confirm
-                        if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-                            print_info "已取消"
-                            read -p "按 Enter 键继续..."
-                            return 0
-                        fi
-                    else
-                        local domain_ip=""
-
-                        # 尝试使用host命令
-                        if command -v host &>/dev/null; then
-                            domain_ip=$(host "$domain" 2>/dev/null | grep "has address" | awk '{print $4}' | head -1)
-                        fi
-
-                        # 如果host失败，尝试dig
-                        if [[ -z "$domain_ip" ]] && command -v dig &>/dev/null; then
-                            domain_ip=$(dig +short "$domain" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
-                        fi
-
-                        # 如果dig也失败，尝试nslookup
-                        if [[ -z "$domain_ip" ]] && command -v nslookup &>/dev/null; then
-                            domain_ip=$(nslookup "$domain" 2>/dev/null | grep -A1 "Name:" | grep "Address:" | awk '{print $2}' | head -1)
-                        fi
-
-                        if [[ -z "$domain_ip" ]]; then
+                    local domain_ips=""
+                    if ! domain_ips=$(resolve_domain_ipv4 "$domain"); then
                             print_error "域名解析失败: $domain"
                             print_info "请确保："
                             echo "  1. 域名已添加DNS解析记录"
@@ -656,24 +680,23 @@ manage_server_domain() {
                             echo "  3. DNS服务器可正常访问"
                             read -p "按 Enter 键继续..."
                             return 1
-                        fi
-
-                        echo -e "  域名解析: ${YELLOW}$domain_ip${NC}"
-
-                        # 验证IP是否匹配
-                        if [[ "$domain_ip" != "$server_ip" ]]; then
-                            print_error "域名未指向本服务器"
-                            echo ""
-                            echo -e "${RED}DNS解析IP: $domain_ip${NC}"
-                            echo -e "${GREEN}服务器IP:   $server_ip${NC}"
-                            echo ""
-                            print_info "请将域名的A记录指向服务器IP: $server_ip"
-                            read -p "按 Enter 键继续..."
-                            return 1
-                        fi
-
-                        print_success "DNS解析验证通过"
                     fi
+
+                    echo -e "  域名解析: ${YELLOW}$domain_ips${NC}"
+
+                    # 任意 A 记录指向本机即可，兼容多 IP 域名。
+                    if [[ " $domain_ips " != *" $server_ip "* ]]; then
+                        print_error "域名未指向本服务器"
+                        echo ""
+                        echo -e "${RED}DNS解析IP: $domain_ips${NC}"
+                        echo -e "${GREEN}服务器IP:   $server_ip${NC}"
+                        echo ""
+                        print_info "请将域名的A记录指向服务器IP: $server_ip"
+                        read -p "按 Enter 键继续..."
+                        return 1
+                    fi
+
+                    print_success "DNS解析验证通过"
                 fi
 
                 # 保存域名
@@ -688,9 +711,9 @@ manage_server_domain() {
             if [[ -n "$domain" ]]; then
                 echo ""
                 print_info "测试域名解析: $domain"
-                if host "$domain" >/dev/null 2>&1; then
-                    local ip=$(host "$domain" | grep "has address" | awk '{print $4}' | head -1)
-                    print_success "解析成功: $domain -> $ip"
+                local resolved_ips=""
+                if resolved_ips=$(resolve_domain_ipv4 "$domain"); then
+                    print_success "解析成功: $domain -> $resolved_ips"
                 else
                     print_error "解析失败: $domain"
                 fi
@@ -709,7 +732,6 @@ auto_select_sni_domain() {
 
     # 高质量域名列表（CDN节点多、稳定性高）
     local premium_domains=(
-        www.microsoft.com
         www.apple.com
         www.cloudflare.com
         www.bing.com
@@ -718,7 +740,6 @@ auto_select_sni_domain() {
         www.intel.com
         www.amd.com
         www.nvidia.com
-        login.microsoftonline.com
     )
 
     echo -e "${YELLOW}正在测试高质量域名...${NC}"
@@ -730,21 +751,14 @@ auto_select_sni_domain() {
     local total=${#premium_domains[@]}
 
     for domain in "${premium_domains[@]}"; do
-        ((count++))
+        ((count+=1))
 
-        # 测试延迟
-        local t1=$(date +%s%3N)
-        if timeout 2 openssl s_client -connect "$domain:443" -servername "$domain" </dev/null >/dev/null 2>&1; then
-            local t2=$(date +%s%3N)
-            local latency=$((t2 - t1))
-
-            # 验证DNS解析
-            if host "$domain" >/dev/null 2>&1; then
-                echo "$latency $domain" >> "$temp_file"
-                printf "  ${GREEN}✔${NC} [%2d/%2d] %-35s ${CYAN}%4d ms${NC}\n" "$count" "$total" "$domain" "$latency"
-            fi
+        local latency=""
+        if latency=$(measure_reality_domain_latency "$domain"); then
+            echo "$latency $domain" >> "$temp_file"
+            printf "  ${GREEN}✔${NC} [%2d/%2d] %-35s ${CYAN}%4d ms${NC}\n" "$count" "$total" "$domain" "$latency"
         else
-            printf "  ${RED}✘${NC} [%2d/%2d] %-35s ${YELLOW}超时${NC}\n" "$count" "$total" "$domain"
+            printf "  ${RED}✘${NC} [%2d/%2d] %-35s ${YELLOW}TLS 1.3 握手失败或超时${NC}\n" "$count" "$total" "$domain"
         fi
     done
 
@@ -754,7 +768,7 @@ auto_select_sni_domain() {
     if [[ ! -s "$temp_file" ]]; then
         print_error "所有域名测试失败，使用默认域名"
         rm -f "$temp_file"
-        set_default_domain "www.microsoft.com"
+        set_default_domain "$REALITY_SAFE_DEFAULT_DOMAIN"
         return 1
     fi
 
@@ -869,8 +883,9 @@ manage_sni_domain() {
     echo ""
 
     print_nav_options "true" "true"
-    local choice=$(read_menu_choice "请选择")
-    local ret=$?
+    local choice ret
+    choice=$(read_menu_choice "请选择")
+    ret=$?
 
     # 处理导航
     [[ $ret -eq 99 ]] && return 0  # 返回上级
@@ -894,9 +909,8 @@ manage_sni_domain() {
                 cat "${DATA_DIR}/recommended_domains.txt"
             else
                 echo -e "${YELLOW}常用 SNI 域名推荐：${NC}"
-                echo -e "  • www.microsoft.com"
-                echo -e "  • www.apple.com"
                 echo -e "  • www.cloudflare.com"
+                echo -e "  • www.apple.com"
                 echo -e "  • www.bing.com"
                 echo -e "  • aws.amazon.com"
             fi
@@ -907,10 +921,10 @@ manage_sni_domain() {
             if [[ -n "$domain" ]]; then
                 echo ""
                 print_info "测试 TLS 握手: $domain"
-                if timeout 3 openssl s_client -connect "$domain:443" -servername "$domain" </dev/null >/dev/null 2>&1; then
-                    print_success "TLS 握手成功: $domain"
+                if measure_reality_domain_latency "$domain" >/dev/null; then
+                    print_success "TLS 1.3 握手成功: $domain"
                 else
-                    print_error "TLS 握手失败: $domain"
+                    print_error "TLS 1.3 握手失败或超时: $domain"
                 fi
             fi
             ;;
@@ -940,8 +954,9 @@ manage_host_domain() {
     echo ""
 
     print_nav_options "true" "true"
-    local choice=$(read_menu_choice "请选择")
-    local ret=$?
+    local choice ret
+    choice=$(read_menu_choice "请选择")
+    ret=$?
 
     # 处理导航
     [[ $ret -eq 99 ]] && return 0  # 返回上级
@@ -1068,6 +1083,10 @@ modify_certificate() {
     fi
 
     local domain=$(echo "$cert" | jq -r '.domain')
+    if ! validate_domain "$domain"; then
+        print_error "证书记录包含无效域名，拒绝修改"
+        return 1
+    fi
     echo ""
     echo -e "${CYAN}修改证书:${NC} $domain"
     echo ""
@@ -1076,8 +1095,9 @@ modify_certificate() {
     echo ""
 
     print_nav_options "true" "true"
-    local choice=$(read_menu_choice "请选择")
-    local ret=$?
+    local choice ret
+    choice=$(read_menu_choice "请选择")
+    ret=$?
 
     # 处理导航
     [[ $ret -eq 99 ]] && return 0  # 返回上级
@@ -1089,13 +1109,17 @@ modify_certificate() {
             read -p "请输入新的证书文件路径: " cert_path
             if [[ -n "$cert_path" ]]; then
                 if [[ ! -f "$cert_path" ]]; then
-                    print_warning "证书文件不存在: $cert_path"
-                    read -p "是否仍要保存? [y/N]: " confirm
-                    [[ "$confirm" != "y" ]] && return
+                    print_error "证书文件不存在: $cert_path"
+                    return 1
                 fi
-
-                jq ".certificates[$((cert_index-1))].cert = \"$cert_path\"" "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp"
-                mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE"
+                local stored_cert="$CERT_DIR/${domain}.pem"
+                mkdir -p "$CERT_DIR" || return 1
+                if [[ "$(readlink -f -- "$cert_path")" != "$(readlink -m -- "$stored_cert")" ]]; then
+                    cp -- "$cert_path" "$stored_cert" || return 1
+                fi
+                chmod 600 "$stored_cert" 2>/dev/null || true
+                jq --arg path "$stored_cert" ".certificates[$((cert_index-1))].cert_file = \$path" "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp" \
+                    && mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE" || { rm -f "${DOMAIN_FILE}.tmp"; return 1; }
                 print_success "证书路径已更新"
             fi
             ;;
@@ -1104,13 +1128,17 @@ modify_certificate() {
             read -p "请输入新的密钥文件路径: " key_path
             if [[ -n "$key_path" ]]; then
                 if [[ ! -f "$key_path" ]]; then
-                    print_warning "密钥文件不存在: $key_path"
-                    read -p "是否仍要保存? [y/N]: " confirm
-                    [[ "$confirm" != "y" ]] && return
+                    print_error "密钥文件不存在: $key_path"
+                    return 1
                 fi
-
-                jq ".certificates[$((cert_index-1))].key = \"$key_path\"" "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp"
-                mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE"
+                local stored_key="$CERT_DIR/${domain}.key"
+                mkdir -p "$CERT_DIR" || return 1
+                if [[ "$(readlink -f -- "$key_path")" != "$(readlink -m -- "$stored_key")" ]]; then
+                    cp -- "$key_path" "$stored_key" || return 1
+                fi
+                chmod 600 "$stored_key" 2>/dev/null || true
+                jq --arg path "$stored_key" ".certificates[$((cert_index-1))].key_file = \$path" "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp" \
+                    && mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE" || { rm -f "${DOMAIN_FILE}.tmp"; return 1; }
                 print_success "密钥路径已更新"
             fi
             ;;
@@ -1139,11 +1167,15 @@ auto_apply_certificate() {
         if [[ "$install_acme" == "y" ]]; then
             echo ""
             print_info "正在安装 acme.sh..."
-            curl https://get.acme.sh | sh -s email=my@example.com || {
+            local acme_installer
+            acme_installer=$(mktemp /tmp/acme-install-XXXXXX.sh) || return 1
+            if ! curl -fsSL https://get.acme.sh -o "$acme_installer" \
+                || ! sh "$acme_installer" email=my@example.com; then
+                rm -f -- "$acme_installer"
                 print_error "acme.sh 安装失败"
                 return 1
-            }
-            source ~/.bashrc
+            fi
+            rm -f -- "$acme_installer"
             print_success "acme.sh 安装完成"
         else
             return
@@ -1152,9 +1184,9 @@ auto_apply_certificate() {
 
     echo ""
     read -p "请输入域名: " domain
-    if [[ -z "$domain" ]]; then
-        print_error "域名不能为空"
-        return
+    if ! validate_domain "$domain"; then
+        print_error "域名格式不正确"
+        return 1
     fi
 
     echo ""
@@ -1166,15 +1198,23 @@ auto_apply_certificate() {
     read -p "请选择验证方式 [1-3, 默认: 3]: " verify_method
     verify_method=${verify_method:-3}
 
-    local acme_cmd=""
+    local acme_bin
+    acme_bin=$(command -v acme.sh 2>/dev/null || true)
+    [[ -z "$acme_bin" && -x "$HOME/.acme.sh/acme.sh" ]] && acme_bin="$HOME/.acme.sh/acme.sh"
+    if [[ -z "$acme_bin" ]]; then
+        print_error "找不到 acme.sh 可执行文件"
+        return 1
+    fi
+
+    local -a acme_args=(--issue -d "$domain")
     case $verify_method in
         1)
             read -p "请输入网站根目录路径: " webroot
-            if [[ -z "$webroot" ]]; then
-                print_error "网站根目录不能为空"
-                return
+            if [[ -z "$webroot" || ! -d "$webroot" ]]; then
+                print_error "网站根目录不存在"
+                return 1
             fi
-            acme_cmd="~/.acme.sh/acme.sh --issue -d $domain -w $webroot"
+            acme_args+=(-w "$webroot")
             ;;
         2)
             echo ""
@@ -1184,13 +1224,33 @@ auto_apply_certificate() {
             echo -e "  • DNSPod (dp)"
             echo ""
             read -p "请输入 DNS 提供商简称: " dns_provider
-            read -p "请输入 API Key/Token: " api_key
-
-            export CF_Token="$api_key"  # 示例，实际需根据提供商设置
-            acme_cmd="~/.acme.sh/acme.sh --issue --dns dns_$dns_provider -d $domain"
+            case "$dns_provider" in
+                cf)
+                    read -s -p "请输入 Cloudflare API Token: " api_key; echo ""
+                    [[ -n "$api_key" ]] || { print_error "Token 不能为空"; return 1; }
+                    export CF_Token="$api_key"
+                    ;;
+                ali)
+                    read -p "请输入 Aliyun AccessKey ID: " ali_key
+                    read -s -p "请输入 Aliyun AccessKey Secret: " ali_secret; echo ""
+                    [[ -n "$ali_key" && -n "$ali_secret" ]] || { print_error "AccessKey 不能为空"; return 1; }
+                    export Ali_Key="$ali_key" Ali_Secret="$ali_secret"
+                    ;;
+                dp)
+                    read -p "请输入 DNSPod API ID: " dp_id
+                    read -s -p "请输入 DNSPod API Key: " dp_key; echo ""
+                    [[ -n "$dp_id" && -n "$dp_key" ]] || { print_error "DNSPod 凭据不能为空"; return 1; }
+                    export DP_Id="$dp_id" DP_Key="$dp_key"
+                    ;;
+                *)
+                    print_error "不支持的 DNS 提供商，仅允许 cf、ali、dp"
+                    return 1
+                    ;;
+            esac
+            acme_args+=(--dns "dns_${dns_provider}")
             ;;
         3)
-            acme_cmd="~/.acme.sh/acme.sh --issue -d $domain --standalone"
+            acme_args+=(--standalone)
             ;;
         *)
             print_error "无效的验证方式"
@@ -1202,24 +1262,30 @@ auto_apply_certificate() {
     print_info "正在申请证书..."
     echo ""
 
-    if eval "$acme_cmd"; then
+    if "$acme_bin" "${acme_args[@]}"; then
         print_success "证书申请成功"
 
         # 安装证书到指定目录
-        mkdir -p "$CERT_DIR/$domain"
-        ~/.acme.sh/acme.sh --install-cert -d "$domain" \
+        mkdir -p "$CERT_DIR/$domain" || return 1
+        if ! "$acme_bin" --install-cert -d "$domain" \
             --key-file "$CERT_DIR/$domain/key.pem" \
-            --fullchain-file "$CERT_DIR/$domain/cert.pem"
+            --fullchain-file "$CERT_DIR/$domain/cert.pem"; then
+            print_error "证书签发成功，但安装到目标目录失败"
+            return 1
+        fi
+        chmod 600 "$CERT_DIR/$domain/key.pem" "$CERT_DIR/$domain/cert.pem" 2>/dev/null || true
 
         # 添加到证书列表
         init_domain_file
         local cert_data=$(jq -n \
             --arg domain "$domain" \
-            --arg cert "$CERT_DIR/$domain/cert.pem" \
-            --arg key "$CERT_DIR/$domain/key.pem" \
-            '{domain: $domain, cert: $cert, key: $key, auto: true, created: now|todate}')
+            --arg cert_file "$CERT_DIR/$domain/cert.pem" \
+            --arg key_file "$CERT_DIR/$domain/key.pem" \
+            '{domain: $domain, cert_file: $cert_file, key_file: $key_file, type: "acme", auto: true, created: now|todate}')
 
-        jq ".certificates += [$cert_data]" "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp"
+        jq --arg domain "$domain" --argjson cert "$cert_data" \
+            '.certificates = ([.certificates[] | select(.domain != $domain)] + [$cert])' \
+            "$DOMAIN_FILE" > "${DOMAIN_FILE}.tmp"
         mv "${DOMAIN_FILE}.tmp" "$DOMAIN_FILE"
 
         echo ""

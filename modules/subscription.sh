@@ -10,6 +10,28 @@
 # 订阅元数据文件
 SUBSCRIPTION_META_FILE="${DATA_DIR}/subscription_metadata.json"
 
+# 订阅文件只能位于专用目录中。数据库内容可能来自旧版本或人工编辑，
+# 因此任何读取/删除操作都不能直接信任其中保存的绝对路径。
+subscription_path_is_safe() {
+    local candidate="$1"
+    [[ -n "$candidate" && -d "$SUBSCRIPTION_DIR" ]] || return 1
+
+    local base resolved
+    base=$(readlink -m -- "$SUBSCRIPTION_DIR") || return 1
+    resolved=$(readlink -m -- "$candidate") || return 1
+    [[ "$resolved" == "$base"/* && -f "$resolved" && ! -L "$resolved" ]]
+}
+
+safe_remove_subscription_file() {
+    local candidate="$1"
+    [[ -z "$candidate" ]] && return 0
+    if ! subscription_path_is_safe "$candidate"; then
+        print_warning "拒绝操作订阅目录外的文件: $candidate"
+        return 1
+    fi
+    rm -f -- "$(readlink -m -- "$candidate")"
+}
+
 # 获取用户绑定的节点端口列表
 # 参数: $1=user_id
 # 返回: 通过user_node_ports数组返回端口列表
@@ -80,8 +102,8 @@ find_subscription_file() {
     done < <(find "$SUBSCRIPTION_DIR" -maxdepth 1 -type f -name "${sub_name}_*" 2>/dev/null)
 
     for file in "${possible_files[@]}"; do
-        if [[ -f "$file" ]]; then
-            echo "$file"
+        if subscription_path_is_safe "$file"; then
+            readlink -m -- "$file"
             return 0
         fi
     done
@@ -98,7 +120,7 @@ init_subscription_metadata() {
 }
 
 # 保存订阅元数据
-# 参数: sub_name, expire_date, traffic_limit_gb, traffic_used_gb, user_id
+# 参数: sub_name, user_id, sub_type
 save_subscription_metadata() {
     local sub_name="$1"
     local user_id="$2"        # 用户ID
@@ -115,11 +137,15 @@ save_subscription_metadata() {
         '{name: $name, user_id: $user_id, type: $type, created: $created, updated: $updated}')
 
     # 检查订阅是否已存在
-    local existing=$(jq -r ".subscriptions[] | select(.name == \"$sub_name\") | .name" "$SUBSCRIPTION_META_FILE" 2>/dev/null)
+    local existing
+    existing=$(jq -r --arg name "$sub_name" '.subscriptions[] | select(.name == $name) | .name' "$SUBSCRIPTION_META_FILE" 2>/dev/null)
 
     if [[ -n "$existing" ]]; then
-        # 更新现有元数据
-        if ! jq ".subscriptions |= map(if .name == \"$sub_name\" then . + {type: \"$sub_type\", updated: \"$(date '+%Y-%m-%d %H:%M:%S')\"} else . end)" \
+        # 更新现有元数据时必须同时修复用户关联，避免旧订阅永远无法自动刷新。
+        local updated_at
+        updated_at=$(date '+%Y-%m-%d %H:%M:%S')
+        if ! jq --arg name "$sub_name" --arg user_id "$user_id" --arg type "$sub_type" --arg updated "$updated_at" \
+            '.subscriptions |= map(if .name == $name then . + {user_id: $user_id, type: $type, updated: $updated} else . end)' \
             "$SUBSCRIPTION_META_FILE" > "${SUBSCRIPTION_META_FILE}.tmp"; then
             print_error "更新订阅元数据失败"
             rm -f "${SUBSCRIPTION_META_FILE}.tmp"
@@ -134,7 +160,11 @@ save_subscription_metadata() {
         fi
     fi
 
-    mv "${SUBSCRIPTION_META_FILE}.tmp" "$SUBSCRIPTION_META_FILE"
+    if ! mv "${SUBSCRIPTION_META_FILE}.tmp" "$SUBSCRIPTION_META_FILE"; then
+        rm -f "${SUBSCRIPTION_META_FILE}.tmp"
+        print_error "保存订阅元数据失败"
+        return 1
+    fi
 }
 
 # 获取订阅元数据
@@ -295,25 +325,6 @@ get_admin_user_for_node() {
     fi
 }
 
-# 获取公网IP
-get_public_ip() {
-    local ip=""
-
-    # 尝试多个IP获取服务
-    ip=$(curl -s -4 --connect-timeout 3 https://api.ipify.org 2>/dev/null)
-    if [[ -z "$ip" ]]; then
-        ip=$(curl -s -4 --connect-timeout 3 https://ifconfig.me 2>/dev/null)
-    fi
-    if [[ -z "$ip" ]]; then
-        ip=$(curl -s -4 --connect-timeout 3 https://ip.sb 2>/dev/null)
-    fi
-    if [[ -z "$ip" ]]; then
-        ip=$(hostname -I 2>/dev/null | awk '{print $1}')
-    fi
-
-    echo "$ip"
-}
-
 # 获取订阅服务配置中优先使用的域名
 get_subscription_domain_hint() {
     for domain_file in "${DATA_DIR}/server_domain.txt" "${DATA_DIR}/host_domain.txt"; do
@@ -351,34 +362,35 @@ resolve_subscription_host() {
         host=$(echo "$tunnel_domain" | sed -E 's|^https?://||' | sed -E 's|:[0-9]+$||')
     fi
 
-    # 优先2: 从 extra 中提取 tls_domain（仅用于有TLS配置的节点）
+    # 优先2: 使用节点创建时确认过的服务器连接地址。
     if [[ -z "$host" ]]; then
-        case "$protocol" in
-            vless|vmess|trojan)
-                # 只有当节点配置了TLS时才使用TLS域名
-                if [[ "$security" == "tls" ]]; then
-                    host=$(echo "$extra" | jq -r '.tls_domain // ""')
-                    [[ "$host" == "null" ]] && host=""
-                fi
-                ;;
-        esac
+        host=$(echo "$extra" | jq -r '.server_address // ""')
+        [[ "$host" == "null" ]] && host=""
     fi
 
-    # 优先3: 使用配置的服务器域名
+    # Reality 的 SNI 是伪装目标，连接地址必须直连服务器，不能回退到可能
+    # 开启 CDN 代理的全局域名。无 TLS 节点也优先使用公网 IP，避免订阅域名
+    # 被用作普通 TCP/UDP 节点地址。
+    if [[ -z "$host" && "$security" == "reality" ]]; then
+        host=$(get_public_ip 2>/dev/null || true)
+        [[ -n "$host" ]] || return 1
+    fi
+
+    if [[ -z "$host" && "$security" == "none" ]]; then
+        host=$(get_public_ip 2>/dev/null || true)
+    fi
+
+    # TLS 节点以及公网 IP 获取失败的旧节点，才使用全局服务器域名兜底。
     if [[ -z "$host" ]]; then
         host=$(get_subscription_domain_hint)
     fi
 
-    # 优先4: 使用公网 IP
     if [[ -z "$host" ]]; then
-        host=$(get_public_ip)
+        host=$(get_public_ip 2>/dev/null || true)
     fi
 
-    # 兜底: localhost
-    if [[ -z "$host" ]]; then
-        host="127.0.0.1"
-    fi
-
+    # TLS/SNI 可能只是伪装域名，不能作为连接地址兜底；绝不生成 localhost 或错误网站地址。
+    [[ -n "$host" ]] || return 1
     echo "$host"
 }
 
@@ -437,6 +449,9 @@ escape_yaml_string() {
     local input="$1"
     input="${input//\\/\\\\}"
     input="${input//\"/\\\"}"
+    input="${input//$'\r'/\\r}"
+    input="${input//$'\n'/\\n}"
+    input="${input//$'\t'/\\t}"
     echo "$input"
 }
 
@@ -515,7 +530,7 @@ generate_vless_reality_link_from_config() {
     fi
 
     # 构建VLESS Reality链接
-    local share_link="vless://${uuid}@${server_host}:${port}?encryption=none&flow=${flow}&security=reality&sni=${sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=tcp&headerType=none#$(urlencode "$remark")"
+    local share_link="vless://${uuid}@${server_host}:${port}?encryption=none&flow=${flow}&security=reality&sni=${sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=tcp&packetEncoding=xudp&headerType=none#$(urlencode "$remark")"
 
     if [[ "${DEBUG:-0}" == "1" ]]; then
         echo "  生成的链接: $share_link" >&2
@@ -551,7 +566,7 @@ generate_vless_tls_link_from_config() {
     server_host=$(resolve_subscription_host "$node_json")
 
     # 构建链接
-    local share_link="vless://${uuid}@${server_host}:${port}?encryption=none&security=tls&type=${transport}"
+    local share_link="vless://${uuid}@${server_host}:${port}?encryption=none&security=tls&type=${transport}&packetEncoding=xudp"
 
     if [[ -n "$tls_domain" ]]; then
         share_link+="&sni=${tls_domain}"
@@ -604,7 +619,7 @@ generate_vless_plain_link_from_config() {
         server_port=$port
     fi
 
-    local share_link="vless://${uuid}@${server_host}:${server_port}?encryption=none&security=${security}&type=${transport}"
+    local share_link="vless://${uuid}@${server_host}:${server_port}?encryption=none&security=${security}&type=${transport}&packetEncoding=xudp"
 
     # 添加 SNI（如果使用 TLS）
     if [[ "$security" == "tls" ]]; then
@@ -971,6 +986,7 @@ EOF
     uuid: ${user_id}
     network: tcp
     udp: true
+    packet-encoding: xudp
     tls: true
     flow: ${flow}
     servername: ${sni}
@@ -994,8 +1010,9 @@ EOF
     port: ${port}
     uuid: ${user_id}
     udp: true
+    packet-encoding: xudp
     tls: true
-    skip-cert-verify: true"
+    skip-cert-verify: false"
                     [[ -n "$sni" ]] && node_config="${node_config}
     servername: ${sni}"
                     if [[ "$transport" == "ws" && -n "$ws_path" ]]; then
@@ -1023,7 +1040,8 @@ EOF
     server: ${node_host}
     port: ${port}
     uuid: ${user_id}
-    udp: true"
+    udp: true
+    packet-encoding: xudp"
                     if [[ "$transport" == "ws" && -n "$ws_path" ]]; then
                         node_config="${node_config}
     network: ws
@@ -1094,7 +1112,7 @@ EOF
     port: ${port}
     password: ${user_password}
     udp: true
-    skip-cert-verify: true"
+    skip-cert-verify: false"
                 [[ -n "$tls_domain" ]] && node_config="${node_config}
     sni: ${tls_domain}"
                 ;;
@@ -1147,7 +1165,7 @@ EOF
     server: ${node_host}
     port: ${port}
     password: ${user_password}
-    skip-cert-verify: true
+    skip-cert-verify: false
     udp: true"
 
                 # 添加SNI
@@ -1196,7 +1214,7 @@ EOF
         echo "#   1. Reality nodes missing public_key field" >&2
         echo "#   2. Trojan/SS nodes missing password field" >&2
         echo "#   3. Node data structure mismatch" >&2
-        echo "# Please check: /usr/local/sing-box/data/nodes.json" >&2
+        echo "# Please check: ${DATA_DIR}/nodes.json" >&2
         return 1
     fi
 
@@ -1519,6 +1537,7 @@ generate_singbox_subscription_config() {
                             server: $server,
                             server_port: $port,
                             uuid: $uuid,
+                            packet_encoding: "xudp",
                             flow: $flow,
                             tls: {
                                 enabled: true,
@@ -1567,10 +1586,11 @@ generate_singbox_subscription_config() {
                                     server: $server,
                                     server_port: $port,
                                     uuid: $uuid,
+                                    packet_encoding: "xudp",
                                     tls: {
                                         enabled: true,
                                         server_name: $sni,
-                                        insecure: true
+                                        insecure: false
                                     },
                                     transport: {
                                         type: "ws",
@@ -1594,10 +1614,11 @@ generate_singbox_subscription_config() {
                                     server: $server,
                                     server_port: $port,
                                     uuid: $uuid,
+                                    packet_encoding: "xudp",
                                     tls: {
                                         enabled: true,
                                         server_name: $sni,
-                                        insecure: true
+                                        insecure: false
                                     },
                                     transport: {
                                         type: "ws",
@@ -1618,10 +1639,11 @@ generate_singbox_subscription_config() {
                                 server: $server,
                                 server_port: $port,
                                 uuid: $uuid,
+                                packet_encoding: "xudp",
                                 tls: {
                                     enabled: true,
                                     server_name: $sni,
-                                    insecure: true
+                                    insecure: false
                                 }
                             }')
                     fi
@@ -1637,7 +1659,8 @@ generate_singbox_subscription_config() {
                             tag: $tag,
                             server: $server,
                             server_port: $port,
-                            uuid: $uuid
+                            uuid: $uuid,
+                            packet_encoding: "xudp"
                         }')
                 fi
                 ;;
@@ -1746,7 +1769,7 @@ generate_singbox_subscription_config() {
                         tls: {
                             enabled: true,
                             server_name: $sni,
-                            insecure: true,
+                            insecure: false,
                             utls: {
                                 enabled: true,
                                 fingerprint: "chrome"
@@ -1821,7 +1844,7 @@ generate_singbox_subscription_config() {
                         tls: {
                             enabled: true,
                             server_name: $sni,
-                            insecure: true
+                            insecure: false
                         }
                     } + (if $obfs_pwd != "" then {
                         obfs: {
@@ -1838,10 +1861,7 @@ generate_singbox_subscription_config() {
                 ;;
         esac
 
-        # 如果节点绑定了 WARP，添加 bind_interface
-        if [[ -n "$outbound_config" && "$warp_outbound" == "true" ]]; then
-            outbound_config=$(echo "$outbound_config" | jq '. + {bind_interface: "wgcf"}')
-        fi
+        # WARP 是服务端路由属性，不应泄漏为客户端 bind_interface。
 
         if [[ -n "$outbound_config" ]]; then
             outbounds=$(echo "$outbounds" | jq --argjson ob "$outbound_config" '. += [$ob]')
@@ -1916,7 +1936,7 @@ generate_singbox_subscription_config() {
                 ],
                 rules: [
                     {
-                        outbound: ["🌏️主代理", "♾️自动选择", "Direct"],
+                        ip_is_private: true,
                         action: "route",
                         server: "dns-local"
                     }
@@ -1928,8 +1948,7 @@ generate_singbox_subscription_config() {
                     type: "mixed",
                     tag: "mixed-in",
                     listen: "127.0.0.1",
-                    listen_port: 2080,
-                    sniff: true
+                    listen_port: 2080
                 },
                 {
                     type: "tun",
@@ -1939,8 +1958,7 @@ generate_singbox_subscription_config() {
                     auto_route: true,
                     strict_route: true,
                     stack: "system",
-                    mtu: 9000,
-                    sniff: true
+                    mtu: 9000
                 }
             ],
             outbounds: $outbounds,
@@ -2161,16 +2179,8 @@ generate_subscription_with_user() {
 
     if [[ ${#user_node_ports[@]} -eq 0 ]]; then
         print_warning "用户 $sub_user_email 未绑定任何节点"
-        echo ""
-        read -p "是否生成所有节点的订阅? [y/N]: " use_all_nodes
-        if [[ "$use_all_nodes" != "y" && "$use_all_nodes" != "Y" ]]; then
-            print_info "取消生成订阅"
-            return 0
-        fi
-        # 如果选择使用所有节点，获取所有节点端口
-        while IFS= read -r node; do
-            user_node_ports+=($(echo "$node" | jq -r '.port'))
-        done < <(jq -c '.nodes[]' "$NODES_FILE" 2>/dev/null)
+        print_error "请先为该用户绑定至少一个节点，再创建订阅"
+        return 1
     fi
 
     print_info "用户可访问节点数: ${#user_node_ports[@]}"
@@ -2397,12 +2407,14 @@ generate_subscription_with_user() {
     echo ""
 
     # 获取默认域名提示
-    local default_domain=$(get_subscription_domain_hint)
+    local default_domain
+    default_domain=$(get_subscription_domain_hint)
     if [[ -z "$default_domain" ]]; then
-        default_domain=$(get_public_ip)
+        default_domain=$(get_public_ip 2>/dev/null || true)
     fi
     if [[ -z "$default_domain" ]]; then
-        default_domain="127.0.0.1"
+        print_error "无法确定订阅公网访问地址，请先配置服务器域名或确认服务器可获取公网 IPv4"
+        return 1
     fi
 
     read -p "请输入订阅访问域名或IP [留空使用: $default_domain]: " sub_domain
@@ -2420,13 +2432,13 @@ generate_subscription_with_user() {
     local sub_url="http://${sub_domain}:${sub_port}/sub/${sub_filename}"
 
     # 保存订阅信息到数据库
-    save_subscription_info "$sub_name" "$sub_url" "$sub_file" "$sub_type" "$sub_user_email"
+    save_subscription_info "$sub_name" "$sub_url" "$sub_file" "$sub_type" "$sub_user_email" || return 1
 
     # 保存订阅元数据（用户ID和订阅类型）
-    save_subscription_metadata "$sub_name" "$sub_user_id" "$sub_type"
+    save_subscription_metadata "$sub_name" "$sub_user_id" "$sub_type" || return 1
 
     # 启动订阅服务
-    setup_subscription_server "$sub_port"
+    setup_subscription_server "$sub_port" || return 1
 
     # 显示结果
     echo ""
@@ -2673,13 +2685,13 @@ show_subscription_links() {
         fi
 
         # 获取订阅端口
-        local sub_port=$(cat "${DATA_DIR}/sub_port.txt" 2>/dev/null || echo "8080")
+        local sub_port=$(cat "${DATA_DIR}/subscription_port.txt" 2>/dev/null || echo "8080")
 
         # 使用实际文件构建访问URL
         local sub_file_path=$(echo "$sub" | jq -r '.file // empty')
         local resolved_file=""
-        if [[ -n "$sub_file_path" && -f "$sub_file_path" ]]; then
-            resolved_file="$sub_file_path"
+        if subscription_path_is_safe "$sub_file_path"; then
+            resolved_file=$(readlink -m -- "$sub_file_path")
         else
             resolved_file=$(find_subscription_file "$name" 2>/dev/null)
         fi
@@ -2707,47 +2719,6 @@ show_subscription_links() {
 }
 
 # 删除订阅
-delete_subscription() {
-    show_subscription
-
-    echo ""
-    read -p "请输入要删除的订阅名称: " sub_name
-    if [[ -z "$sub_name" ]]; then
-        print_error "订阅名称不能为空"
-        return 1
-    fi
-
-    local sub_db="${DATA_DIR}/subscriptions.json"
-    local sub_info=$(jq -r ".subscriptions[] | select(.name == \"$sub_name\")" "$sub_db" 2>/dev/null)
-
-    if [[ -z "$sub_info" ]]; then
-        print_error "订阅不存在"
-        return 1
-    fi
-
-    read -p "确认删除订阅 ${sub_name}? [y/N]: " confirm
-    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-        print_info "取消删除"
-        return 0
-    fi
-
-    # 获取订阅文件路径
-    local sub_file=$(echo "$sub_info" | jq -r '.file')
-
-    # 删除订阅文件
-    if [[ -f "$sub_file" ]]; then
-        rm -f "$sub_file"
-    fi
-
-    # 从数据库删除
-    remove_subscription_info "$sub_name"
-
-    # 删除订阅元数据
-    delete_subscription_metadata "$sub_name"
-
-    print_success "订阅删除成功"
-}
-
 # 重新生成订阅（更新现有订阅）
 regenerate_subscription() {
     local sub_name="$1"
@@ -2972,12 +2943,14 @@ regenerate_subscription() {
 
     # 更新订阅信息（更新时间、文件路径和URL）
     local port=$(cat "${DATA_DIR}/subscription_port.txt" 2>/dev/null || echo "8080")
-    local server_ip=$(get_subscription_domain_hint)
+    local server_ip
+    server_ip=$(get_subscription_domain_hint)
     if [[ -z "$server_ip" ]]; then
-        server_ip=$(get_public_ip)
+        server_ip=$(get_public_ip 2>/dev/null || true)
     fi
     if [[ -z "$server_ip" ]]; then
-        server_ip="127.0.0.1"
+        print_error "无法确定订阅公网访问地址，请先配置服务器域名或确认服务器可获取公网 IPv4"
+        return 1
     fi
     local sub_filename=$(basename "$sub_file")
     local sub_url="http://${server_ip}:${port}/sub/${sub_filename}"
@@ -3005,6 +2978,54 @@ regenerate_subscription() {
 }
 
 # 订阅配置
+subscription_server_is_healthy() {
+    local port="${1:-$(cat "${DATA_DIR}/subscription_port.txt" 2>/dev/null || echo 8080)}"
+    [[ "$port" =~ ^[0-9]+$ && "$port" -ge 1 && "$port" -le 65535 ]] || return 1
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsS --max-time 3 "http://127.0.0.1:${port}/healthz" 2>/dev/null | grep -q '"status":"ok"'
+        return $?
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - "$port" <<'PYEOF'
+import sys
+import urllib.request
+
+with urllib.request.urlopen(f"http://127.0.0.1:{sys.argv[1]}/healthz", timeout=3) as response:
+    body = response.read().decode("utf-8")
+    if response.status != 200 or '"status":"ok"' not in body:
+        raise SystemExit(1)
+PYEOF
+        return $?
+    fi
+
+    return 1
+}
+
+ensure_subscription_server_runtime() {
+    local port_file="${DATA_DIR}/subscription_port.txt"
+    local port
+    [[ -f "$port_file" ]] || return 0
+    port=$(cat "$port_file" 2>/dev/null)
+    [[ "$port" =~ ^[0-9]+$ && "$port" -ge 1 && "$port" -le 65535 ]] || {
+        print_warning "订阅端口记录无效，跳过自动恢复: ${port:-空}"
+        return 1
+    }
+
+    if subscription_server_is_healthy "$port"; then
+        if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]] \
+            && [[ ! -f /etc/systemd/system/sing-box-subscription-health.timer ]]; then
+            print_warning "订阅服务健康巡检单元缺失，正在重新部署"
+            setup_subscription_server "$port"
+        fi
+        return 0
+    fi
+
+    print_warning "检测到订阅服务未运行或处于假活状态，正在自动恢复"
+    setup_subscription_server "$port"
+}
+
 config_subscription() {
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
@@ -3019,20 +3040,21 @@ config_subscription() {
     echo ""
 
     print_nav_options "true" "true"
-    local choice=$(read_menu_choice "请选择")
-    local ret=$?
+    local choice ret
+    choice=$(read_menu_choice "请选择")
+    ret=$?
 
     # 处理导航
     [[ $ret -eq 99 ]] && return  # 返回上级
-    [[ $ret -eq 98 ]] && return  # 返回主菜单
+    [[ $ret -eq 98 ]] && return 98  # 返回主菜单
 
     case $choice in
         1)
             read -p "请输入订阅端口 [1-65535]: " sub_port
             if [[ -n "$sub_port" && "$sub_port" =~ ^[0-9]+$ ]]; then
                 if [[ $sub_port -ge 1 && $sub_port -le 65535 ]]; then
-                    echo "$sub_port" > "${DATA_DIR}/sub_port.txt"
-                    setup_subscription_server "$sub_port"
+                    echo "$sub_port" > "${DATA_DIR}/subscription_port.txt"
+                    setup_subscription_server "$sub_port" || return 1
                     print_success "订阅端口设置成功"
                 else
                     print_error "端口范围必须在 1-65535 之间"
@@ -3040,15 +3062,20 @@ config_subscription() {
             fi
             ;;
         2)
-            local sub_port=$(cat "${DATA_DIR}/sub_port.txt" 2>/dev/null || echo "8080")
-            setup_subscription_server "$sub_port"
+            local sub_port=$(cat "${DATA_DIR}/subscription_port.txt" 2>/dev/null || echo "8080")
+            setup_subscription_server "$sub_port" || return 1
             print_success "订阅服务重启成功"
             ;;
         3)
-            if pgrep -f "python.*subscription_server" > /dev/null 2>&1; then
-                local sub_port=$(cat "${DATA_DIR}/sub_port.txt" 2>/dev/null || echo "8080")
+            local sub_port=$(cat "${DATA_DIR}/subscription_port.txt" 2>/dev/null || echo "8080")
+            if subscription_server_is_healthy "$sub_port"; then
                 print_success "订阅服务运行中"
                 print_info "监听端口: $sub_port"
+                print_info "健康检查: http://127.0.0.1:${sub_port}/healthz"
+            elif { command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet sing-box-subscription.service; } \
+                || pgrep -f "python.*subscription_server" > /dev/null 2>&1; then
+                print_error "订阅服务进程存在，但 HTTP 健康检查失败"
+                print_info "建议执行“重启订阅服务”，并查看 journalctl -u sing-box-subscription"
             else
                 print_warning "订阅服务未运行"
             fi
@@ -3063,13 +3090,19 @@ config_subscription() {
 setup_subscription_server() {
     local port=$1
 
-    # 检查端口是否已在使用
-    if pgrep -f "python.*subscription_server.*${port}" > /dev/null 2>&1; then
-        print_info "订阅服务已在端口 $port 运行"
-        return 0
+    if [[ ! "$port" =~ ^[0-9]+$ || "$port" -lt 1 || "$port" -gt 65535 ]]; then
+        print_error "无效的订阅服务端口: $port"
+        return 1
     fi
 
+    mkdir -p "$SUBSCRIPTION_DIR" "$DATA_DIR" || return 1
+    chmod 700 "$SUBSCRIPTION_DIR" "$DATA_DIR" 2>/dev/null || true
+
     # 停止已有服务
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl stop sing-box-subscription-health.timer >/dev/null 2>&1 || true
+        systemctl stop sing-box-subscription.service >/dev/null 2>&1 || true
+    fi
     pkill -f "python.*subscription_server" 2>/dev/null
 
     # 保存订阅端口到文件
@@ -3080,20 +3113,53 @@ setup_subscription_server() {
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import http.server
-import socketserver
+import socket
 import os
+import re
 import sys
 import json
-from urllib.parse import unquote
+from pathlib import Path
+from urllib.parse import unquote, urlsplit
 from datetime import datetime
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
-DIRECTORY = sys.argv[2] if len(sys.argv) > 2 else os.getcwd()
-DATA_DIR = sys.argv[3] if len(sys.argv) > 3 else os.path.dirname(DIRECTORY)
+DIRECTORY = Path(sys.argv[2] if len(sys.argv) > 2 else '.').resolve()
+DATA_DIR = Path(sys.argv[3] if len(sys.argv) > 3 else DIRECTORY.parent).resolve()
 
 class SubscriptionHandler(http.server.SimpleHTTPRequestHandler):
+    protocol_version = 'HTTP/1.1'
+
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=DIRECTORY, **kwargs)
+        super().__init__(*args, directory=str(DIRECTORY), **kwargs)
+
+    def send_bytes(self, status, content_type, payload):
+        self.close_connection = True
+        self.send_response(status)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', str(len(payload)))
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        if self.command != 'HEAD':
+            try:
+                self.wfile.write(payload)
+            except (BrokenPipeError, ConnectionResetError, TimeoutError, socket.timeout, OSError):
+                pass
+
+    def resolve_subscription_path(self):
+        raw_path = urlsplit(self.path).path
+        if not raw_path.startswith('/sub/'):
+            return None, None
+        filename = unquote(raw_path[5:])
+        if (not filename or filename != Path(filename).name or
+                not re.fullmatch(r'[A-Za-z0-9._-]+', filename)):
+            return None, None
+        candidate = (DIRECTORY / filename).resolve()
+        if os.path.commonpath((str(DIRECTORY), str(candidate))) != str(DIRECTORY):
+            return None, None
+        if not candidate.is_file() or candidate.is_symlink():
+            return None, None
+        return filename, candidate
 
     def get_user_info_from_filename(self, filename):
         """从订阅文件名中提取用户信息"""
@@ -3111,8 +3177,8 @@ class SubscriptionHandler(http.server.SimpleHTTPRequestHandler):
     def get_subscription_userinfo(self, user_id):
         """读取用户流量和期限信息"""
         try:
-            users_file = os.path.join(DATA_DIR, 'users.json')
-            if not os.path.exists(users_file):
+            users_file = DATA_DIR / 'users.json'
+            if not users_file.is_file():
                 return None
 
             with open(users_file, 'r', encoding='utf-8') as f:
@@ -3161,11 +3227,13 @@ class SubscriptionHandler(http.server.SimpleHTTPRequestHandler):
             return None
 
     def do_GET(self):
-        if self.path.startswith('/sub/'):
-            filename = unquote(self.path[5:])
-            filepath = os.path.join(DIRECTORY, filename)
-
-            if os.path.exists(filepath):
+        request_path = urlsplit(self.path).path
+        if request_path == '/healthz':
+            self.send_bytes(200, 'application/json; charset=utf-8', b'{"status":"ok"}\n')
+        elif request_path.startswith('/sub/'):
+            filename, filepath = self.resolve_subscription_path()
+            if filepath is not None:
+                self.close_connection = True
                 self.send_response(200)
 
                 # 根据文件扩展名设置正确的Content-Type
@@ -3180,9 +3248,10 @@ class SubscriptionHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.send_header('Cache-Control', 'no-cache')
+                self.send_header('Connection', 'close')
 
                 # 获取文件大小并发送Content-Length
-                file_size = os.path.getsize(filepath)
+                file_size = filepath.stat().st_size
                 self.send_header('Content-Length', str(file_size))
 
                 # 添加订阅用户信息头
@@ -3196,25 +3265,45 @@ class SubscriptionHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
 
                 # 分块读取文件，避免大文件内存问题和超时
-                with open(filepath, 'rb') as f:
-                    chunk_size = 8192
-                    while True:
-                        chunk = f.read(chunk_size)
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
+                try:
+                    with filepath.open('rb') as f:
+                        chunk_size = 8192
+                        while True:
+                            chunk = f.read(chunk_size)
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError, TimeoutError, socket.timeout, OSError):
+                    pass
             else:
                 self.send_error(404, 'Subscription not found')
         else:
             self.send_error(403, 'Access denied')
 
+    def do_HEAD(self):
+        if urlsplit(self.path).path == '/healthz':
+            self.send_bytes(200, 'application/json; charset=utf-8', b'{"status":"ok"}\n')
+        else:
+            self.send_error(404, 'Not found')
+
     def log_message(self, format, *args):
         pass
 
+class SubscriptionHTTPServer(http.server.ThreadingHTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+    block_on_close = False
+    request_queue_size = 128
+
+    def get_request(self):
+        request, client_address = super().get_request()
+        request.settimeout(15)
+        return request, client_address
+
+
 if __name__ == '__main__':
     try:
-        socketserver.TCPServer.allow_reuse_address = True
-        with socketserver.TCPServer(("", PORT), SubscriptionHandler) as httpd:
+        with SubscriptionHTTPServer(("", PORT), SubscriptionHandler) as httpd:
             print(f"[订阅服务] 运行在端口 {PORT}")
             print(f"[订阅服务] 文件目录: {DIRECTORY}")
             httpd.serve_forever()
@@ -3224,19 +3313,104 @@ if __name__ == '__main__':
         print(f"[订阅服务] 错误: {e}")
 PYEOF
 
-    chmod +x "${DATA_DIR}/subscription_server.py"
+    chmod 700 "${DATA_DIR}/subscription_server.py"
 
-    # 后台启动服务（传递 DATA_DIR 作为第三个参数）
-    nohup python3 "${DATA_DIR}/subscription_server.py" "$port" "$SUBSCRIPTION_DIR" "$DATA_DIR" > /dev/null 2>&1 &
+    local python_bin
+    python_bin=$(command -v python3) || {
+        print_error "未找到 python3，无法启动订阅服务"
+        return 1
+    }
 
-    sleep 1
+    if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+        local curl_bin systemctl_bin
+        curl_bin=$(command -v curl) || {
+            print_error "未找到 curl，无法配置订阅服务健康巡检"
+            return 1
+        }
+        systemctl_bin=$(command -v systemctl) || return 1
 
-    if pgrep -f "python.*subscription_server" > /dev/null 2>&1; then
-        print_success "订阅服务已启动"
-        print_info "监听端口: $port"
+        cat > /etc/systemd/system/sing-box-subscription.service <<EOF
+[Unit]
+Description=sing-box Subscription Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+UMask=0077
+ExecStart=${python_bin} ${DATA_DIR}/subscription_server.py ${port} ${SUBSCRIPTION_DIR} ${DATA_DIR}
+Restart=always
+RestartSec=3s
+TimeoutStopSec=10s
+PrivateTmp=true
+ProtectHome=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        cat > /etc/systemd/system/sing-box-subscription-health.service <<EOF
+[Unit]
+Description=Health check for sing-box subscription server
+After=sing-box-subscription.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '${curl_bin} -fsS --max-time 5 http://127.0.0.1:${port}/healthz >/dev/null || ${systemctl_bin} restart sing-box-subscription.service'
+EOF
+        cat > /etc/systemd/system/sing-box-subscription-health.timer <<'EOF'
+[Unit]
+Description=Periodically verify sing-box subscription server health
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+        chmod 600 /etc/systemd/system/sing-box-subscription.service \
+            /etc/systemd/system/sing-box-subscription-health.service \
+            /etc/systemd/system/sing-box-subscription-health.timer
+        if ! systemctl daemon-reload \
+            || ! systemctl enable --now sing-box-subscription.service \
+            || ! systemctl enable --now sing-box-subscription-health.timer; then
+            print_error "订阅服务注册或启动失败"
+            return 1
+        fi
+        if ! systemctl is-active --quiet sing-box-subscription.service; then
+            print_error "订阅服务未进入运行状态"
+            systemctl status sing-box-subscription.service --no-pager 2>/dev/null || true
+            return 1
+        fi
     else
-        print_error "订阅服务启动失败"
+        # 兼容不使用 systemd 的容器环境；该模式不会提供开机自启。
+        nohup "$python_bin" "${DATA_DIR}/subscription_server.py" "$port" "$SUBSCRIPTION_DIR" "$DATA_DIR" \
+            > "${DATA_DIR}/subscription_server.log" 2>&1 &
+        echo $! > "${DATA_DIR}/subscription_server.pid"
+        sleep 1
+        if ! kill -0 "$(cat "${DATA_DIR}/subscription_server.pid")" 2>/dev/null; then
+            print_error "订阅服务启动失败"
+            return 1
+        fi
+        print_warning "当前环境没有 systemd，订阅服务仅以临时后台进程运行"
     fi
+
+    if ! wait_for_condition 10 1 subscription_server_is_healthy "$port"; then
+        print_error "订阅服务进程已启动，但 HTTP 健康检查未通过"
+        if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+            systemctl status sing-box-subscription.service --no-pager 2>/dev/null || true
+        elif [[ -f "${DATA_DIR}/subscription_server.pid" ]]; then
+            kill "$(cat "${DATA_DIR}/subscription_server.pid")" 2>/dev/null || true
+        fi
+        return 1
+    fi
+
+    print_success "订阅服务已启动并通过健康检查"
+    print_info "监听端口: $port"
+    return 0
 }
 
 # 保存订阅信息
@@ -3281,7 +3455,11 @@ save_subscription_info() {
         fi
     fi
 
-    mv "${sub_db}.tmp" "$sub_db"
+    if ! mv "${sub_db}.tmp" "$sub_db"; then
+        rm -f "${sub_db}.tmp"
+        print_error "保存订阅索引失败"
+        return 1
+    fi
 }
 
 # 删除订阅信息
@@ -3405,7 +3583,7 @@ update_user_subscriptions() {
         echo -e "  失败: ${RED}$failed_count${NC}"
     fi
 
-    return 0
+    [[ $failed_count -eq 0 ]]
 }
 
 # 重新生成订阅内容的核心逻辑（参考 generate_subscription_with_user）
@@ -3422,14 +3600,7 @@ regenerate_subscription_content() {
     get_user_bound_ports "$sub_user_id"
 
     if [[ ${#user_node_ports[@]} -eq 0 ]]; then
-        print_warning "用户未绑定节点，使用所有节点"
-        while IFS= read -r node; do
-            user_node_ports+=($(echo "$node" | jq -r '.port'))
-        done < <(jq -c '.nodes[]' "$NODES_FILE" 2>/dev/null)
-    fi
-
-    if [[ ${#user_node_ports[@]} -eq 0 ]]; then
-        print_error "没有可用的节点"
+        print_error "用户未绑定任何节点，拒绝生成包含越权节点的订阅"
         return 1
     fi
 
@@ -3537,24 +3708,27 @@ regenerate_subscription_content() {
 
     # 4. 更新数据库中的URL和时间戳
     local port=$(cat "${DATA_DIR}/subscription_port.txt" 2>/dev/null || echo "8080")
-    local server_ip=$(get_subscription_domain_hint)
-    [[ -z "$server_ip" ]] && server_ip=$(get_public_ip)
-    [[ -z "$server_ip" ]] && server_ip="127.0.0.1"
+    local server_ip
+    server_ip=$(get_subscription_domain_hint)
+    [[ -n "$server_ip" ]] || server_ip=$(get_public_ip 2>/dev/null || true)
+    if [[ -z "$server_ip" ]]; then
+        print_error "无法确定订阅公网访问地址，请先配置服务器域名或确认服务器可获取公网 IPv4"
+        return 1
+    fi
 
     local sub_filename=$(basename "$sub_file")
     local sub_url="http://${server_ip}:${port}/sub/${sub_filename}"
 
-    # 使用正确的元数据文件（SUBSCRIPTION_META_FILE而不是subscriptions.json）
-    if [[ ! -f "$SUBSCRIPTION_META_FILE" ]]; then
-        print_warning "元数据文件不存在，跳过元数据更新"
-        return 0
-    fi
+    # 同步更新两个订阅索引，避免内容已刷新但公开 URL 仍指向旧凭据文件。
+    save_subscription_info "$sub_name" "$sub_url" "$sub_file" "$sub_type" "$sub_user_email" || return 1
+    save_subscription_metadata "$sub_name" "$sub_user_id" "$sub_type" || return 1
 
     # 更新元数据：URL、文件路径和更新时间
     if jq --arg name "$sub_name" --arg url "$sub_url" --arg file "$sub_file" \
        '(.subscriptions[] | select(.name == $name)) |= (. + {url: $url, file: $file, updated: (now|todate)})' \
-       "$SUBSCRIPTION_META_FILE" > "${SUBSCRIPTION_META_FILE}.tmp"; then
-        mv "${SUBSCRIPTION_META_FILE}.tmp" "$SUBSCRIPTION_META_FILE"
+       "$SUBSCRIPTION_META_FILE" > "${SUBSCRIPTION_META_FILE}.tmp" \
+       && mv "${SUBSCRIPTION_META_FILE}.tmp" "$SUBSCRIPTION_META_FILE"; then
+        :
     else
         print_error "更新元数据失败"
         rm -f "${SUBSCRIPTION_META_FILE}.tmp"
@@ -3736,18 +3910,28 @@ delete_subscription() {
         return 0
     fi
 
+    begin_data_transaction || return 1
+
     # 删除订阅文件
-    if [[ -n "$file" && -f "$file" ]]; then
-        rm -f "$file"
+    if [[ -n "$file" ]] && safe_remove_subscription_file "$file"; then
         print_success "已删除订阅文件: $file"
     fi
 
     # 从数据库删除
-    jq ".subscriptions |= del(.[$((sub_index-1))])" "$sub_db" > "${sub_db}.tmp"
-    mv "${sub_db}.tmp" "$sub_db"
+    if ! jq ".subscriptions |= del(.[$((sub_index-1))])" "$sub_db" > "${sub_db}.tmp" \
+        || ! mv "${sub_db}.tmp" "$sub_db"; then
+        rm -f "${sub_db}.tmp"
+        print_error "删除订阅记录失败"
+        rollback_data_transaction
+        return 1
+    fi
 
     # 删除元数据
-    delete_subscription_metadata "$name"
+    if ! delete_subscription_metadata "$name" || ! commit_data_transaction; then
+        rollback_data_transaction
+        print_error "删除订阅元数据失败，操作已回滚"
+        return 1
+    fi
 
     print_success "订阅 '$name' 已删除"
 }
@@ -3875,8 +4059,9 @@ update_subscription_menu() {
     echo ""
 
     print_nav_options "true" "true"
-    local choice=$(read_menu_choice "请选择")
-    local ret=$?
+    local choice ret
+    choice=$(read_menu_choice "请选择")
+    ret=$?
 
     # 处理导航
     [[ $ret -eq 99 ]] && return 0  # 返回上级
@@ -4002,8 +4187,9 @@ delete_subscription_menu() {
     echo ""
 
     print_nav_options "true" "true"
-    local choice=$(read_menu_choice "请选择")
-    local ret=$?
+    local choice ret
+    choice=$(read_menu_choice "请选择")
+    ret=$?
 
     # 处理导航
     [[ $ret -eq 99 ]] && return 0  # 返回上级
@@ -4077,6 +4263,8 @@ delete_subscription_menu() {
                 return 0
             fi
 
+            begin_data_transaction || return 1
+
             # 删除该用户的所有订阅
             local deleted_count=0
             local sub_db="${DATA_DIR}/subscriptions.json"
@@ -4092,21 +4280,23 @@ delete_subscription_menu() {
 
                 for sub_name in "${user_sub_names[@]}"; do
                     # 删除订阅文件
-                    local sub_file=$(jq -r ".subscriptions[] | select(.name == \"$sub_name\") | .file" "$sub_db" 2>/dev/null)
-                    if [[ -n "$sub_file" && -f "$sub_file" ]]; then
-                        rm -f "$sub_file"
-                    fi
+                    local sub_file=$(jq -r --arg name "$sub_name" '.subscriptions[] | select(.name == $name) | .file' "$sub_db" 2>/dev/null)
+                    [[ -n "$sub_file" ]] && safe_remove_subscription_file "$sub_file"
 
                     # 从数据库删除
-                    jq ".subscriptions |= map(select(.name != \"$sub_name\"))" "$sub_db" > "${sub_db}.tmp"
-                    mv "${sub_db}.tmp" "$sub_db"
+                    if ! jq --arg name "$sub_name" '.subscriptions |= map(select(.name != $name))' "$sub_db" > "${sub_db}.tmp" \
+                        || ! mv "${sub_db}.tmp" "$sub_db"; then
+                        rm -f "${sub_db}.tmp"; rollback_data_transaction; return 1
+                    fi
 
                     # 删除元数据
-                    delete_subscription_metadata "$sub_name"
+                    delete_subscription_metadata "$sub_name" || { rollback_data_transaction; return 1; }
 
                     ((deleted_count++))
                 done
             fi
+
+            commit_data_transaction || { rollback_data_transaction; return 1; }
 
             echo ""
             print_success "已删除用户 $username 的 $deleted_count 个订阅"
@@ -4135,18 +4325,22 @@ delete_subscription_menu() {
                 return 0
             fi
 
+            begin_data_transaction || return 1
+
             # 删除所有订阅文件
             while IFS= read -r sub_file; do
-                [[ -n "$sub_file" && -f "$sub_file" ]] && rm -f "$sub_file"
+                [[ -n "$sub_file" ]] && safe_remove_subscription_file "$sub_file"
             done < <(jq -r '.subscriptions[].file' "$sub_db" 2>/dev/null)
 
             # 清空数据库
-            echo '{"subscriptions":[]}' > "$sub_db"
+            printf '%s\n' '{"subscriptions":[]}' > "$sub_db" || { rollback_data_transaction; return 1; }
 
             # 清空元数据
             if [[ -f "$SUBSCRIPTION_META_FILE" ]]; then
-                echo '{"subscriptions":[]}' > "$SUBSCRIPTION_META_FILE"
+                printf '%s\n' '{"subscriptions":[]}' > "$SUBSCRIPTION_META_FILE" || { rollback_data_transaction; return 1; }
             fi
+
+            commit_data_transaction || { rollback_data_transaction; return 1; }
 
             echo ""
             print_success "已删除所有 $sub_count 个订阅"

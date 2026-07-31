@@ -12,6 +12,131 @@ readonly CLOUDFLARED_AUTH_FILE="${DATA_DIR}/cf_auths.json"
 readonly WARP_DIR="/opt/warp-plus"
 readonly WARP_BIN="${WARP_DIR}/warp-plus"
 
+# Cloudflare Tunnel 的 ingress service 使用 HTTP，因此只能绑定能够接收
+# 明文 WebSocket HTTP 请求的入站。UDP、Reality、原生 TLS 等协议不能伪装成 HTTP 源站。
+list_cf_http_compatible_nodes() {
+    local nodes_file="$1"
+    jq -r '.nodes[]
+        | select(
+            (.protocol == "vless" or .protocol == "vmess" or .protocol == "trojan")
+            and (.transport == "ws")
+            and ((.security // "none") == "none")
+          )
+        | "\(.port)|\(.protocol)|\(.tag // .name // \"N/A\")"' "$nodes_file" 2>/dev/null
+}
+
+cf_node_is_http_compatible() {
+    local nodes_file="$1" port="$2"
+    jq -e --arg port "$port" '.nodes[]
+        | select((.port | tostring) == $port)
+        | select(
+            (.protocol == "vless" or .protocol == "vmess" or .protocol == "trojan")
+            and (.transport == "ws")
+            and ((.security // "none") == "none")
+          )' "$nodes_file" >/dev/null 2>&1
+}
+
+get_cf_tunnel_id() {
+    local tunnel_name="$1" tunnel_home="${2:-}"
+    local -a cmd=("$CLOUDFLARED_BIN" tunnel list)
+    local json="" tunnel_id=""
+    if [[ -n "$tunnel_home" ]]; then
+        json=$(HOME="$tunnel_home" "$CLOUDFLARED_BIN" tunnel list --output json 2>/dev/null || true)
+    else
+        json=$("$CLOUDFLARED_BIN" tunnel list --output json 2>/dev/null || true)
+    fi
+    if [[ -n "$json" ]] && jq -e . >/dev/null 2>&1 <<< "$json"; then
+        tunnel_id=$(jq -r --arg name "$tunnel_name" '.[] | select(.name == $name) | .id' <<< "$json" | head -n1)
+    fi
+    if [[ -z "$tunnel_id" ]]; then
+        if [[ -n "$tunnel_home" ]]; then
+            tunnel_id=$(HOME="$tunnel_home" "${cmd[@]}" 2>/dev/null | awk -v name="$tunnel_name" '$2 == name {print $1; exit}')
+        else
+            tunnel_id=$("${cmd[@]}" 2>/dev/null | awk -v name="$tunnel_name" '$2 == name {print $1; exit}')
+        fi
+    fi
+    [[ -n "$tunnel_id" && "$tunnel_id" != "null" ]] || return 1
+    printf '%s\n' "$tunnel_id"
+}
+
+rollback_cf_tunnel_creation() {
+    local tunnel_home="$1" tunnel_id="$2" tunnel_name="$3" target_creds="$4" config_file="$5" service_file="$6"
+    local service_name="cloudflared-${tunnel_name}.service"
+    systemctl stop "$service_name" >/dev/null 2>&1 || true
+    systemctl disable "$service_name" >/dev/null 2>&1 || true
+    rm -f -- "$service_file" "$config_file" "$target_creds"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    if [[ -n "$tunnel_home" ]]; then
+        HOME="$tunnel_home" "$CLOUDFLARED_BIN" tunnel delete -f "${tunnel_id:-$tunnel_name}" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "$tunnel_home" && "$tunnel_home" == /tmp/cf-tunnel-* && -d "$tunnel_home" ]]; then
+        rm -rf -- "$tunnel_home"
+    fi
+}
+
+apply_cf_tunnel_binding() {
+    local tunnel_name="$1" tunnel_domain="$2" selected_port="$3" nodes_file="$4" tunnel_id="$5"
+    [[ "$tunnel_name" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$ ]] || return 1
+    validate_domain "$tunnel_domain" || return 1
+    cf_node_is_http_compatible "$nodes_file" "$selected_port" || return 1
+
+    local config_file="${CLOUDFLARED_CONFIG_DIR}/config-${tunnel_name}.yml"
+    local service_name="cloudflared-${tunnel_name}.service"
+    [[ -f "$config_file" ]] || { print_error "配置文件不存在: $config_file"; return 1; }
+    local config_backup
+    config_backup=$(mktemp /tmp/cloudflared-config-backup-XXXXXX) || return 1
+    cp -- "$config_file" "$config_backup" || { rm -f -- "$config_backup"; return 1; }
+    begin_data_transaction || { rm -f -- "$config_backup"; return 1; }
+
+    if ! cat > "$config_file" <<EOF
+tunnel: ${tunnel_id}
+credentials-file: ${CLOUDFLARED_CONFIG_DIR}/${tunnel_id}.json
+
+ingress:
+  - hostname: ${tunnel_domain}
+    service: http://localhost:${selected_port}
+  - service: http_status:404
+EOF
+    then
+        cp -- "$config_backup" "$config_file"; rm -f -- "$config_backup"; rollback_data_transaction
+        return 1
+    fi
+    chmod 600 "$config_file" 2>/dev/null || true
+    if ! jq --arg port "$selected_port" --arg domain "$tunnel_domain" --arg tunnel_name "$tunnel_name" \
+        '(.nodes[] | select((.port|tostring) == $port)) |= (. + {tunnel_domain:$domain,tunnel_name:$tunnel_name,tunnel_type:"argo_dedicated"})' \
+        "$nodes_file" > "${nodes_file}.tmp" || ! mv "${nodes_file}.tmp" "$nodes_file"; then
+        rm -f "${nodes_file}.tmp"; cp -- "$config_backup" "$config_file"; rm -f -- "$config_backup"; rollback_data_transaction
+        return 1
+    fi
+
+    if declare -f update_user_subscriptions >/dev/null 2>&1 && [[ -f "$NODE_USERS_FILE" ]]; then
+        while IFS= read -r user_id; do
+            [[ -z "$user_id" ]] || update_user_subscriptions "$user_id" || {
+                cp -- "$config_backup" "$config_file"; rm -f -- "$config_backup"; rollback_data_transaction
+                return 1
+            }
+        done < <(jq -r --arg port "$selected_port" '.bindings[] | select((.port|tostring)==$port) | .users[]?' "$NODE_USERS_FILE")
+    fi
+
+    if ! systemctl enable --now "$service_name" >/dev/null 2>&1 \
+        || ! systemctl restart "$service_name" \
+        || ! systemctl is-active --quiet "$service_name"; then
+        cp -- "$config_backup" "$config_file"; rollback_data_transaction
+        systemctl restart "$service_name" >/dev/null 2>&1 || true
+        rm -f -- "$config_backup"
+        print_error "cloudflared 服务未能应用新绑定，已回滚"
+        return 1
+    fi
+    if ! commit_data_transaction; then
+        cp -- "$config_backup" "$config_file"; rollback_data_transaction
+        systemctl restart "$service_name" >/dev/null 2>&1 || true
+        rm -f -- "$config_backup"
+        return 1
+    fi
+    rm -f -- "$config_backup"
+    return 0
+}
+
 # ============================================================================
 # Cloudflared 安装管理
 # ============================================================================
@@ -101,7 +226,9 @@ create_argo_keepalive_script() {
 # 每5分钟检查一次隧道状态，如果隧道进程消失则自动重启
 
 CLOUDFLARED_BIN="/usr/local/bin/cloudflared"
-DATA_DIR="/var/lib/sing-box/data"
+if [[ -z "${DATA_DIR:-}" ]]; then
+    DATA_DIR="/var/lib/sing-box"
+fi
 TUNNELS_FILE="${DATA_DIR}/argo_temp_tunnels.json"
 
 # 检查并重启隧道
@@ -242,9 +369,9 @@ start_temp_argo_tunnel() {
             return 1
         fi
 
-        local nodes=$(jq -r '.nodes[] | "\(.port)|\(.protocol)|\(.tag // "N/A")"' "$nodes_file" 2>/dev/null)
+        local nodes=$(list_cf_http_compatible_nodes "$nodes_file")
         if [[ -z "$nodes" ]]; then
-            print_error "没有可用节点，请先创建节点"
+            print_error "没有可用于 Cloudflare HTTP 源站的节点（仅支持 none+WebSocket 的 VLESS/VMess/Trojan）"
             return 1
         fi
 
@@ -572,24 +699,34 @@ create_dedicated_argo_tunnel() {
 
     # 设置临时 HOME 以使用选定的证书
     # cloudflared 会从 ~/.cloudflared/cert.pem 读取证书
-    local tunnel_home="/tmp/cf-tunnel-$$"
-    mkdir -p "$tunnel_home/.cloudflared"
-    cp "$selected_cert" "$tunnel_home/.cloudflared/cert.pem"
+    local tunnel_home
+    tunnel_home=$(mktemp -d /tmp/cf-tunnel-XXXXXX) || return 1
+    mkdir -p "$tunnel_home/.cloudflared" || return 1
+    if ! cp -- "$selected_cert" "$tunnel_home/.cloudflared/cert.pem"; then
+        rm -rf -- "$tunnel_home"
+        print_error "复制 Cloudflare 授权证书失败"
+        return 1
+    fi
 
     # 后续的 cloudflared 命令需要使用这个临时 HOME
     export CF_TUNNEL_HOME="$tunnel_home"
 
     # 第二步：创建隧道
     read -p "请输入隧道名称 [例如: my-tunnel]: " tunnel_name
-    if [[ -z "$tunnel_name" ]]; then
-        print_error "隧道名称不能为空"
+    if [[ ! "$tunnel_name" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$ ]]; then
+        print_error "隧道名称只能包含字母、数字、下划线和连字符，且最长 63 字符"
         return 1
     fi
+
+    local tunnel_id=""
+    local target_creds=""
+    local config_file="${CLOUDFLARED_CONFIG_DIR}/config-${tunnel_name}.yml"
+    local service_file="/etc/systemd/system/cloudflared-${tunnel_name}.service"
 
     print_info "正在创建隧道: $tunnel_name"
     if ! HOME="$CF_TUNNEL_HOME" "$CLOUDFLARED_BIN" tunnel create "$tunnel_name"; then
         print_error "隧道创建失败"
-        rm -rf "$CF_TUNNEL_HOME"
+        rollback_cf_tunnel_creation "$CF_TUNNEL_HOME" "" "$tunnel_name" "" "$config_file" "$service_file"
         return 1
     fi
 
@@ -597,10 +734,10 @@ create_dedicated_argo_tunnel() {
     echo ""
 
     # 获取隧道 ID
-    local tunnel_id=$(HOME="$CF_TUNNEL_HOME" "$CLOUDFLARED_BIN" tunnel list | grep "$tunnel_name" | awk '{print $1}')
+    tunnel_id=$(get_cf_tunnel_id "$tunnel_name" "$CF_TUNNEL_HOME" || true)
     if [[ -z "$tunnel_id" ]]; then
         print_error "无法获取隧道 ID"
-        rm -rf "$CF_TUNNEL_HOME"
+        rollback_cf_tunnel_creation "$CF_TUNNEL_HOME" "" "$tunnel_name" "" "$config_file" "$service_file"
         return 1
     fi
 
@@ -614,25 +751,26 @@ create_dedicated_argo_tunnel() {
 
     if [[ ! -f "$source_creds" ]]; then
         print_error "无法找到隧道凭证文件: $source_creds"
-        rm -rf "$CF_TUNNEL_HOME"
+        rollback_cf_tunnel_creation "$CF_TUNNEL_HOME" "$tunnel_id" "$tunnel_name" "" "$config_file" "$service_file"
         return 1
     fi
 
-    local target_creds="${CLOUDFLARED_CONFIG_DIR}/${tunnel_id}.json"
+    target_creds="${CLOUDFLARED_CONFIG_DIR}/${tunnel_id}.json"
     if cp "$source_creds" "$target_creds"; then
         chmod 600 "$target_creds"
         print_success "✅ 凭证文件已复制: $target_creds"
     else
         print_error "凭证文件复制失败"
-        rm -rf "$CF_TUNNEL_HOME"
+        rollback_cf_tunnel_creation "$CF_TUNNEL_HOME" "$tunnel_id" "$tunnel_name" "$target_creds" "$config_file" "$service_file"
         return 1
     fi
     echo ""
 
     # 第三步：配置域名
     read -p "请输入要绑定的域名 [例如: tunnel.example.com]: " tunnel_domain
-    if [[ -z "$tunnel_domain" ]]; then
-        print_error "域名不能为空"
+    if ! validate_domain "$tunnel_domain"; then
+        print_error "域名格式不正确"
+        rollback_cf_tunnel_creation "$CF_TUNNEL_HOME" "$tunnel_id" "$tunnel_name" "$target_creds" "$config_file" "$service_file"
         return 1
     fi
 
@@ -647,7 +785,7 @@ create_dedicated_argo_tunnel() {
 
     if [[ -f "$nodes_file" ]]; then
         # 列出现有节点
-        local nodes=$(jq -r '.nodes[] | "\(.port)|\(.protocol)|\(.tag // "N/A")"' "$nodes_file" 2>/dev/null)
+        local nodes=$(list_cf_http_compatible_nodes "$nodes_file")
 
         if [[ -n "$nodes" ]]; then
             local index=1
@@ -696,12 +834,18 @@ create_dedicated_argo_tunnel() {
         break
     done
 
+    if jq -e --arg port "$local_port" '.nodes[] | select((.port | tostring) == $port)' "$nodes_file" >/dev/null 2>&1 \
+        && ! cf_node_is_http_compatible "$nodes_file" "$local_port"; then
+        print_error "端口 $local_port 对应的节点不能作为 Cloudflare HTTP 源站"
+        rollback_cf_tunnel_creation "$CF_TUNNEL_HOME" "$tunnel_id" "$tunnel_name" "$target_creds" "$config_file" "$service_file"
+        return 1
+    fi
+
     print_success "✓ 使用端口: $local_port"
     echo ""
 
     # 创建独立的配置文件（每个隧道一个配置文件，避免覆盖）
-    local config_file="${CLOUDFLARED_CONFIG_DIR}/config-${tunnel_name}.yml"
-    cat > "$config_file" <<EOF
+    if ! cat > "$config_file" <<EOF
 tunnel: ${tunnel_id}
 credentials-file: ${CLOUDFLARED_CONFIG_DIR}/${tunnel_id}.json
 
@@ -710,6 +854,12 @@ ingress:
     service: http://localhost:${local_port}
   - service: http_status:404
 EOF
+    then
+        print_error "隧道配置写入失败"
+        rollback_cf_tunnel_creation "$CF_TUNNEL_HOME" "$tunnel_id" "$tunnel_name" "$target_creds" "$config_file" "$service_file"
+        return 1
+    fi
+    chmod 600 "$config_file" 2>/dev/null || true
 
     print_success "✅ 配置文件已创建: $config_file"
     echo ""
@@ -719,21 +869,16 @@ EOF
     if HOME="$CF_TUNNEL_HOME" "$CLOUDFLARED_BIN" tunnel route dns "$tunnel_id" "$tunnel_domain"; then
         print_success "✅ DNS 记录配置成功"
     else
-        print_warning "DNS 配置失败，请手动添加 DNS 记录"
-        echo "  类型: CNAME"
-        echo "  名称: $tunnel_domain"
-        echo "  内容: ${tunnel_id}.cfargotunnel.com"
+        print_error "DNS 配置失败，正在回滚隧道"
+        rollback_cf_tunnel_creation "$CF_TUNNEL_HOME" "$tunnel_id" "$tunnel_name" "$target_creds" "$config_file" "$service_file"
+        return 1
     fi
-
-    # 清理临时目录
-    rm -rf "$CF_TUNNEL_HOME"
 
     echo ""
 
     # 第六步：创建 systemd 服务
     print_info "正在创建 systemd 服务..."
-    local service_file="/etc/systemd/system/cloudflared-${tunnel_name}.service"
-    cat > "$service_file" <<EOF
+    if ! cat > "$service_file" <<EOF
 [Unit]
 Description=Cloudflare Tunnel - ${tunnel_name}
 After=network.target
@@ -747,12 +892,20 @@ RestartSec=5s
 [Install]
 WantedBy=multi-user.target
 EOF
+    then
+        print_error "systemd 服务文件写入失败"
+        rollback_cf_tunnel_creation "$CF_TUNNEL_HOME" "$tunnel_id" "$tunnel_name" "$target_creds" "$config_file" "$service_file"
+        return 1
+    fi
 
-    systemctl daemon-reload
-    systemctl enable "cloudflared-${tunnel_name}.service"
-    systemctl start "cloudflared-${tunnel_name}.service"
+    if ! systemctl daemon-reload \
+        || ! systemctl enable --now "cloudflared-${tunnel_name}.service" \
+        || ! systemctl is-active --quiet "cloudflared-${tunnel_name}.service"; then
+        print_error "cloudflared 服务启动失败，正在回滚"
+        rollback_cf_tunnel_creation "$CF_TUNNEL_HOME" "$tunnel_id" "$tunnel_name" "$target_creds" "$config_file" "$service_file"
+        return 1
+    fi
 
-    print_success "✅ 专用 Argo 隧道创建完成！"
     echo ""
     echo -e "${CYAN}═══════════════════════════════════════${NC}"
     echo -e "${YELLOW}隧道信息：${NC}"
@@ -779,17 +932,22 @@ EOF
             print_info "检测到节点端口 $local_port，将隧道域名关联到该节点..."
 
             # 在节点中添加tunnel_domain字段
-            jq --arg port "$local_port" \
+            if ! jq --arg port "$local_port" \
                --arg domain "$tunnel_domain" \
                --arg tunnel_name "$tunnel_name" \
-               '(.nodes[] | select(.port == $port)) |= (
+               '(.nodes[] | select((.port | tostring) == $port)) |= (
                    . + {
                        tunnel_domain: $domain,
                        tunnel_name: $tunnel_name,
                        tunnel_type: "argo_dedicated"
                    }
                )' \
-               "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
+               "$nodes_file" > "${nodes_file}.tmp" || ! mv "${nodes_file}.tmp" "$nodes_file"; then
+                rm -f "${nodes_file}.tmp"
+                print_error "节点关联写入失败，正在回滚隧道"
+                rollback_cf_tunnel_creation "$CF_TUNNEL_HOME" "$tunnel_id" "$tunnel_name" "$target_creds" "$config_file" "$service_file"
+                return 1
+            fi
 
             print_success "✅ 隧道域名已关联到节点"
             echo ""
@@ -806,6 +964,12 @@ EOF
             echo -e "  用户 → ${GREEN}$tunnel_domain${NC} (Argo隧道) → 本地服务(端口:$local_port)"
         fi
     fi
+
+    if [[ "$CF_TUNNEL_HOME" == /tmp/cf-tunnel-* && -d "$CF_TUNNEL_HOME" ]]; then
+        rm -rf -- "$CF_TUNNEL_HOME"
+    fi
+
+    print_success "✅ 专用 Argo 隧道创建完成！"
 
     echo ""
     read -p "按 Enter 返回菜单..."
@@ -831,10 +995,10 @@ bind_tunnel_to_node() {
 
     # 列出现有节点
     echo -e "${YELLOW}现有节点：${NC}"
-    local nodes=$(jq -r '.nodes[] | "\(.port)|\(.protocol)|\(.tag // "N/A")"' "$nodes_file" 2>/dev/null)
+    local nodes=$(list_cf_http_compatible_nodes "$nodes_file")
 
     if [[ -z "$nodes" ]]; then
-        print_error "没有可用节点"
+        print_error "没有兼容 Cloudflare HTTP 源站的节点"
         return 1
     fi
 
@@ -854,64 +1018,25 @@ bind_tunnel_to_node() {
         print_error "无效选择"
         return 1
     fi
+    if ! cf_node_is_http_compatible "$nodes_file" "$selected_port"; then
+        print_error "所选节点不是 none+WebSocket 的 VLESS/VMess/Trojan，不能绑定 HTTP 隧道"
+        return 1
+    fi
 
     # 获取隧道 ID
-    local tunnel_id=$("$CLOUDFLARED_BIN" tunnel list 2>/dev/null | grep "$tunnel_name" | awk '{print $1}')
+    local tunnel_id
+    tunnel_id=$(get_cf_tunnel_id "$tunnel_name" || true)
 
     if [[ -z "$tunnel_id" ]]; then
         print_error "无法找到隧道: $tunnel_name"
         return 1
     fi
 
-    # 更新专用隧道的独立配置文件
-    local config_file="${CLOUDFLARED_CONFIG_DIR}/config-${tunnel_name}.yml"
-
-    if [[ ! -f "$config_file" ]]; then
-        print_error "配置文件不存在: $config_file"
-        print_info "请先创建隧道: $tunnel_name"
-        return 1
-    fi
-
     print_info "正在更新 cloudflared 配置..."
-
-    # 重新生成配置文件，将流量转发到新的节点端口
-    cat > "$config_file" <<EOF
-tunnel: ${tunnel_id}
-credentials-file: ${CLOUDFLARED_CONFIG_DIR}/${tunnel_id}.json
-
-ingress:
-  - hostname: ${tunnel_domain}
-    service: http://localhost:${selected_port}
-  - service: http_status:404
-EOF
-
-    # 更新节点配置，添加隧道域名
-    jq --arg port "$selected_port" \
-       --arg domain "$tunnel_domain" \
-       --arg tunnel_name "$tunnel_name" \
-       '(.nodes[] | select(.port == $port)) |= (
-           . + {
-               tunnel_domain: $domain,
-               tunnel_name: $tunnel_name,
-               tunnel_type: "argo_dedicated"
-           }
-       )' \
-       "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
-
-    # 重启 cloudflared 服务使配置生效
     local service_name="cloudflared-${tunnel_name}.service"
-
-    if systemctl is-active --quiet "$service_name"; then
-        print_info "正在重启 cloudflared 服务..."
-        systemctl restart "$service_name"
-
-        if [[ $? -eq 0 ]]; then
-            print_success "✅ cloudflared 服务已重启"
-        else
-            print_warning "cloudflared 服务重启失败，请手动重启: systemctl restart $service_name"
-        fi
-    else
-        print_warning "cloudflared 服务未运行，请手动启动: systemctl start $service_name"
+    if ! apply_cf_tunnel_binding "$tunnel_name" "$tunnel_domain" "$selected_port" "$nodes_file" "$tunnel_id"; then
+        print_error "隧道绑定失败"
+        return 1
     fi
 
     print_success "✅ 隧道域名已关联到节点 (端口: $selected_port)"
@@ -1463,7 +1588,7 @@ manage_tunnel_node_binding() {
             # 列出节点供选择
             echo ""
             echo -e "${YELLOW}可用节点：${NC}"
-            local nodes=$(jq -r '.nodes[] | "\(.port)|\(.protocol)|\(.tag // "N/A")"' "$nodes_file" 2>/dev/null)
+            local nodes=$(list_cf_http_compatible_nodes "$nodes_file")
 
             if [[ -z "$nodes" ]]; then
                 print_error "没有可用节点"
@@ -1490,6 +1615,10 @@ manage_tunnel_node_binding() {
                 print_error "无效选择"
                 return 1
             fi
+            if ! cf_node_is_http_compatible "$nodes_file" "$selected_port"; then
+                print_error "所选节点不能作为 Cloudflare HTTP 源站"
+                return 1
+            fi
 
             # 针对不同类型的隧道进行绑定
             if [[ "$selected_type" == "dedicated" ]]; then
@@ -1498,64 +1627,17 @@ manage_tunnel_node_binding() {
                 print_info "正在绑定专用隧道到节点..."
 
                 # 获取隧道 ID
-                local tunnel_id=$("$CLOUDFLARED_BIN" tunnel list 2>/dev/null | grep "$selected_tunnel" | awk '{print $1}')
+                local tunnel_id
+                tunnel_id=$(get_cf_tunnel_id "$selected_tunnel" || true)
 
                 if [[ -z "$tunnel_id" ]]; then
                     print_error "无法找到隧道: $selected_tunnel"
                     return 1
                 fi
 
-                # 更新专用隧道的独立配置文件
-                local config_file="${CLOUDFLARED_CONFIG_DIR}/config-${selected_tunnel}.yml"
-
-                if [[ ! -f "$config_file" ]]; then
-                    print_error "配置文件不存在: $config_file"
-                    print_info "请先创建隧道: $selected_tunnel"
-                    return 1
-                fi
-
                 print_info "正在更新 cloudflared 配置..."
-
-                # 重新生成配置文件（使用独立配置）
-                cat > "$config_file" <<EOF
-tunnel: ${tunnel_id}
-credentials-file: ${CLOUDFLARED_CONFIG_DIR}/${tunnel_id}.json
-
-ingress:
-  - hostname: ${selected_url}
-    service: http://localhost:${selected_port}
-  - service: http_status:404
-EOF
-
-                # 更新节点数据
-                jq --arg port "$selected_port" \
-                   --arg domain "$selected_url" \
-                   --arg tunnel_name "$selected_tunnel" \
-                   --arg tunnel_type "argo_dedicated" \
-                   '(.nodes[] | select(.port == $port)) |= (
-                       . + {
-                           tunnel_domain: $domain,
-                           tunnel_name: $tunnel_name,
-                           tunnel_type: $tunnel_type
-                       }
-                   )' \
-                   "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
-
-                # 重启 cloudflared 服务
                 local service_name="cloudflared-${selected_tunnel}.service"
-
-                if systemctl is-active --quiet "$service_name"; then
-                    print_info "正在重启 cloudflared 服务..."
-                    systemctl restart "$service_name"
-
-                    if [[ $? -eq 0 ]]; then
-                        print_success "✅ cloudflared 服务已重启"
-                    else
-                        print_warning "cloudflared 服务重启失败，请手动重启: systemctl restart $service_name"
-                    fi
-                else
-                    print_warning "cloudflared 服务未运行，请手动启动: systemctl start $service_name"
-                fi
+                apply_cf_tunnel_binding "$selected_tunnel" "$selected_url" "$selected_port" "$nodes_file" "$tunnel_id" || return 1
 
                 print_success "✅ 专用隧道已绑定到节点(端口:$selected_port)"
                 echo ""
@@ -1567,18 +1649,25 @@ EOF
 
             else
                 # 临时隧道：只更新节点数据（临时隧道的端口转发在创建时已固定）
-                jq --arg port "$selected_port" \
-                   --arg domain "$selected_url" \
-                   --arg tunnel_name "$selected_tunnel" \
-                   --arg tunnel_type "argo_temp" \
-                   '(.nodes[] | select(.port == $port)) |= (
-                       . + {
-                           tunnel_domain: $domain,
-                           tunnel_name: $tunnel_name,
-                           tunnel_type: $tunnel_type
-                       }
-                   )' \
-                   "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
+                local temp_pid="${selected_tunnel#temp-}" temp_cmdline temp_port
+                temp_cmdline=$(ps -p "$temp_pid" -o args= 2>/dev/null)
+                temp_port=$(echo "$temp_cmdline" | grep -oP 'localhost:\K\d+' | head -1)
+                if [[ "$temp_port" != "$selected_port" ]]; then
+                    print_error "临时隧道固定转发到端口 $temp_port，不能绑定端口 $selected_port"
+                    return 1
+                fi
+                begin_data_transaction || return 1
+                if ! jq --arg port "$selected_port" --arg domain "$selected_url" --arg tunnel_name "$selected_tunnel" \
+                   '(.nodes[] | select((.port|tostring) == $port)) |= (. + {tunnel_domain:$domain,tunnel_name:$tunnel_name,tunnel_type:"argo_temp"})' \
+                   "$nodes_file" > "${nodes_file}.tmp" || ! mv "${nodes_file}.tmp" "$nodes_file"; then
+                    rm -f "${nodes_file}.tmp"; rollback_data_transaction; return 1
+                fi
+                if declare -f update_user_subscriptions >/dev/null 2>&1; then
+                    while IFS= read -r user_id; do
+                        [[ -z "$user_id" ]] || update_user_subscriptions "$user_id" || { rollback_data_transaction; return 1; }
+                    done < <(jq -r --arg port "$selected_port" '.bindings[] | select((.port|tostring)==$port) | .users[]?' "$NODE_USERS_FILE")
+                fi
+                commit_data_transaction || { rollback_data_transaction; return 1; }
 
                 print_success "✅ 临时隧道已绑定到节点(端口:$selected_port)"
                 echo ""
@@ -1911,8 +2000,8 @@ add_cf_auth() {
 
     # 输入授权名称
     read -p "请输入授权名称（用于标识，如: main, backup）: " auth_name
-    if [[ -z "$auth_name" ]]; then
-        print_error "授权名称不能为空"
+    if [[ ! "$auth_name" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$ ]]; then
+        print_error "授权名称只能包含字母、数字、下划线和连字符"
         return 1
     fi
 
@@ -1929,9 +2018,9 @@ add_cf_auth() {
     echo -e "${YELLOW}      这个域名用于识别和区分不同的授权${NC}"
     read -p "请输入授权顶级域名: " auth_domain
 
-    # 验证域名格式（简单验证）
-    if [[ -n "$auth_domain" ]] && ! [[ "$auth_domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
-        print_warning "域名格式可能不正确，但将继续"
+    if ! validate_domain "$auth_domain"; then
+        print_error "授权顶级域名格式不正确"
+        return 1
     fi
 
     # 可选：添加备注
@@ -1942,8 +2031,9 @@ add_cf_auth() {
     local cert_file="${CLOUDFLARED_CONFIG_DIR}/cert-${auth_name}.pem"
 
     # 临时目录用于 cloudflared login
-    local temp_home="/tmp/cf-login-$$"
-    mkdir -p "$temp_home/.cloudflared"
+    local temp_home
+    temp_home=$(mktemp -d /tmp/cf-login-XXXXXX) || return 1
+    mkdir -p "$temp_home/.cloudflared" || return 1
 
     echo ""
     print_info "准备授权登录..."
@@ -1978,7 +2068,12 @@ add_cf_auth() {
                    created_at: $created
                }]' \
                "$CLOUDFLARED_AUTH_FILE" > "${CLOUDFLARED_AUTH_FILE}.tmp" && \
-               mv "${CLOUDFLARED_AUTH_FILE}.tmp" "$CLOUDFLARED_AUTH_FILE"
+               mv "${CLOUDFLARED_AUTH_FILE}.tmp" "$CLOUDFLARED_AUTH_FILE" || {
+                   rm -f "${CLOUDFLARED_AUTH_FILE}.tmp" "$cert_file"
+                   rm -rf -- "$temp_home"
+                   print_error "保存授权记录失败"
+                   return 1
+               }
 
             print_success "✅ 授权已添加: $auth_name"
             echo ""
@@ -2007,16 +2102,16 @@ add_cf_auth() {
             fi
         else
             print_error "未找到授权证书文件"
-            rm -rf "$temp_home"
+            rm -rf -- "$temp_home"
             return 1
         fi
     else
         print_error "Cloudflare 授权登录失败"
-        rm -rf "$temp_home"
+        rm -rf -- "$temp_home"
         return 1
     fi
 
-    rm -rf "$temp_home"
+    rm -rf -- "$temp_home"
 }
 
 # 查看所有授权
@@ -2164,15 +2259,23 @@ delete_cf_auth() {
         return 0
     fi
 
-    # 删除证书文件
-    if [[ -f "$cert_file" ]]; then
-        rm -f "$cert_file"
-        print_success "✅ 已删除证书文件"
+    # 从数据文件中删除
+    if ! jq "del(.auths[$((choice-1))])" "$CLOUDFLARED_AUTH_FILE" > "${CLOUDFLARED_AUTH_FILE}.tmp" \
+        || ! mv "${CLOUDFLARED_AUTH_FILE}.tmp" "$CLOUDFLARED_AUTH_FILE"; then
+        rm -f "${CLOUDFLARED_AUTH_FILE}.tmp"
+        print_error "删除授权记录失败"
+        return 1
     fi
 
-    # 从数据文件中删除
-    jq "del(.auths[$((choice-1))])" "$CLOUDFLARED_AUTH_FILE" > "${CLOUDFLARED_AUTH_FILE}.tmp" && \
-    mv "${CLOUDFLARED_AUTH_FILE}.tmp" "$CLOUDFLARED_AUTH_FILE"
+    local cert_base cert_resolved
+    cert_base=$(readlink -m -- "$CLOUDFLARED_CONFIG_DIR")
+    cert_resolved=$(readlink -m -- "$cert_file")
+    if [[ -f "$cert_resolved" && "$cert_resolved" == "$cert_base"/cert-*.pem ]]; then
+        rm -f -- "$cert_resolved"
+        print_success "✅ 已删除证书文件"
+    elif [[ -n "$cert_file" ]]; then
+        print_warning "授权记录已删除，但拒绝删除配置目录外的证书路径: $cert_file"
+    fi
 
     print_success "✅ 授权已删除: $auth_name"
 }
@@ -2785,9 +2888,13 @@ bind_warp_to_node() {
     fi
 
     # 更新节点配置，启用WARP出站
-    jq --arg port "$selected_port" \
-       '(.nodes[] | select(.port == $port)) |= (. + {warp_outbound: true})' \
-       "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
+    if ! jq --arg port "$selected_port" \
+        '(.nodes[] | select((.port | tostring) == $port)) |= ((. + {warp_outbound: true}) | del(.outbound_tag))' \
+        "$nodes_file" > "${nodes_file}.tmp" || ! mv "${nodes_file}.tmp" "$nodes_file"; then
+        rm -f "${nodes_file}.tmp"
+        print_error "WARP 节点关联写入失败"
+        return 1
+    fi
 
     print_success "✅ WARP已关联到节点 (端口: $selected_port)"
     echo ""
@@ -2805,18 +2912,11 @@ bind_warp_to_node() {
 
         # 检查配置生成函数是否可用
         if declare -f generate_singbox_config >/dev/null 2>&1; then
-            generate_singbox_config
-
-            echo -e "${CYAN}════════════════════════════════════════${NC}"
-            echo -e "${CYAN}配置生成完成${NC}"
-            echo -e "${CYAN}════════════════════════════════════════${NC}"
-
-            # 询问是否重启服务
-            read -p "配置已更新，是否重启sing-box服务？[Y/n]: " restart_choice
-            if [[ "$restart_choice" != "n" && "$restart_choice" != "N" ]]; then
-                systemctl restart sing-box
-                print_success "sing-box服务已重启"
+            if ! generate_singbox_config || ! restart_sing-box; then
+                print_error "WARP 节点关联应用失败，配置和数据已回滚"
+                return 1
             fi
+            print_success "配置已生成并完成事务化重启"
         else
             print_warning "配置生成函数不可用，请手动重新生成配置"
             print_info "提示：运行主菜单中的'重新生成配置'选项"
@@ -2869,9 +2969,13 @@ unbind_warp_from_node() {
     fi
 
     # 移除WARP配置
-    jq --arg port "$selected_port" \
-       '(.nodes[] | select(.port == $port)) |= del(.warp_outbound)' \
-       "$nodes_file" > "${nodes_file}.tmp" && mv "${nodes_file}.tmp" "$nodes_file"
+    if ! jq --arg port "$selected_port" \
+        '(.nodes[] | select(.port == $port)) |= del(.warp_outbound)' \
+        "$nodes_file" > "${nodes_file}.tmp" || ! mv "${nodes_file}.tmp" "$nodes_file"; then
+        rm -f "${nodes_file}.tmp"
+        print_error "解除 WARP 节点关联写入失败"
+        return 1
+    fi
 
     print_success "已解除节点 $selected_port 的WARP关联"
     echo ""
@@ -2882,13 +2986,11 @@ unbind_warp_from_node() {
         print_info "正在重新生成配置..."
 
         if declare -f generate_singbox_config >/dev/null 2>&1; then
-            generate_singbox_config
-
-            read -p "配置已更新，是否重启sing-box服务？[Y/n]: " restart_choice
-            if [[ "$restart_choice" != "n" && "$restart_choice" != "N" ]]; then
-                systemctl restart sing-box
-                print_success "sing-box服务已重启"
+            if ! generate_singbox_config || ! restart_sing-box; then
+                print_error "解除 WARP 关联应用失败，配置和数据已回滚"
+                return 1
             fi
+            print_success "配置已生成并完成事务化重启"
         else
             print_warning "配置生成函数不可用，请手动重新生成配置"
         fi

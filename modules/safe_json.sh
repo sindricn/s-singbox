@@ -31,8 +31,9 @@ safe_json_update() {
     fi
 
     # 在锁保护下执行操作
-    local tmp_file="${file}.tmp.$$"
-    local err_file="${file}.err.$$"
+    local tmp_file err_file
+    tmp_file=$(mktemp "${file}.tmp.XXXXXX") || { flock -u 200; return 1; }
+    err_file=$(mktemp "${file}.err.XXXXXX") || { rm -f "$tmp_file"; flock -u 200; return 1; }
     local success=false
 
     # 先验证原始文件格式
@@ -91,7 +92,8 @@ safe_json_append() {
         return 1
     fi
 
-    local tmp_file="${file}.tmp.$$"
+    local tmp_file
+    tmp_file=$(mktemp "${file}.tmp.XXXXXX") || { flock -u 200; return 1; }
     local success=false
 
     # 验证原始文件

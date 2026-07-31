@@ -5,6 +5,9 @@
 # 帮助新用户快速完成初始配置
 # =============================================================================
 
+# 该旧版五步向导当前未接入主菜单；保留用于兼容，并支持独立加载。
+BOLD="${BOLD:-\033[1m}"
+
 # 依赖检查（严格模式兼容）
 if [[ -z "${SCRIPT_DIR:-}" ]]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -139,89 +142,34 @@ wizard_step_add_node() {
 
     echo -e "${YELLOW}提示:${NC} 请选择要添加的节点类型"
     echo ""
-    echo -e "  ${CYAN}1)${NC} VMess (推荐)"
-    echo -e "  ${CYAN}2)${NC} VLESS"
-    echo -e "  ${CYAN}3)${NC} Trojan"
-    echo -e "  ${CYAN}4)${NC} Shadowsocks"
-    echo -e "  ${CYAN}5)${NC} Hysteria2"
+    echo -e "  ${CYAN}1)${NC} VLESS           ${CYAN}2)${NC} VMess"
+    echo -e "  ${CYAN}3)${NC} Trojan          ${CYAN}4)${NC} Shadowsocks"
+    echo -e "  ${CYAN}5)${NC} Hysteria2       ${CYAN}6)${NC} TUIC"
+    echo -e "  ${CYAN}7)${NC} Naive           ${CYAN}8)${NC} Mixed"
+    echo -e "  ${CYAN}9)${NC} HTTP            ${CYAN}10)${NC} SOCKS"
+    echo -e "  ${CYAN}11)${NC} AnyTLS         ${CYAN}12)${NC} Hysteria v1"
+    echo -e "  ${CYAN}13)${NC} ShadowTLS v3"
     echo ""
-    read -p "$(echo -e ${CYAN}请选择协议 [1-5]: ${NC})" protocol_choice
+    read -p "$(echo -e ${CYAN}请选择协议 [1-13]: ${NC})" protocol_choice
 
+    local add_function=""
     case "$protocol_choice" in
-        1)
-            echo ""
-            echo -e "${CYAN}正在添加 VMess 节点...${NC}"
-            if declare -f add_node &>/dev/null; then
-                # 调用node.sh的add_node函数，传入协议类型
-                add_node "vmess"
-                if [[ $? -eq 0 ]]; then
-                    WIZARD_STEP_1_DONE=true
-                    show_step_complete "VMess 节点添加成功"
-                    return 0
-                else
-                    print_error "节点添加失败"
-                    return 1
-                fi
-            else
-                print_error "节点管理模块未加载"
-                return 1
-            fi
-            ;;
-        2)
-            echo ""
-            echo -e "${CYAN}正在添加 VLESS 节点...${NC}"
-            if declare -f add_node &>/dev/null; then
-                add_node "vless"
-                if [[ $? -eq 0 ]]; then
-                    WIZARD_STEP_1_DONE=true
-                    show_step_complete "VLESS 节点添加成功"
-                    return 0
-                fi
-            fi
-            ;;
-        3)
-            echo ""
-            echo -e "${CYAN}正在添加 Trojan 节点...${NC}"
-            if declare -f add_node &>/dev/null; then
-                add_node "trojan"
-                if [[ $? -eq 0 ]]; then
-                    WIZARD_STEP_1_DONE=true
-                    show_step_complete "Trojan 节点添加成功"
-                    return 0
-                fi
-            fi
-            ;;
-        4)
-            echo ""
-            echo -e "${CYAN}正在添加 Shadowsocks 节点...${NC}"
-            if declare -f add_node &>/dev/null; then
-                add_node "shadowsocks"
-                if [[ $? -eq 0 ]]; then
-                    WIZARD_STEP_1_DONE=true
-                    show_step_complete "Shadowsocks 节点添加成功"
-                    return 0
-                fi
-            fi
-            ;;
-        5)
-            echo ""
-            echo -e "${CYAN}正在添加 Hysteria2 节点...${NC}"
-            if declare -f add_node &>/dev/null; then
-                add_node "hysteria2"
-                if [[ $? -eq 0 ]]; then
-                    WIZARD_STEP_1_DONE=true
-                    show_step_complete "Hysteria2 节点添加成功"
-                    return 0
-                fi
-            fi
-            ;;
-        *)
-            print_error "无效选择"
-            return 1
-            ;;
+        1) add_function=add_vless_node ;; 2) add_function=add_vmess_node ;;
+        3) add_function=add_trojan_node ;; 4) add_function=add_shadowsocks_node ;;
+        5) add_function=add_hysteria2_node ;; 6) add_function=add_tuic_node ;;
+        7) add_function=add_naive_node ;; 8) add_function=add_mixed_node ;;
+        9) add_function=add_http_inbound_node ;; 10) add_function=add_socks_inbound_node ;;
+        11) add_function=add_anytls_node ;; 12) add_function=add_hysteria_node ;;
+        13) add_function=add_shadowtls_node ;;
+        *) print_error "无效选择"; return 1 ;;
     esac
-
-    return 1
+    if ! declare -f "$add_function" >/dev/null 2>&1; then
+        print_error "节点管理函数未加载: $add_function"
+        return 1
+    fi
+    "$add_function" || { print_error "节点添加失败"; return 1; }
+    WIZARD_STEP_1_DONE=true
+    show_step_complete "节点添加成功"
 }
 
 # =============================================================================
@@ -370,8 +318,8 @@ wizard_step_generate_config() {
 
     echo -e "${CYAN}正在生成配置...${NC}"
 
-    if declare -f generate_config &>/dev/null; then
-        generate_config
+    if declare -f generate_singbox_config &>/dev/null; then
+        generate_singbox_config
         if [[ $? -eq 0 ]]; then
             WIZARD_STEP_4_DONE=true
             show_step_complete "配置文件生成成功"
@@ -409,18 +357,18 @@ wizard_step_start_service() {
             fi
         fi
 
-        if declare -f restart_singbox &>/dev/null; then
-            restart_singbox
+        if declare -f restart_sing-box &>/dev/null; then
+            restart_sing-box
         else
             systemctl restart sing-box
         fi
     else
         echo -e "${CYAN}正在启动服务...${NC}"
 
-        if declare -f start_singbox &>/dev/null; then
-            start_singbox
+        if declare -f restart_sing-box &>/dev/null; then
+            restart_sing-box
         else
-            systemctl start sing-box
+            systemctl restart sing-box
         fi
     fi
 

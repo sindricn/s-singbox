@@ -11,6 +11,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
+readonly SINGBOX_DATA_DIR="/var/lib/sing-box"
 
 # 打印函数
 print_info() {
@@ -88,6 +89,9 @@ stop_service() {
         systemctl disable sing-box
         print_success "服务已禁用"
     fi
+    systemctl disable --now sing-box-user-limits.timer 2>/dev/null || true
+    systemctl disable --now sing-box-subscription-health.timer 2>/dev/null || true
+    systemctl disable --now sing-box-subscription.service 2>/dev/null || true
 }
 
 # =============================================================================
@@ -99,6 +103,11 @@ remove_service() {
 
     local service_files=(
         "/etc/systemd/system/sing-box.service"
+        "/etc/systemd/system/sing-box-user-limits.service"
+        "/etc/systemd/system/sing-box-user-limits.timer"
+        "/etc/systemd/system/sing-box-subscription.service"
+        "/etc/systemd/system/sing-box-subscription-health.service"
+        "/etc/systemd/system/sing-box-subscription-health.timer"
         "/usr/lib/systemd/system/sing-box.service"
         "/lib/systemd/system/sing-box.service"
     )
@@ -205,23 +214,21 @@ remove_data() {
         print_info "保留数据文件"
 
         # 备份数据文件
-        local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        local data_dir="${script_dir}/data"
+        local data_dir="$SINGBOX_DATA_DIR"
 
         if [[ -d "$data_dir" ]]; then
-            local backup_dir="/tmp/singbox-data-backup-$(date +%Y%m%d_%H%M%S)"
-            mkdir -p "$backup_dir"
-            cp -r "$data_dir"/* "$backup_dir/"
+            local backup_dir
+            backup_dir=$(mktemp -d /tmp/singbox-data-backup-XXXXXX) || return 1
+            cp -a "$data_dir/." "$backup_dir/" || return 1
             print_success "数据已备份到: $backup_dir"
         fi
     else
         print_info "删除数据文件..."
 
-        local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        local data_dir="${script_dir}/data"
+        local data_dir="$SINGBOX_DATA_DIR"
 
         if [[ -d "$data_dir" ]]; then
-            rm -rf "$data_dir"
+            rm -rf -- "$data_dir"
             print_success "数据文件已删除"
         fi
     fi

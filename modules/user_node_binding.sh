@@ -5,9 +5,64 @@
 # 功能：绑定用户到节点、解绑、查看绑定关系
 #================================================================
 
+apply_binding_changes() {
+    if ! generate_singbox_config || ! restart_sing-box; then
+        print_error "绑定变更应用失败，数据和配置已回滚"
+        return 1
+    fi
+}
+
+clean_empty_bindings() {
+    local before after data
+    before=$(jq '.bindings | length' "$NODE_USERS_FILE" 2>/dev/null || echo 0)
+    data=$(jq '.bindings |= map(select(((.users // []) | length) > 0))' "$NODE_USERS_FILE") || return 1
+    after=$(echo "$data" | jq '.bindings | length')
+    if [[ "$before" -eq "$after" ]]; then
+        print_info "没有需要清理的空绑定"
+        return 0
+    fi
+    begin_data_transaction || return 1
+    atomic_write_json "$NODE_USERS_FILE" "$data" || { rollback_data_transaction; return 1; }
+    apply_binding_changes || return 1
+    print_success "已清理 $((before-after)) 条空绑定"
+}
+
+validate_binding_integrity() {
+    local binding port protocol uuid errors=0
+    local binding_stream
+    binding_stream=$(jq -c '.bindings[]?' "$NODE_USERS_FILE" 2>/dev/null) || {
+        print_error "绑定文件不是有效 JSON"
+        return 1
+    }
+    if [[ -z "$binding_stream" ]]; then
+        print_success "绑定完整性检查通过（当前无绑定）"
+        return 0
+    fi
+    while IFS= read -r binding; do
+        port=$(echo "$binding" | jq -r '.port // ""')
+        protocol=$(echo "$binding" | jq -r '.protocol // ""')
+        if ! jq -e --arg port "$port" --arg protocol "$protocol" '.nodes[] | select((.port|tostring)==$port and .protocol==$protocol)' "$NODES_FILE" >/dev/null 2>&1; then
+            print_error "绑定引用了不存在或协议不匹配的节点: $protocol/$port"
+            ((errors++))
+        fi
+        while IFS= read -r uuid; do
+            if ! jq -e --arg id "$uuid" '.users[] | select(.id==$id)' "$USERS_FILE" >/dev/null 2>&1; then
+                print_error "绑定 $protocol/$port 引用了不存在的用户: $uuid"
+                ((errors++))
+            fi
+        done < <(echo "$binding" | jq -r '.users[]?')
+        if [[ $(echo "$binding" | jq '[.users[]?] | length') -ne $(echo "$binding" | jq '[.users[]?] | unique | length') ]]; then
+            print_error "绑定 $protocol/$port 包含重复用户"
+            ((errors++))
+        fi
+    done <<< "$binding_stream"
+    [[ "$errors" -eq 0 ]] && print_success "绑定完整性检查通过" || print_error "发现 $errors 个绑定问题"
+    [[ "$errors" -eq 0 ]]
+}
+
 # 绑定用户到节点
 bind_user_to_node() {
-    local username="$1"  # 可选参数：如果提供则直接使用，否则交互选择
+    local username="${1:-}"  # 可选参数：如果提供则直接使用，否则交互选择
 
     clear
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
@@ -74,6 +129,7 @@ bind_user_to_node() {
     fi
 
     # 添加绑定
+    begin_data_transaction || return 1
     if [[ ! -f "$NODE_USERS_FILE" ]]; then
         echo '{"bindings":[]}' > "$NODE_USERS_FILE"
     fi
@@ -87,6 +143,7 @@ bind_user_to_node() {
         if ! jq --arg port "$port" --arg protocol "$protocol" --arg uuid "$uuid" '.bindings += [{port: $port, protocol: $protocol, users: [$uuid]}]' "$NODE_USERS_FILE" > "${NODE_USERS_FILE}.tmp"; then
             print_error "创建绑定失败"
             rm -f "${NODE_USERS_FILE}.tmp"
+            rollback_data_transaction
             return 1
         fi
     else
@@ -94,19 +151,17 @@ bind_user_to_node() {
         if ! jq --arg port "$port" --arg uuid "$uuid" '(.bindings[] | select(.port == $port) | .users) += [$uuid]' "$NODE_USERS_FILE" > "${NODE_USERS_FILE}.tmp"; then
             print_error "添加用户到绑定失败"
             rm -f "${NODE_USERS_FILE}.tmp"
+            rollback_data_transaction
             return 1
         fi
     fi
 
-    mv "${NODE_USERS_FILE}.tmp" "$NODE_USERS_FILE"
+    mv "${NODE_USERS_FILE}.tmp" "$NODE_USERS_FILE" || { rollback_data_transaction; return 1; }
 
     print_success "用户 $email 已绑定到端口 $port"
 
     # 重新生成配置
-    generate_sing-box_config
-
-    # 重启服务
-    restart_sing-box
+    apply_binding_changes || return 1
 
     print_success "配置已更新并重启服务"
 }
@@ -146,31 +201,31 @@ unbind_user_from_node() {
     # 检查绑定是否存在
     local bound=$(jq -r ".bindings[] | select(.port == \"$port\") | .users[] | select(. == \"$uuid\")" "$NODE_USERS_FILE" 2>/dev/null)
     if [[ -z "$bound" ]]; then
-        print_error "用户 $email 未绑定到端口 $port"
+        print_error "用户 $username 未绑定到端口 $port"
         return 1
     fi
 
     # 解绑用户
+    begin_data_transaction || return 1
     if ! jq '.bindings |= map(if .port == $port then .users |= map(select(. != $uuid)) else . end)' --arg port "$port" --arg uuid "$uuid" "$NODE_USERS_FILE" > "${NODE_USERS_FILE}.tmp"; then
         print_error "解绑用户失败"
         rm -f "${NODE_USERS_FILE}.tmp"
+        rollback_data_transaction
         return 1
     fi
-    mv "${NODE_USERS_FILE}.tmp" "$NODE_USERS_FILE"
+    mv "${NODE_USERS_FILE}.tmp" "$NODE_USERS_FILE" || { rollback_data_transaction; return 1; }
 
-    print_success "用户 $email 已从端口 $port 解绑"
+    print_success "用户 $username 已从端口 $port 解绑"
 
     # 重新生成配置
-    generate_sing-box_config
-
-    # 重启服务
-    restart_sing-box
+    apply_binding_changes || return 1
 
     print_success "配置已更新并重启服务"
 }
 
 # 显示用户-节点绑定关系
 show_user_node_bindings() {
+    local mode="${1:-all}" binding_stream username uuid node_index selected_port
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║      用户-节点绑定关系              ║${NC}"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
@@ -186,6 +241,26 @@ show_user_node_bindings() {
         print_warning "没有绑定关系"
         return 0
     fi
+
+    case "$mode" in
+        user)
+            list_global_users
+            read -p "请输入用户名: " username
+            uuid=$(jq -r --arg username "$username" '.users[] | select(.username==$username) | .id' "$USERS_FILE" 2>/dev/null | head -1)
+            [[ -n "$uuid" ]] || { print_error "用户不存在: $username"; return 1; }
+            binding_stream=$(jq -c --arg id "$uuid" '.bindings[] | select((.users // []) | index($id))' "$NODE_USERS_FILE")
+            ;;
+        node)
+            list_nodes true
+            read -p "请输入节点序号: " node_index
+            selected_port=$(get_node_port_by_index "$node_index")
+            [[ -n "$selected_port" && "$selected_port" != null ]] || { print_error "无效的节点序号"; return 1; }
+            binding_stream=$(jq -c --arg port "$selected_port" '.bindings[] | select((.port|tostring)==$port)' "$NODE_USERS_FILE")
+            ;;
+        *) binding_stream=$(jq -c '.bindings[]' "$NODE_USERS_FILE" 2>/dev/null) ;;
+    esac
+
+    [[ -n "$binding_stream" ]] || { print_warning "没有匹配的绑定关系"; return 0; }
 
     # 遍历所有绑定
     while IFS= read -r binding; do
@@ -220,7 +295,7 @@ show_user_node_bindings() {
             done <<< "$users"
         fi
         echo ""
-    done < <(jq -c '.bindings[]' "$NODE_USERS_FILE" 2>/dev/null)
+    done <<< "$binding_stream"
 }
 
 # 查看用户可访问的节点
@@ -414,8 +489,7 @@ bind_single_node_to_user() {
 
     mv "${NODE_USERS_FILE}.tmp" "$NODE_USERS_FILE"
 
-    generate_sing-box_config
-    restart_sing-box
+    apply_binding_changes || return 1
 
     print_success "用户 $username 已绑定到端口 $port"
 }
@@ -442,6 +516,7 @@ batch_bind_nodes_to_user() {
 
     local success_count=0
     local fail_count=0
+    begin_data_transaction || return 1
 
     for port in $ports; do
         # 检查节点是否存在
@@ -486,9 +561,10 @@ batch_bind_nodes_to_user() {
     print_info "批量绑定完成：成功 $success_count 个，失败 $fail_count 个"
 
     if [[ $success_count -gt 0 ]]; then
-        generate_sing-box_config
-        restart_sing-box
+        apply_binding_changes || return 1
         print_success "配置已更新并重启服务"
+    else
+        rollback_data_transaction
     fi
 }
 
@@ -533,8 +609,7 @@ unbind_single_node_from_user() {
     fi
     mv "${NODE_USERS_FILE}.tmp" "$NODE_USERS_FILE"
 
-    generate_sing-box_config
-    restart_sing-box
+    apply_binding_changes || return 1
 
     print_success "用户 $username 已从端口 $port 解绑"
 }
@@ -590,8 +665,7 @@ batch_unbind_nodes_from_user() {
     print_info "批量解绑完成：成功 $success_count 个"
 
     if [[ $success_count -gt 0 ]]; then
-        generate_sing-box_config
-        restart_sing-box
+        apply_binding_changes || return 1
         print_success "配置已更新并重启服务"
     fi
 }
@@ -685,11 +759,7 @@ batch_bind_user_to_nodes() {
     print_info "批量绑定完成：成功 $success_count 个，失败 $fail_count 个"
 
     if [[ $success_count -gt 0 ]]; then
-        # 重新生成配置
-        generate_sing-box_config
-
-        # 重启服务
-        restart_sing-box
+        apply_binding_changes || return 1
 
         print_success "配置已更新并重启服务"
     fi
@@ -748,15 +818,21 @@ bind_single_user_to_node() {
 
     mv "${NODE_USERS_FILE}.tmp" "$NODE_USERS_FILE"
 
-    generate_sing-box_config
-    restart_sing-box
+    apply_binding_changes || return 1
 
     print_success "用户 $username 已绑定到端口 $port"
 }
 
 # 为节点批量添加用户绑定
 batch_bind_users_to_node() {
-    local port=$1
+    local port="${1:-}"
+    if [[ -z "$port" ]]; then
+        list_nodes true
+        echo ""
+        read -p "请输入节点序号: " node_index
+        port=$(get_node_port_by_index "$node_index")
+        [[ -n "$port" && "$port" != "null" ]] || { print_error "无效的节点序号"; return 1; }
+    fi
 
     echo ""
     echo -e "${YELLOW}可用用户列表：${NC}"
@@ -773,6 +849,7 @@ batch_bind_users_to_node() {
 
     local success_count=0
     local fail_count=0
+    begin_data_transaction || return 1
 
     for username in $usernames; do
         # 获取用户UUID
@@ -817,9 +894,10 @@ batch_bind_users_to_node() {
     print_info "批量绑定完成：成功 $success_count 个，失败 $fail_count 个"
 
     if [[ $success_count -gt 0 ]]; then
-        generate_sing-box_config
-        restart_sing-box
+        apply_binding_changes || return 1
         print_success "配置已更新并重启服务"
+    else
+        rollback_data_transaction
     fi
 }
 
@@ -868,8 +946,7 @@ unbind_single_user_from_node() {
     fi
     mv "${NODE_USERS_FILE}.tmp" "$NODE_USERS_FILE"
 
-    generate_sing-box_config
-    restart_sing-box
+    apply_binding_changes || return 1
 
     print_success "用户 $username 已从端口 $port 解绑"
 }
@@ -936,8 +1013,7 @@ batch_unbind_users_from_node() {
     print_info "批量解绑完成：成功 $success_count 个"
 
     if [[ $success_count -gt 0 ]]; then
-        generate_sing-box_config
-        restart_sing-box
+        apply_binding_changes || return 1
         print_success "配置已更新并重启服务"
     fi
 }
@@ -1049,6 +1125,7 @@ bind_nodes_to_user_smart() {
     local success_count=0
     local fail_count=0
     local skip_count=0
+    begin_data_transaction || return 1
 
     for input in $inputs; do
         local port=""
@@ -1151,9 +1228,10 @@ bind_nodes_to_user_smart() {
     fi
 
     if [[ $success_count -gt 0 ]]; then
-        generate_sing-box_config
-        restart_sing-box
+        apply_binding_changes || return 1
         print_success "配置已更新并重启服务"
+    else
+        rollback_data_transaction
     fi
 }
 
@@ -1269,15 +1347,23 @@ unbind_nodes_from_user_smart() {
     fi
 
     if [[ $success_count -gt 0 ]]; then
-        generate_sing-box_config
-        restart_sing-box
+        apply_binding_changes || return 1
         print_success "配置已更新并重启服务"
+    else
+        rollback_data_transaction
     fi
 }
 
 # 智能为节点绑定用户（自动识别单个/批量）
 bind_users_to_node_smart() {
-    local port=$1
+    local port="${1:-}"
+    if [[ -z "$port" ]]; then
+        list_nodes true
+        echo ""
+        read -p "请输入节点序号: " node_index
+        port=$(get_node_port_by_index "$node_index")
+        [[ -n "$port" && "$port" != "null" ]] || { print_error "无效的节点序号"; return 1; }
+    fi
 
     # 获取已绑定到此节点的用户UUID列表
     local bound_uuids=()
@@ -1359,6 +1445,7 @@ bind_users_to_node_smart() {
     local success_count=0
     local fail_count=0
     local skip_count=0
+    begin_data_transaction || return 1
 
     for input in $inputs; do
         local username=""
@@ -1437,9 +1524,10 @@ bind_users_to_node_smart() {
     fi
 
     if [[ $success_count -gt 0 ]]; then
-        generate_sing-box_config
-        restart_sing-box
+        apply_binding_changes || return 1
         print_success "配置已更新并重启服务"
+    else
+        rollback_data_transaction
     fi
 }
 
@@ -1510,8 +1598,9 @@ unbind_users_from_node_smart() {
     fi
 
     if [[ $success_count -gt 0 ]]; then
-        generate_sing-box_config
-        restart_sing-box
+        apply_binding_changes || return 1
         print_success "配置已更新并重启服务"
+    else
+        rollback_data_transaction
     fi
 }

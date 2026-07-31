@@ -31,11 +31,7 @@ TAGS=$(normalize_singbox_build_tags "$TAGS_FILE" 'with_naive_outbound')
 
 LDFLAGS=$(tr '\n' ' ' < "$TMP_DIR/source/release/LDFLAGS")
 echo "执行真实 Linux 编译，标签: $TAGS"
-(
-    cd "$TMP_DIR/source"
-    CGO_ENABLED=0 go build -trimpath -tags "$TAGS" -ldflags "$LDFLAGS" \
-        -o "$TMP_DIR/sing-box" ./cmd/sing-box
-)
+run_singbox_go_build "$TMP_DIR/source" "$(command -v go)" "$TAGS" "$LDFLAGS" "$TMP_DIR/sing-box"
 
 VERSION_OUTPUT=$($TMP_DIR/sing-box version)
 echo "$VERSION_OUTPUT"

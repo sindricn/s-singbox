@@ -691,6 +691,82 @@ normalize_singbox_build_tags() {
     printf '%s\n' "$result"
 }
 
+select_singbox_build_jobs() {
+    local cpus=1 mem_kb=0 jobs
+    if command -v nproc >/dev/null 2>&1; then
+        cpus=$(nproc 2>/dev/null || echo 1)
+    elif command -v getconf >/dev/null 2>&1; then
+        cpus=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+    fi
+    [[ "$cpus" =~ ^[0-9]+$ && "$cpus" -ge 1 ]] || cpus=1
+    [[ -r /proc/meminfo ]] && mem_kb=$(awk '/^MemAvailable:/ {print $2; exit}' /proc/meminfo)
+    [[ "$mem_kb" =~ ^[0-9]+$ ]] || mem_kb=0
+
+    if [[ "$mem_kb" -gt 0 && "$mem_kb" -lt 1572864 ]]; then
+        jobs=1
+    elif [[ "$mem_kb" -gt 0 && "$mem_kb" -lt 3145728 ]]; then
+        jobs=2
+    else
+        jobs=$cpus
+        [[ "$jobs" -le 4 ]] || jobs=4
+    fi
+    [[ "$jobs" -le "$cpus" ]] || jobs=$cpus
+    printf '%s\n' "$jobs"
+}
+
+run_singbox_go_build() {
+    local source=$1 go_bin=$2 tags=$3 ldflags=$4 candidate=$5
+    local jobs timeout_value heartbeat build_log build_pid start_time elapsed latest build_status mem_mb=0
+    jobs=$(select_singbox_build_jobs)
+    timeout_value=${SINGBOX_BUILD_TIMEOUT:-30m}
+    heartbeat=${SINGBOX_BUILD_HEARTBEAT_SECONDS:-15}
+    [[ "$timeout_value" =~ ^[1-9][0-9]*[smh]$ ]] || timeout_value=30m
+    [[ "$heartbeat" =~ ^[1-9][0-9]*$ && "$heartbeat" -le 60 ]] || heartbeat=15
+    [[ -r /proc/meminfo ]] && mem_mb=$(awk '/^MemAvailable:/ {printf "%d", $2/1024; exit}' /proc/meminfo)
+    build_log="${candidate}.build.log"
+    start_time=$SECONDS
+
+    print_info "编译资源: 并发=${jobs}, 可用内存约=${mem_mb:-0}MB, 超时=${timeout_value}"
+    (
+        cd "$source" || exit 1
+        export CGO_ENABLED=0 GOMAXPROCS="$jobs"
+        if command -v timeout >/dev/null 2>&1; then
+            timeout "$timeout_value" "$go_bin" build -v -p "$jobs" -trimpath -tags "$tags" \
+                -ldflags "$ldflags" -o "$candidate" ./cmd/sing-box
+        else
+            "$go_bin" build -v -p "$jobs" -trimpath -tags "$tags" -ldflags "$ldflags" -o "$candidate" ./cmd/sing-box
+        fi
+    ) > "$build_log" 2>&1 &
+    build_pid=$!
+
+    while kill -0 "$build_pid" 2>/dev/null; do
+        sleep "$heartbeat"
+        kill -0 "$build_pid" 2>/dev/null || break
+        elapsed=$((SECONDS - start_time))
+        latest=$(tail -n 1 "$build_log" 2>/dev/null | tr -d '\r' | cut -c1-120)
+        print_info "内核仍在编译：已用时 ${elapsed}s${latest:+，当前: $latest}"
+    done
+
+    if wait "$build_pid"; then
+        build_status=0
+    else
+        build_status=$?
+    fi
+    if [[ "$build_status" -ne 0 ]]; then
+        if [[ "$build_status" -eq 124 ]]; then
+            print_error "sing-box 编译超过 ${timeout_value}，已自动终止"
+        else
+            print_error "sing-box 编译失败（退出码: $build_status）"
+        fi
+        echo "----- 编译日志（最后 80 行）-----"
+        tail -n 80 "$build_log" 2>/dev/null || true
+        echo "---------------------------------"
+        return "$build_status"
+    fi
+    rm -f "$build_log"
+    print_success "sing-box 编译完成，用时 $((SECONDS - start_time)) 秒"
+}
+
 build_and_install_singbox() {
     local version=$1 start_after_install=${2:-true} go_bin work source tags tags_file ldflags candidate target backup required_go was_active=false
     [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || { print_error "非法版本号: $version"; return 1; }
@@ -728,7 +804,7 @@ build_and_install_singbox() {
     ldflags=$(tr '\n' ' ' < "$source/release/LDFLAGS")
     print_info "编译 sing-box（启用 with_v2ray_api）..."
     print_info "构建标签: $tags"
-    if ! (cd "$source" && CGO_ENABLED=0 "$go_bin" build -trimpath -tags "$tags" -ldflags "$ldflags" -o "$candidate" ./cmd/sing-box); then
+    if ! run_singbox_go_build "$source" "$go_bin" "$tags" "$ldflags" "$candidate"; then
         rm -rf "$work"; print_error "sing-box 编译失败"; return 1
     fi
     chmod 755 "$candidate"

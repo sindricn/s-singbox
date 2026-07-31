@@ -194,6 +194,8 @@ grep -q 'DEFAULT_BUILD_TAGS_OTHERS' "$ROOT_DIR/modules/zz_singbox_114.sh"
 grep -q 'with_naive_outbound，无法添加 Naive 出站' "$ROOT_DIR/modules/zz_singbox_114.sh"
 grep -q '当前内核不支持已启用的 Naive 出站' "$ROOT_DIR/modules/zz_singbox_114.sh"
 grep -q 'DEFAULT_BUILD_TAGS_OTHERS' "$ROOT_DIR/scripts/validate_custom_kernel_build.sh"
+grep -q 'run_singbox_go_build' "$ROOT_DIR/scripts/validate_custom_kernel_build.sh"
+grep -q '内核仍在编译' "$ROOT_DIR/modules/zz_singbox_114.sh"
 grep -q 'warn_if_stats_capability_missing' "$ROOT_DIR/singbox-manager.sh"
 grep -q 'ensure_subscription_server_runtime' "$ROOT_DIR/singbox-manager.sh"
 (

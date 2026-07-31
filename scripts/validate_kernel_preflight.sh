@@ -45,6 +45,27 @@ if normalize_singbox_build_tags "$TMP_DIR/invalid-build-tags" >/dev/null 2>&1; t
     exit 1
 fi
 
+# 构建包装器必须创建候选文件，并支持可见进度参数。
+mkdir -p "$TMP_DIR/fake-source"
+cat > "$TMP_DIR/build-go" <<'EOF'
+#!/bin/sh
+output=''
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = '-o' ]; then
+        shift
+        output=$1
+    fi
+    shift
+done
+echo 'fixture/package'
+sleep 1
+: > "$output"
+EOF
+chmod +x "$TMP_DIR/build-go"
+SINGBOX_BUILD_HEARTBEAT_SECONDS=1 SINGBOX_BUILD_TIMEOUT=10s \
+    run_singbox_go_build "$TMP_DIR/fake-source" "$TMP_DIR/build-go" 'with_v2ray_api' '' "$TMP_DIR/fake-candidate"
+[[ -f "$TMP_DIR/fake-candidate" ]]
+
 cat > "$TMP_DIR/plain-singbox" <<'EOF'
 #!/bin/sh
 echo 'sing-box version 1.14.0'

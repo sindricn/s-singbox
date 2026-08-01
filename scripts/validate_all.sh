@@ -345,7 +345,8 @@ grep -q 'verify_configured_inbound_listeners' "$ROOT_DIR/modules/zz_singbox_114.
 grep -q 'sync_runtime_subscriptions' "$ROOT_DIR/modules/zz_singbox_114.sh"
 grep -q 'api statsquery' "$ROOT_DIR/modules/monitor.sh"
 ! grep -q 'http://.*\/stats' "$ROOT_DIR/modules/monitor.sh"
-grep -q '当前为官方普通 sing-box 内核：节点创建与代理功能正常' "$ROOT_DIR/modules/zz_singbox_114.sh"
+grep -q 'if ! singbox_has_project_kernel_capability; then' "$ROOT_DIR/modules/zz_singbox_114.sh"
+grep -q '节点功能正常；实时连接或流量统计可能不可用' "$ROOT_DIR/modules/zz_singbox_114.sh"
 grep -q 'ensure_singbox_stats_capability' "$ROOT_DIR/modules/zz_singbox_114.sh"
 ! grep -q 'ensure_singbox_stats_capability' "$ROOT_DIR/singbox-manager.sh"
 ! sed -n '/^generate_singbox_config()/,/^}/p' "$ROOT_DIR/modules/zz_singbox_114.sh" | grep -q 'ensure_singbox_stats_capability'

@@ -32,7 +32,7 @@
 
 > Snell 入站仅存在于 sing-box 1.14 测试版本，未纳入当前 1.13.15 稳定版节点菜单；Snell v4/v6 出站仍按稳定内核能力保留。
 
-**默认定制内核出站协议与策略**（19 类）：HTTP、SOCKS、VLESS、VMess、Trojan、Shadowsocks、Hysteria v1、Hysteria2、TUIC、AnyTLS、ShadowTLS、SSH、Snell v4/v6、Tor、WireGuard Endpoint、Selector、URLTest、Direct、Block
+**默认内核出站协议与策略**（19 类）：HTTP、SOCKS、VLESS、VMess、Trojan、Shadowsocks、Hysteria v1、Hysteria2、TUIC、AnyTLS、ShadowTLS、SSH、Snell v4/v6、Tor、WireGuard Endpoint、Selector、URLTest、Direct、Block
 
 > Naive 入站可正常使用。Naive 出站依赖上游独立 Chromium/Cronet 工具链和 `libcronet.so`，不属于官方本地构建标签集合；仅在外部内核包含 `with_naive_outbound` 时开放。
 
@@ -45,9 +45,11 @@ WireGuard 按 sing-box 1.11+ 的新结构保存到顶层 `endpoints`，Selector/
 ### 🔐 用户管理
 
 - 全局用户系统，支持多用户共享节点
-- 流量限制和到期时间设置（普通内核保留到期限制，定制内核额外执行流量限额）
+- 流量限制和到期时间设置
 - 灵活的用户-节点绑定关系
-- 可选的定制内核 V2Ray Stats API 实时流量统计
+- 实时显示当前在线用户、节点在线用户数和活动连接数
+- Clash API 仅监听本机，并使用随机密钥保护连接数据
+- V2Ray Stats API 用户流量统计
 - 使用持久化累计账本，内核重启后流量不会归零
 - systemd 定时器每分钟检查流量额度与有效期，超限用户自动停用
 
@@ -61,11 +63,11 @@ WireGuard 按 sing-box 1.11+ 的新结构保存到顶层 `endpoints`，Selector/
 - **证书策略**：仅自签名节点生成 `insecure/skip-cert-verify`，受信任证书保持严格校验
 - **连接地址策略**：需要 TLS 域名时优先检测已配置的服务器域名，展示 DNS 核对结果并由用户确认；TLS/SNI 域名与客户端实际连接地址分开保存，避免把伪装域名误当成服务器地址
 
-### 🧩 定制内核与安全更新
+### 🧩 默认内核与安全更新
 
-- 官方普通 sing-box 内核可正常创建、校验和运行全部受支持节点，不要求 `with_v2ray_api`
-- 普通内核下自动省略 Stats API 配置，仅停用用户流量统计、流量限额和最近活跃状态
-- 定制内核由用户在“sing-box 管理 → 更新/修复定制内核”中手动安装，不再由节点创建流程强制触发
+- 项目默认从官方 sing-box 源码构建内核，节点创建过程不会临时触发编译
+- Clash API 连接数据增加认证用户字段，用于实时在线用户与节点连接统计
+- 内核或实时 API 暂不可用时显示“数据不可用”，不会错误显示为 `0`
 - 从官方 `SagerNet/sing-box` 对应版本标签构建
 - 按官方 `release/local/common.sh` 使用 `release/DEFAULT_BUILD_TAGS_OTHERS` 和 `release/LDFLAGS`
 - 额外启用 `with_v2ray_api`，供用户流量统计使用
@@ -170,7 +172,7 @@ Go 工具链由安装流程根据目标 sing-box 源码要求自动检查和准�
 bash scripts/validate_all.sh
 ```
 
-验证项包括 Bash 语法、废弃字段/旧路径扫描、入站协议配置矩阵、出站/策略结构、WireGuard Endpoint、Selector/URLTest 依赖闭包、旧 Xray 出站迁移、绑定调用链、首次安装顺序、IPv6/隧道 URL、服务器域名与连接地址选择、TCP/UDP 实际监听、本机防火墙与端口跳跃范围、分享链接特殊字符、Clash/SingBox 协议字段、V2Ray Stats API，以及真实定制内核的 `sing-box check`。
+验证项包括 Bash 语法、废弃字段/旧路径扫描、入站协议配置矩阵、出站/策略结构、WireGuard Endpoint、Selector/URLTest 依赖闭包、旧 Xray 出站迁移、绑定调用链、首次安装顺序、IPv6/隧道 URL、服务器域名与连接地址选择、TCP/UDP 实际监听、本机防火墙与端口跳跃范围、分享链接特殊字符、Clash/SingBox 协议字段、实时连接 API、V2Ray Stats API，以及项目默认内核的 `sing-box check`。
 
 
 ## 🤝 贡献指南
@@ -192,14 +194,15 @@ bash scripts/validate_all.sh
 - 完善 13 种入站协议及常用出站协议支持
 - 修复 VLESS Reality、TUIC 等节点连接问题
 - Clash 与 sing-box 订阅新增自动测速选择
-- 流量统计改为可选增强功能，不再影响节点创建
+- 新增实时在线用户与节点活动连接统计
+- 流量统计与节点创建解耦，监控异常不再影响节点使用
 - 完善服务器域名、节点连接地址和 Cloudflare 隧道逻辑
 - 增强配置检查、服务健康检查及失败自动回滚
-- 完善定制内核构建、进度提示和异常处理
+- 完善默认内核构建、进度提示和异常处理
 
 **已知问题：**
 
-- 用户在线状态和流量累计统计暂时不可用，将在后续版本修复。
+- 用户流量累计统计仍在持续完善中。
 
 ### V1.0.0 (2025-11-25)
 

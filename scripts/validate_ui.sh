@@ -27,7 +27,13 @@ fi
 
 grep -q 'readonly APP_VERSION="1.1.0"' "$ROOT_DIR/singbox-manager.sh"
 ! grep -qE 'V1\.0\.0|V2\.0\.0|get_online_users_count' "$ROOT_DIR/singbox-manager.sh"
-grep -q 'get_active_traffic_users_count' "$ROOT_DIR/singbox-manager.sh"
+grep -q 'get_realtime_online_users_count' "$ROOT_DIR/singbox-manager.sh"
+grep -q '在线用户' "$ROOT_DIR/singbox-manager.sh"
+grep -q '活动连接' "$ROOT_DIR/singbox-manager.sh"
+grep -q 'print_menu_item "5" "当前在线用户"' "$ROOT_DIR/singbox-manager.sh"
+grep -q '5) show_online_users; wait_for_input ;;' "$ROOT_DIR/singbox-manager.sh"
+! grep -qE 'get_user_recent_activity_status|check_port_has_connections|get_active_traffic_users_count' \
+    "$ROOT_DIR/singbox-manager.sh" "$ROOT_DIR/modules/user.sh"
 
 selector_stdout=$(select_single "请选择" "选项A" "选项B" 2>"$WORK_DIR/selector-single-ui.txt" <<< "2")
 [[ "$selector_stdout" == "1" ]]

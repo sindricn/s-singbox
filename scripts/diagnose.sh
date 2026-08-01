@@ -136,12 +136,19 @@ check_singbox() {
     if [[ -f /usr/local/bin/sing-box ]]; then
         check_item "二进制文件存在" "ok"
 
-        local version=$(/usr/local/bin/sing-box version 2>/dev/null | grep -oP 'version \K[0-9.]+' | head -1)
+        local version_output version
+        version_output=$(/usr/local/bin/sing-box version 2>/dev/null)
+        version=$(grep -oP 'version \K[0-9.]+' <<< "$version_output" | head -1)
         echo -e "  ${CYAN}版本:${NC} $version"
-        if /usr/local/bin/sing-box version 2>/dev/null | grep -q 'with_v2ray_api'; then
+        if grep -q 'with_v2ray_api' <<< "$version_output"; then
             check_item "with_v2ray_api 流量统计能力" "ok"
         else
-            check_item "普通内核：节点功能正常，用户流量统计不可用" "warn"
+            check_item "缺少流量统计组件（节点功能不受影响）" "warn"
+        fi
+        if grep -q 'with_clash_api' <<< "$version_output"; then
+            check_item "with_clash_api 实时连接能力" "ok"
+        else
+            check_item "缺少实时连接组件（节点功能不受影响）" "warn"
         fi
     else
         check_item "二进制文件不存在" "fail"
@@ -186,7 +193,21 @@ check_singbox() {
             elif /usr/local/bin/sing-box version 2>/dev/null | grep -q 'with_v2ray_api'; then
                 check_item "Stats API 无法查询" "fail"
             else
-                check_item "普通内核未启用 Stats API（节点功能不受影响）" "warn"
+                check_item "内核未启用 Stats API（节点功能不受影响）" "warn"
+            fi
+
+            local clash_secret clash_controller clash_json
+            clash_secret=$(jq -r '.experimental.clash_api.secret // empty' "$SINGBOX_CONFIG_FILE" 2>/dev/null)
+            clash_controller=$(jq -r '.experimental.clash_api.external_controller // "127.0.0.1:9090"' "$SINGBOX_CONFIG_FILE" 2>/dev/null)
+            if [[ -n "$clash_secret" ]] \
+                && clash_json=$(curl -fsS --max-time 2 -H "Authorization: Bearer ${clash_secret}" \
+                    "http://${clash_controller}/connections" 2>/dev/null) \
+                && jq -e '.connections | type == "array"' <<< "$clash_json" >/dev/null 2>&1; then
+                check_item "实时连接 API 可查询" "ok"
+            elif /usr/local/bin/sing-box version 2>/dev/null | grep -q 'with_clash_api'; then
+                check_item "实时连接 API 无法查询" "fail"
+            else
+                check_item "内核未启用实时连接 API（节点功能不受影响）" "warn"
             fi
         else
             check_item "服务未运行" "warn"

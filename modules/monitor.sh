@@ -58,7 +58,7 @@ show_traffic() {
     if declare -f singbox_has_stats_capability >/dev/null 2>&1 \
         && ! singbox_has_stats_capability; then
         print_warning "当前内核未启用 with_v2ray_api，流量统计不可用"
-        print_info "节点创建与代理功能不受影响；可在 sing-box 管理中手动安装定制内核"
+        print_info "节点创建与代理功能不受影响；可在 sing-box 管理中更新/修复内核"
         return 0
     fi
 
@@ -122,32 +122,39 @@ show_connections() {
         return 1
     fi
 
-    # 获取监听端口
-    local ports=$(ss -tlnp | grep sing-box | awk '{print $4}' | cut -d':' -f2 | sort -n | uniq)
+    if ! declare -f refresh_connection_snapshot >/dev/null 2>&1 || ! refresh_connection_snapshot; then
+        print_error "无法读取 sing-box 实时连接数据"
+        print_info "请确认 sing-box 正常运行，并重新生成一次配置"
+        return 1
+    fi
 
-    echo -e "${CYAN}活动连接数：${NC}"
+    local total_connections online_users
+    total_connections=$(get_realtime_connection_count 2>/dev/null || echo "N/A")
+    online_users=$(get_realtime_online_users_count 2>/dev/null || echo "N/A")
+    [[ "$online_users" != "UNAVAILABLE" ]] || online_users="数据不可用"
+
+    echo -e "${CYAN}实时概览：${NC}"
     echo "----------------------------------------"
-
-    local total_connections=0
-
-    for port in $ports; do
-        local conn_count=$(ss -tn | grep ":${port}" | wc -l)
-        echo "端口 ${port}: ${conn_count} 个连接"
-        total_connections=$((total_connections + conn_count))
-    done
-
-    echo "----------------------------------------"
-    echo "总连接数: $total_connections"
+    echo "在线用户: $online_users"
+    echo "活动连接: $total_connections"
+    echo ""
+    render_realtime_node_connection_table
 
     echo ""
     echo -e "${CYAN}连接详情（前10条）：${NC}"
-    echo "----------------------------------------"
-    printf "%-20s %-10s %-25s %-25s\n" "协议" "状态" "本地地址" "远程地址"
-    echo "----------------------------------------"
-
-    for port in $ports; do
-        ss -tn | grep ":${port}" | head -10 | awk '{printf "%-20s %-10s %-25s %-25s\n", "TCP", $1, $3, $4}'
-    done
+    printf "%-7s %-22s %-16s %-22s %-28s\n" "网络" "节点" "用户" "来源" "目标"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    while IFS=$'\t' read -r network inbound user source target; do
+        printf "%-7s %-22s %-16s %-22s %-28s\n" "$network" "$inbound" "$user" "$source" "$target"
+    done < <(jq -r '
+        .connections[:10][]?
+        | [(.metadata.network // "-"),
+           (.metadata.type // "-"),
+           (.metadata.inboundUser // "-"),
+           ((.metadata.sourceIP // "-") + ":" + ((.metadata.sourcePort // "-") | tostring)),
+           ((if (.metadata.host // "") != "" then .metadata.host else (.metadata.destinationIP // "-") end)
+             + ":" + ((.metadata.destinationPort // "-") | tostring))]
+        | @tsv' <<< "$CONNECTION_SNAPSHOT_JSON" 2>/dev/null)
 }
 
 # 查看日志
@@ -201,7 +208,7 @@ show_logs() {
 monitor_realtime() {
     clear
     echo -e "${CYAN}====== 实时监控 ======${NC}"
-    print_info "按 Ctrl+C 退出监控"
+    print_info "每 2 秒刷新，按 q 返回"
     echo ""
 
     while true; do
@@ -214,7 +221,9 @@ monitor_realtime() {
             echo -e "${GREEN}● 服务运行中${NC}"
         else
             echo -e "${RED}● 服务已停止${NC}"
-            sleep 5
+            local stopped_key=""
+            read -rsn1 -t 2 stopped_key || true
+            [[ "$stopped_key" =~ ^[Qq]$ ]] && break
             continue
         fi
 
@@ -226,39 +235,29 @@ monitor_realtime() {
             ps aux | grep "$pid" | grep -v grep | awk '{printf "CPU: %5s%%  内存: %5s%%  进程: %s\n", $3, $4, $2}'
         fi
 
-        # 连接数统计
+        # 实时在线用户与节点连接
         echo ""
-        echo -e "${CYAN}连接统计：${NC}"
-        local ports=$(ss -tlnp | grep sing-box | awk '{print $4}' | cut -d':' -f2 | sort -n | uniq)
-        local total_conn=0
-
-        for port in $ports; do
-            local conn=$(ss -tn | grep ":${port}" | wc -l)
-            printf "端口 %-6s: %3s 连接\n" "$port" "$conn"
-            total_conn=$((total_conn + conn))
-        done
-        echo "总连接数: $total_conn"
-
-        # 流量速率（简化版）
-        echo ""
-        echo -e "${CYAN}网络流量：${NC}"
-        local rx1=$(cat /sys/class/net/eth0/statistics/rx_bytes 2>/dev/null || echo 0)
-        local tx1=$(cat /sys/class/net/eth0/statistics/tx_bytes 2>/dev/null || echo 0)
-        sleep 1
-        local rx2=$(cat /sys/class/net/eth0/statistics/rx_bytes 2>/dev/null || echo 0)
-        local tx2=$(cat /sys/class/net/eth0/statistics/tx_bytes 2>/dev/null || echo 0)
-
-        local rx_rate=$(((rx2 - rx1) / 1024))
-        local tx_rate=$(((tx2 - tx1) / 1024))
-
-        printf "下载: %6s KB/s  上传: %6s KB/s\n" "$rx_rate" "$tx_rate"
+        echo -e "${CYAN}实时连接：${NC}"
+        if refresh_connection_snapshot; then
+            local total_conn online_users
+            total_conn=$(get_realtime_connection_count 2>/dev/null || echo "N/A")
+            online_users=$(get_realtime_online_users_count 2>/dev/null || echo "N/A")
+            [[ "$online_users" != "UNAVAILABLE" ]] || online_users="数据不可用"
+            echo "在线用户: $online_users  |  活动连接: $total_conn"
+            echo ""
+            render_realtime_node_connection_table
+        else
+            print_warning "实时连接数据暂不可用"
+        fi
 
         # 最新日志
         echo ""
         echo -e "${CYAN}最新日志（最近5条）：${NC}"
         journalctl -u sing-box --no-pager -n 5 --output=short-precise | tail -5
 
-        sleep 3
+        local key=""
+        read -rsn1 -t 2 key || true
+        [[ "$key" =~ ^[Qq]$ ]] && break
     done
 }
 

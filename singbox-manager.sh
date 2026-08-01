@@ -261,45 +261,6 @@ get_enabled_users_count() {
     echo "$count"
 }
 
-# 获取本次 sing-box 运行期间产生过流量的用户数。
-# Stats API 不提供可靠的在线连接人数，因此这里不再伪装成“在线用户”。
-get_active_traffic_users_count() {
-    local bin="${SINGBOX_BIN:-}"
-    local api_addr="${SINGBOX_API_ADDR:-127.0.0.1:10085}"
-    local stats count
-
-    if declare -f singbox_has_stats_capability >/dev/null 2>&1 \
-        && ! singbox_has_stats_capability; then
-        echo "UNAVAILABLE"
-        return 0
-    fi
-
-    if ! command -v timeout >/dev/null 2>&1 \
-        || ! command -v jq >/dev/null 2>&1 \
-        || ! command -v systemctl >/dev/null 2>&1 \
-        || ! systemctl is-active --quiet sing-box \
-        || [[ ! -x "$bin" ]]; then
-        echo "N/A"
-        return 0
-    fi
-
-    if ! stats=$(timeout 1 "$bin" api statsquery --server="$api_addr" -pattern "user>>>" 2>/dev/null); then
-        echo "N/A"
-        return 0
-    fi
-
-    count=$(jq -r '
-        [.stat[]?
-         | select(.name | startswith("user>>>"))
-         | select(((.value // 0) | tonumber) > 0)
-         | (.name | split(">>>")[1])]
-        | unique
-        | length' <<< "$stats" 2>/dev/null) || count="N/A"
-
-    [[ "$count" =~ ^[0-9]+$ ]] || count="N/A"
-    echo "$count"
-}
-
 # =============================================================================
 # 主菜单
 # =============================================================================
@@ -313,14 +274,19 @@ show_main_menu() {
     local status=$(echo "$status_info" | cut -d'|' -f2)
     local node_count=$(get_nodes_count 2>/dev/null || echo "0")
     local user_count=$(get_users_count 2>/dev/null || echo "0")
-    local active_traffic_count=$(get_active_traffic_users_count 2>/dev/null || echo "N/A")
-    local active_traffic_display="${active_traffic_count}"
-    local active_traffic_suffix="${GRAY}(本次运行)${NC}"
-    if [[ "$active_traffic_count" =~ ^[0-9]+$ ]]; then
-        active_traffic_display="${active_traffic_count}/${user_count}"
-    elif [[ "$active_traffic_count" == "UNAVAILABLE" ]]; then
-        active_traffic_display="不可用（普通内核）"
-        active_traffic_suffix="${GRAY}(节点功能正常)${NC}"
+    local online_user_count="N/A" active_connection_count="N/A"
+    local online_user_display="数据不可用" active_connection_display="数据不可用"
+    if declare -f refresh_connection_snapshot >/dev/null 2>&1 && refresh_connection_snapshot; then
+        online_user_count=$(get_realtime_online_users_count 2>/dev/null || echo "N/A")
+        active_connection_count=$(get_realtime_connection_count 2>/dev/null || echo "N/A")
+    fi
+    if [[ "$online_user_count" =~ ^[0-9]+$ ]]; then
+        online_user_display="${online_user_count}/${user_count}"
+    elif [[ "$online_user_count" == "UNAVAILABLE" ]]; then
+        online_user_display="数据不可用"
+    fi
+    if [[ "$active_connection_count" =~ ^[0-9]+$ ]]; then
+        active_connection_display="$active_connection_count"
     fi
 
     # 使用统一的UI函数
@@ -334,7 +300,8 @@ show_main_menu() {
     print_menu_info "  运行状态" "${status}"
     print_menu_info "  用户数量" "${BLUE}${user_count}${NC}"
     print_menu_info "  节点总数" "${BLUE}${node_count}${NC}"
-    print_menu_info "  有流量用户" "${GREEN}${active_traffic_display}${NC} ${active_traffic_suffix}"
+    print_menu_info "  在线用户" "${GREEN}${online_user_display}${NC}"
+    print_menu_info "  活动连接" "${GREEN}${active_connection_display}${NC}"
     print_section_end
     echo ""
 
@@ -376,7 +343,7 @@ menu_core() {
         print_menu_item "3" "停止 sing-box"
         print_menu_item "4" "重启 sing-box"
         print_menu_item "5" "卸载 sing-box"
-        print_menu_item "6" "更新/修复定制内核"
+        print_menu_item "6" "更新/修复 sing-box 内核"
         print_menu_item "7" "查看日志"
         print_menu_item "8" "查看版本"
         echo ""
@@ -510,6 +477,7 @@ show_user_menu() {
     print_menu_item "2" "添加用户"
     print_menu_item "3" "修改用户"
     print_menu_item "4" "删除用户"
+    print_menu_item "5" "当前在线用户"
     print_section_end
     print_nav_options "false" "true"
 }
@@ -723,6 +691,7 @@ handle_user_menu() {
                 [[ $? -eq 98 ]] && return  # 传播返回主菜单
                 ;;
             4) delete_users_batch; wait_for_input ;;
+            5) show_online_users; wait_for_input ;;
             *)
                 print_error "无效选择"
                 sleep 1

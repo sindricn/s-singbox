@@ -34,11 +34,11 @@ with_gvisor,with_quic
 with_dhcp with_gvisor
 EOF
 normalized_tags=$(normalize_singbox_build_tags "$TMP_DIR/build-tags")
-[[ "$normalized_tags" == 'with_gvisor,with_quic,with_dhcp,with_v2ray_api' ]]
+[[ "$normalized_tags" == 'with_gvisor,with_quic,with_dhcp,with_v2ray_api,with_clash_api' ]]
 [[ "$normalized_tags" != *' '* ]]
 echo 'with_gvisor,with_naive_outbound,with_quic' > "$TMP_DIR/build-tags-full"
 safe_tags=$(normalize_singbox_build_tags "$TMP_DIR/build-tags-full" 'with_naive_outbound')
-[[ "$safe_tags" == 'with_gvisor,with_quic,with_v2ray_api' ]]
+[[ "$safe_tags" == 'with_gvisor,with_quic,with_v2ray_api,with_clash_api' ]]
 echo 'with_gvisor,@invalid' > "$TMP_DIR/invalid-build-tags"
 if normalize_singbox_build_tags "$TMP_DIR/invalid-build-tags" >/dev/null 2>&1; then
     echo "非法构建标签未被拒绝" >&2
@@ -130,7 +130,7 @@ ensure_singbox_stats_capability
 kernel_state=plain
 SINGBOX_AUTO_REPAIR_STATS_KERNEL=0
 if ensure_singbox_stats_capability >/dev/null 2>&1; then
-    echo "禁用自动修复后仍错误放行普通内核" >&2
+    echo "禁用自动修复后仍错误放行不兼容内核" >&2
     exit 1
 fi
 

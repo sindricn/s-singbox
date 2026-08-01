@@ -352,7 +352,7 @@ uninstall_sing-box() {
     # 清理由本项目源码构建安装的内核，不触碰未受本项目管理的其他文件。
     if [[ -f "${DATA_DIR}/installed_version" && -f "/usr/local/bin/sing-box" ]]; then
         rm -f "/usr/local/bin/sing-box"
-        print_success "已删除项目管理的定制内核: /usr/local/bin/sing-box"
+        print_success "已删除项目管理的 sing-box 内核: /usr/local/bin/sing-box"
     fi
 
     # 4. 询问是否删除配置和数据

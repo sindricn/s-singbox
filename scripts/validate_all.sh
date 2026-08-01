@@ -46,7 +46,7 @@ export MOCK_CHECK_LOG="$TMP_DIR/sing-box-check.log"
 cat > "$TMP_DIR/mock-sing-box-stats" <<'SH'
 #!/bin/bash
 case "${1:-}" in
-    version) printf '%s\n' 'sing-box version 1.13.15' 'Tags: with_v2ray_api' ;;
+    version) printf '%s\n' 'sing-box version 1.13.15' 'Tags: with_v2ray_api,with_clash_api' ;;
     check) printf '%s\n' "${*:2}" >> "${MOCK_CHECK_LOG:?}" ;;
     api) printf '%s\n' '{"stat":[]}' ;;
     *) exit 1 ;;
@@ -127,6 +127,23 @@ source "$ROOT_DIR/modules/zz_singbox_114.sh"
 # shellcheck source=/dev/null
 source "$ROOT_DIR/modules/zzz_outbound_extended.sh"
 
+mkdir -p "$TMP_DIR/patch-source/experimental/clashapi/trafficontrol"
+cat > "$TMP_DIR/patch-source/experimental/clashapi/trafficontrol/tracker.go" <<'GO'
+package trafficontrol
+
+func fixture() map[string]any {
+	var processPath string
+	var t struct{ Metadata struct{ User string } }
+	return map[string]any{
+		"processPath": processPath,
+	}
+}
+GO
+apply_clash_api_user_patch "$TMP_DIR/patch-source"
+apply_clash_api_user_patch "$TMP_DIR/patch-source"
+grep -q '"inboundUser":[[:space:]]*t.Metadata.User' "$TMP_DIR/patch-source/experimental/clashapi/trafficontrol/tracker.go"
+[[ "$(grep -c '"inboundUser"' "$TMP_DIR/patch-source/experimental/clashapi/trafficontrol/tracker.go")" == 1 ]]
+
 [[ "$(get_default_domain)" == "www.cloudflare.com" ]]
 ! is_reality_handshake_domain_compatible "www.microsoft.com"
 is_reality_handshake_domain_compatible "www.cloudflare.com"
@@ -148,6 +165,51 @@ for protocol in vless vmess trojan shadowsocks hysteria2 tuic naive mixed http s
     jq -e --arg p "$protocol" '.inbounds[] | select(.type==$p)' "$SINGBOX_CONFIG" >/dev/null
 done
 jq -e '.experimental.v2ray_api.stats.enabled == true and (.experimental.v2ray_api.stats.users | index("fixture"))' "$SINGBOX_CONFIG" >/dev/null
+jq -e '.experimental.clash_api.external_controller == "127.0.0.1:9090" and (.experimental.clash_api.secret | length >= 32)' "$SINGBOX_CONFIG" >/dev/null
+[[ -s "$DATA_DIR/clash_api.secret" ]]
+config_clash_secret=$(jq -r '.experimental.clash_api.secret' "$SINGBOX_CONFIG")
+printf '%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > "$DATA_DIR/clash_api.secret"
+[[ "$(ensure_clash_api_secret)" == "$config_clash_secret" ]]
+[[ "$(tr -d '\r\n' < "$DATA_DIR/clash_api.secret")" == "$config_clash_secret" ]]
+(
+    fetch_clash_api_connections() {
+        printf '%s\n' '{"downloadTotal":2048,"uploadTotal":1024,"connections":[
+          {"id":"1","metadata":{"network":"tcp","type":"vless/vless-21001","inboundUser":"fixture","sourceIP":"198.51.100.1","sourcePort":"50001","destinationIP":"203.0.113.1","destinationPort":"443"}},
+          {"id":"2","metadata":{"network":"tcp","type":"vless/vless-21001","inboundUser":"fixture","sourceIP":"198.51.100.1","sourcePort":"50002","destinationIP":"203.0.113.2","destinationPort":"443"}},
+          {"id":"3","metadata":{"network":"udp","type":"tuic/tuic-21006","inboundUser":"second-user","sourceIP":"198.51.100.2","sourcePort":"50003","destinationIP":"203.0.113.3","destinationPort":"443"}},
+          {"id":"4","metadata":{"network":"tcp","type":"mixed/local-management","inboundUser":"fixture","sourceIP":"127.0.0.1","sourcePort":"50004","destinationIP":"127.0.0.1","destinationPort":"80"}}
+        ],"memory":4096}'
+    }
+    refresh_connection_snapshot
+    [[ "$(get_realtime_connection_count)" == 3 ]]
+    [[ "$(get_realtime_online_users_count)" == 2 ]]
+    [[ "$(get_node_realtime_stats vless 21001)" == '1|2' ]]
+    [[ "$(get_node_realtime_stats tuic 21006)" == '1|1' ]]
+    [[ "$(get_user_online_status '059032a9-7d40-4a96-9bb1-36823d848068')" == online ]]
+    online_rows=$(get_realtime_online_user_rows)
+    grep -Fq $'fixture\t-\tvless\t2' <<< "$online_rows"
+    grep -Fq $'second-user\t-\ttuic\t1' <<< "$online_rows"
+
+    fetch_clash_api_connections() {
+        printf '%s\n' '{"connections":[{"metadata":{"network":"tcp","type":"vless/vless-21001"}}]}'
+    }
+    refresh_connection_snapshot
+    [[ "$(get_realtime_connection_count)" == 1 ]]
+    [[ "$(get_realtime_online_users_count)" == UNAVAILABLE ]]
+    [[ "$(get_node_realtime_stats vless 21001)" == 'UNAVAILABLE|1' ]]
+
+    fetch_clash_api_connections() { printf '%s\n' '{"connections":[]}'; }
+    refresh_connection_snapshot
+    [[ "$(get_realtime_connection_count)" == 0 ]]
+    [[ "$(get_realtime_online_users_count)" == 0 ]]
+    [[ "$(get_user_online_status '059032a9-7d40-4a96-9bb1-36823d848068')" == offline ]]
+
+    fetch_clash_api_connections() { return 1; }
+    ! refresh_connection_snapshot
+    [[ -z "$CONNECTION_SNAPSHOT_JSON" ]]
+    [[ "$CONNECTION_SNAPSHOT_STATE" == unavailable ]]
+    [[ "$(get_user_online_status '059032a9-7d40-4a96-9bb1-36823d848068')" == unavailable ]]
+)
 jq -e '[.inbounds[] | select((.users | length) == 0)] | length == 0' "$SINGBOX_CONFIG" >/dev/null
 jq -e '.inbounds[] | select(.type=="vmess") | .users[0].alterId == 7' "$SINGBOX_CONFIG" >/dev/null
 jq -e '.inbounds[] | select(.type=="trojan") | (.fallback.server == "127.0.0.1" and .fallback.server_port == 8080)' "$SINGBOX_CONFIG" >/dev/null
@@ -164,12 +226,12 @@ jq -e '.endpoints[] | select(.type=="wireguard" and .tag=="fixture-wg")' "$SINGB
 jq -e '[.outbounds[].type] | (index("hysteria") != null and index("shadowtls") != null and index("ssh") != null and index("snell") != null and index("tor") != null and index("selector") != null and index("urltest") != null and index("direct") != null and index("block") != null)' "$DATA_DIR/outbounds.json" >/dev/null
 jq -e '.endpoints[] | select(.type=="wireguard")' "$DATA_DIR/outbounds.json" >/dev/null
 
-# 官方普通内核也必须能生成并校验完整节点配置，只是不注入 Stats API。
+# 缺少项目监控组件的内核也必须能生成并校验完整节点配置。
 stats_config="$SINGBOX_CONFIG"
 SINGBOX_BIN="$TMP_DIR/mock-sing-box-ordinary"
 SINGBOX_CONFIG="$SINGBOX_DIR/config-ordinary.json"
 _generate_singbox_config_114
-jq -e '((.experimental // {}) | has("v2ray_api") | not) and (.inbounds | length == 13)' "$SINGBOX_CONFIG" >/dev/null
+jq -e '((.experimental // {}) | has("v2ray_api") | not) and ((.experimental // {}) | has("clash_api") | not) and (.inbounds | length == 13)' "$SINGBOX_CONFIG" >/dev/null
 grep -q -- '-c .*config-ordinary.json' "$MOCK_CHECK_LOG"
 if [[ -n "${SINGBOX_VALIDATION_BIN:-}" && -x "$SINGBOX_VALIDATION_BIN" ]]; then
     validation_version=$("$SINGBOX_VALIDATION_BIN" version | sed -n 's/^sing-box version[[:space:]]\+v\?\([^[:space:]]\+\).*/\1/p' | head -1)
@@ -231,7 +293,7 @@ tuic_link=$(generate_share_link_smart "059032a9-7d40-4a96-9bb1-36823d848068" "" 
 [[ "$tuic_link" == *'alpn=h3'* && "$tuic_link" == *'udp_relay_mode=native'* && "$tuic_link" == *'allow_insecure=1'* && "$tuic_link" == *'zero_rtt_handshake=0'* ]]
 
 if [[ -n "${SINGBOX_VALIDATION_BIN:-}" && -x "$SINGBOX_VALIDATION_BIN" ]]; then
-    # 默认定制内核不包含 with_naive_outbound；Naive 客户端结构单独做字段测试，
+    # 项目默认内核不包含 with_naive_outbound；Naive 客户端结构单独做字段测试，
     # 真实内核检查覆盖其余官方本地构建支持的客户端出站。
     client_validation_nodes=$(echo "$nodes" | jq -c 'map(select(.protocol != "naive"))')
     generate_singbox_subscription_config "$client_validation_nodes" "059032a9-7d40-4a96-9bb1-36823d848068" > "$TMP_DIR/client-kernel-check.json"
@@ -482,10 +544,6 @@ tunnel_node='{"port":"21001","tunnel_domain":"https://[2001:db8::8]:8443/proxy?t
     check_traffic_limits >/dev/null
     grep -q '059032a9-7d40-4a96-9bb1-36823d848068' "$TMP_DIR/traffic-updated-users"
 
-    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    jq -n --arg id '059032a9-7d40-4a96-9bb1-36823d848068' --arg now "$now" \
-        '{users:{($id):{last_raw:1024,total_bytes:1024,last_change:$now}}}' > "$TRAFFIC_COUNTERS_FILE"
-    [[ "$(get_user_recent_activity_status '059032a9-7d40-4a96-9bb1-36823d848068')" == online ]]
 )
 (
     before="$TMP_DIR/users-before-no-stats.json"
@@ -501,7 +559,6 @@ tunnel_node='{"port":"21001","tunnel_domain":"https://[2001:db8::8]:8443/proxy?t
     cmp -s "$before" "$USERS_FILE"
     [[ ! -e "$TMP_DIR/traffic-called-without-stats" ]]
     [[ "$USER_LIMITS_CHANGED" == false ]]
-    [[ "$(get_user_recent_activity_status '059032a9-7d40-4a96-9bb1-36823d848068')" == unavailable ]]
 )
 
 stale_file="$SUBSCRIPTION_DIR/stale_ghost_raw.txt"

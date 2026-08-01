@@ -4,6 +4,13 @@
 # The legacy filename is retained to preserve module load order and upgrade compatibility.
 
 SINGBOX_API_ADDR="${SINGBOX_API_ADDR:-127.0.0.1:10085}"
+CLASH_API_ADDR="${CLASH_API_ADDR:-127.0.0.1:9090}"
+CLASH_API_SECRET_FILE="${CLASH_API_SECRET_FILE:-${DATA_DIR}/clash_api.secret}"
+if [[ ! "$CLASH_API_ADDR" =~ ^(127\.0\.0\.1|localhost|\[::1\]):([0-9]{1,5})$ ]]; then
+    CLASH_API_ADDR="127.0.0.1:9090"
+elif (( 10#${BASH_REMATCH[2]} < 1 || 10#${BASH_REMATCH[2]} > 65535 )); then
+    CLASH_API_ADDR="127.0.0.1:9090"
+fi
 TRAFFIC_COUNTERS_FILE="${TRAFFIC_COUNTERS_FILE:-${DATA_DIR}/traffic_counters.json}"
 SINGBOX_BUILD_DIR="${SINGBOX_BUILD_DIR:-${DATA_DIR}/build}"
 SINGBOX_GO_DIR="${SINGBOX_GO_DIR:-${DATA_DIR}/toolchains/go}"
@@ -21,6 +28,41 @@ get_singbox_bin() {
     else
         printf '%s\n' "/usr/local/bin/sing-box"
     fi
+}
+
+ensure_clash_api_secret() {
+    local secret="" stored_secret="" tmp
+
+    # 当前有效配置优先，避免服务回滚后密钥文件与运行配置不一致。
+    if [[ -f "${SINGBOX_CONFIG:-}" ]]; then
+        secret=$(jq -r '.experimental.clash_api.secret // empty' "$SINGBOX_CONFIG" 2>/dev/null)
+        [[ "$secret" =~ ^[A-Za-z0-9_-]{32,128}$ ]] || secret=""
+    fi
+    if [[ -s "$CLASH_API_SECRET_FILE" ]]; then
+        stored_secret=$(tr -d '\r\n' < "$CLASH_API_SECRET_FILE")
+        [[ "$stored_secret" =~ ^[A-Za-z0-9_-]{32,128}$ ]] || stored_secret=""
+    fi
+    if [[ -z "$secret" && -n "$stored_secret" ]]; then
+        chmod 600 "$CLASH_API_SECRET_FILE" || return 1
+        printf '%s\n' "$stored_secret"
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$CLASH_API_SECRET_FILE")" || return 1
+    if [[ -n "$secret" ]]; then
+        :
+    elif command -v openssl >/dev/null 2>&1; then
+        secret=$(openssl rand -hex 24 2>/dev/null) || return 1
+    else
+        secret=$(printf '%s:%s:%s\n' "$(date +%s%N)" "$$" "$RANDOM" | sha256sum | awk '{print $1}') || return 1
+    fi
+    [[ "$secret" =~ ^[A-Za-z0-9_-]{32,128}$ ]] || return 1
+
+    tmp=$(mktemp "${CLASH_API_SECRET_FILE}.tmp.XXXXXX") || return 1
+    printf '%s\n' "$secret" > "$tmp" || { rm -f "$tmp"; return 1; }
+    chmod 600 "$tmp"
+    mv -f "$tmp" "$CLASH_API_SECRET_FILE" || { rm -f "$tmp"; return 1; }
+    printf '%s\n' "$secret"
 }
 
 get_singbox_version_number() {
@@ -46,9 +88,9 @@ warn_if_stats_capability_missing() {
     local bin
     bin=$(get_singbox_bin)
     [[ -x "$bin" ]] || return 0
-    if ! "$bin" version 2>/dev/null | grep -q 'with_v2ray_api'; then
-        print_warning "当前为官方普通 sing-box 内核：节点创建与代理功能正常"
-        print_info "用户流量统计、流量限额和最近活跃状态不可用；可在内核管理中手动安装定制内核"
+    if ! singbox_has_project_kernel_capability; then
+        print_warning "当前 sing-box 内核不符合项目默认构建"
+        print_info "节点功能正常；实时连接或流量统计可能不可用，可在内核管理中执行更新/修复"
         return 1
     fi
 }
@@ -64,6 +106,14 @@ singbox_has_stats_capability() {
     singbox_has_build_tag with_v2ray_api
 }
 
+singbox_has_connection_api_capability() {
+    singbox_has_build_tag with_clash_api
+}
+
+singbox_has_project_kernel_capability() {
+    singbox_has_stats_capability && singbox_has_connection_api_capability
+}
+
 ensure_singbox_stats_capability() {
     [[ "${SINGBOX_SKIP_KERNEL_PREFLIGHT:-0}" == "1" ]] && return 0
     singbox_has_stats_capability && return 0
@@ -71,9 +121,9 @@ ensure_singbox_stats_capability() {
     local bin answer="" version start_after_install=true
     bin=$(get_singbox_bin)
     if [[ -x "$bin" ]]; then
-        print_warning "检测到普通 sing-box 内核，缺少 with_v2ray_api 流量统计能力"
+        print_warning "当前 sing-box 内核缺少项目默认的流量统计组件"
     else
-        print_warning "尚未安装 sing-box 定制内核"
+        print_warning "尚未安装 sing-box 内核"
     fi
 
     case "${SINGBOX_AUTO_REPAIR_STATS_KERNEL:-prompt}" in
@@ -81,20 +131,20 @@ ensure_singbox_stats_capability() {
         0|no|false) answer="n" ;;
         *)
             if [[ -t 0 ]]; then
-                echo -e "${YELLOW}脚本将从官方源码构建带 with_v2ray_api 的内核，首次执行可能需要数分钟。${NC}"
-                read -r -p "是否立即安装/修复定制内核并继续? [Y/n]: " answer
+                echo -e "${YELLOW}脚本将从官方源码构建项目默认内核，首次执行可能需要数分钟。${NC}"
+                read -r -p "是否立即安装/修复 sing-box 内核并继续? [Y/n]: " answer
                 answer=${answer:-y}
             else
                 print_error "非交互任务无法自动确认内核安装"
-                print_info "请运行 s-singbox，进入【sing-box 管理 → 更新/修复定制内核】"
+                print_info "请运行 s-singbox，进入【sing-box 管理 → 更新/修复 sing-box 内核】"
                 return 1
             fi
             ;;
     esac
 
     if [[ ! "$answer" =~ ^[Yy]$ ]]; then
-        print_error "当前配置需要带 with_v2ray_api 的 sing-box 定制内核"
-        print_info "可进入【sing-box 管理 → 更新/修复定制内核】后重试"
+        print_error "当前操作需要项目默认的 sing-box 内核"
+        print_info "可进入【sing-box 管理 → 更新/修复 sing-box 内核】后重试"
         return 1
     fi
 
@@ -102,14 +152,14 @@ ensure_singbox_stats_capability() {
         print_error "无法解析最新 sing-box 稳定版本"
         return 1
     }
-    print_info "正在自动修复 sing-box 定制内核（目标版本: v${version}）..."
+    print_info "正在自动修复 sing-box 内核（目标版本: v${version}）..."
     [[ -f "$SINGBOX_CONFIG" ]] || start_after_install=false
     build_and_install_singbox "$version" "$start_after_install" || return 1
     if ! singbox_has_stats_capability; then
-        print_error "定制内核安装后能力校验仍未通过"
+        print_error "sing-box 内核安装后能力校验仍未通过"
         return 1
     fi
-    print_success "with_v2ray_api 能力已就绪，继续原操作"
+    print_success "sing-box 内核已就绪，继续原操作"
 }
 
 atomic_write_json() {
@@ -505,7 +555,7 @@ _generate_singbox_config_114() (
         print_info "请移除该出站引用，或安装同时提供 Cronet/libcronet.so 的外部定制内核"
         return 1
     fi
-    local outbound_tags full route_rules='[]' endpoints warp_config='{}'
+    local outbound_tags full route_rules='[]' endpoints warp_config='{}' clash_api_secret=""
     endpoints="$custom_endpoints"
     outbound_tags=$(jq -n --argjson o "$custom_outbounds" --argjson e "$custom_endpoints" '([$o[].tag] + [$e[].tag] + ["direct-out"]) | unique')
     while IFS= read -r node; do
@@ -535,12 +585,25 @@ _generate_singbox_config_114() (
     full=$(jq -n --argjson inbounds "$inbounds" --argjson custom "$custom_outbounds" --argjson rules "$route_rules" --argjson endpoints "$endpoints" \
         '{log:{level:"info",timestamp:true},dns:{servers:[{type:"https",tag:"dns-remote",server:"1.1.1.1",server_port:443,path:"/dns-query",domain_resolver:"dns-local"},{type:"local",tag:"dns-local"}],final:"dns-remote"},inbounds:$inbounds,endpoints:$endpoints,outbounds:([{type:"direct",tag:"direct-out"}] + $custom),route:{default_domain_resolver:"dns-local",rules:([{protocol:"dns",action:"route",outbound:"direct-out"}] + $rules),final:"direct-out",auto_detect_interface:true}}') || return 1
 
+    if singbox_has_connection_api_capability; then
+        clash_api_secret=$(ensure_clash_api_secret) || {
+            print_warning "无法生成 Clash API 本地访问密钥：实时连接统计将暂时停用"
+            clash_api_secret=""
+        }
+        if [[ -n "$clash_api_secret" ]]; then
+            full=$(echo "$full" | jq --arg controller "$CLASH_API_ADDR" --arg secret "$clash_api_secret" \
+                '.experimental.clash_api={external_controller:$controller,secret:$secret}') || return 1
+        fi
+    else
+        print_warning "当前内核缺少 Clash API：节点配置仍将正常生成，实时连接统计暂不可用"
+    fi
+
     if singbox_has_stats_capability; then
         full=$(echo "$full" | jq --argjson in_tags "$inbound_tags" --argjson out_tags "$outbound_tags" \
             --argjson users "$active_names" --arg listen "$SINGBOX_API_ADDR" \
             '.experimental.v2ray_api={listen:$listen,stats:{enabled:true,inbounds:$in_tags,outbounds:$out_tags,users:$users}}') || return 1
     else
-        print_warning "当前为官方普通内核：节点配置将正常生成，流量统计增强功能已停用"
+        print_warning "当前内核缺少流量统计组件：节点配置仍将正常生成"
     fi
 
     local candidate bin
@@ -732,7 +795,7 @@ normalize_singbox_build_tags() {
     # 官方不同版本可能使用逗号、空格或换行分隔；Go 1.25 不接受逗号与空格混用。
     raw=$(tr ',\r\n\t' '    ' < "$tags_file") || return 1
     excluded_tags=${excluded_tags//,/ }
-    for token in $raw with_v2ray_api; do
+    for token in $raw with_v2ray_api with_clash_api; do
         if [[ ! "$token" =~ ^[A-Za-z0-9_.-]+$ ]]; then
             print_error "发现非法 Go 构建标签: $token" >&2
             return 1
@@ -827,6 +890,29 @@ run_singbox_go_build() {
     print_success "sing-box 编译完成，用时 $((SECONDS - start_time)) 秒"
 }
 
+apply_clash_api_user_patch() {
+    local source=$1 tracker_file
+    tracker_file="$source/experimental/clashapi/trafficontrol/tracker.go"
+    [[ -f "$tracker_file" ]] || {
+        print_error "Clash API 连接跟踪源码不存在，无法加入在线用户字段"
+        return 1
+    }
+    grep -q '"inboundUser":[[:space:]]*t.Metadata.User' "$tracker_file" && return 0
+    if grep -q '"inboundUser"' "$tracker_file"; then
+        print_error "Clash API 已存在未知的 inboundUser 实现，拒绝重复修改"
+        return 1
+    fi
+    grep -q '"processPath":[[:space:]]*processPath,' "$tracker_file" || {
+        print_error "Clash API 源码结构已变化，无法安全应用在线用户补丁"
+        return 1
+    }
+    sed -i '/"processPath":[[:space:]]*processPath,/a\            "inboundUser":     t.Metadata.User,' "$tracker_file" || return 1
+    grep -q '"inboundUser":[[:space:]]*t.Metadata.User' "$tracker_file" || {
+        print_error "在线用户字段补丁应用失败"
+        return 1
+    }
+}
+
 build_and_install_singbox() {
     local version=$1 start_after_install=${2:-true} go_bin work source tags tags_file ldflags candidate target backup required_go was_active=false
     [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || { print_error "非法版本号: $version"; return 1; }
@@ -856,13 +942,19 @@ build_and_install_singbox() {
         print_error "Go 工具链路径无效: ${go_bin//$'\n'/, }"
         return 1
     fi
+    apply_clash_api_user_patch "$source" || { rm -rf "$work"; return 1; }
+    (cd "$source" && "$go_bin" fmt ./experimental/clashapi/trafficontrol >/dev/null) || {
+        rm -rf "$work"
+        print_error "在线用户字段补丁格式化失败"
+        return 1
+    }
     tags=$(normalize_singbox_build_tags "$tags_file" "with_naive_outbound") || {
         rm -rf "$work"
         print_error "无法解析官方 sing-box 构建标签"
         return 1
     }
     ldflags=$(tr '\n' ' ' < "$source/release/LDFLAGS")
-    print_info "编译 sing-box（启用 with_v2ray_api）..."
+    print_info "编译项目默认 sing-box 内核..."
     print_info "构建标签: $tags"
     if ! run_singbox_go_build "$source" "$go_bin" "$tags" "$ldflags" "$candidate"; then
         rm -rf "$work"; print_error "sing-box 编译失败"; return 1
@@ -870,6 +962,7 @@ build_and_install_singbox() {
     chmod 755 "$candidate"
     "$candidate" version || { rm -rf "$work"; return 1; }
     "$candidate" version | grep -q 'with_v2ray_api' || { rm -rf "$work"; print_error "候选内核缺少 with_v2ray_api 构建标签"; return 1; }
+    "$candidate" version | grep -q 'with_clash_api' || { rm -rf "$work"; print_error "候选内核缺少 with_clash_api 构建标签"; return 1; }
     [[ ! -f "$SINGBOX_CONFIG" ]] || "$candidate" check -c "$SINGBOX_CONFIG" || { rm -rf "$work"; print_error "候选内核无法加载当前配置"; return 1; }
     target="${SINGBOX_INSTALL_BIN:-/usr/local/bin/sing-box}"
     mkdir -p "$(dirname "$target")"
@@ -904,7 +997,7 @@ build_and_install_singbox() {
     printf '%s\n' "$version" > "${DATA_DIR}/installed_version"
     chmod 600 "${DATA_DIR}/installed_version"
     rm -rf "$work"
-    print_success "sing-box v${version} 定制内核安装成功（with_v2ray_api）"
+    print_success "sing-box v${version} 内核安装成功"
 }
 
 prepare_singbox_storage() {
@@ -954,7 +1047,12 @@ update_sing-box() {
         *) return 1 ;;
     esac
     version=$(resolve_singbox_version "$channel" "$explicit") || return 1
-    build_and_install_singbox "$version"
+    build_and_install_singbox "$version" || return 1
+    generate_singbox_config || {
+        print_warning "内核已更新，但实时监控配置生成失败；现有节点仍保持运行"
+        return 1
+    }
+    restart_sing-box
 }
 
 resolve_tunnel_endpoint() {
@@ -1520,7 +1618,7 @@ add_trojan_outbound() {
 add_naive_outbound() {
     local tag server port username password sni insecure=false outbound
     if ! singbox_has_build_tag with_naive_outbound; then
-        print_error "当前定制内核不包含 with_naive_outbound，无法添加 Naive 出站"
+        print_error "当前内核不包含 with_naive_outbound，无法添加 Naive 出站"
         print_info "上游 Naive 出站需要独立 Chromium/Cronet 工具链和 libcronet.so，不属于官方本地构建能力"
         return 1
     fi
@@ -2103,4 +2201,200 @@ restart_sing-box() {
     systemctl restart sing-box 2>/dev/null || true
     systemctl is-active --quiet sing-box 2>/dev/null || print_error "回滚后服务仍未恢复，请检查 journalctl -u sing-box"
     return 1
+}
+
+# Clash API 实时连接快照。该 API 只监听本机，节点连接与在线用户共用一次查询结果。
+CONNECTION_SNAPSHOT_JSON=""
+CONNECTION_SNAPSHOT_STATE="unknown"
+
+fetch_clash_api_connections() {
+    local secret url="http://${CLASH_API_ADDR}/connections"
+    if [[ -f "${SINGBOX_CONFIG:-}" ]]; then
+        secret=$(jq -r '.experimental.clash_api.secret // empty' "$SINGBOX_CONFIG" 2>/dev/null)
+    fi
+    if [[ -z "${secret:-}" && -s "$CLASH_API_SECRET_FILE" ]]; then
+        secret=$(tr -d '\r\n' < "$CLASH_API_SECRET_FILE")
+    fi
+    [[ -n "$secret" ]] || return 1
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsS --max-time "${CLASH_API_TIMEOUT_SECONDS:-1}" \
+            -H "Authorization: Bearer ${secret}" "$url"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO- --timeout="${CLASH_API_TIMEOUT_SECONDS:-1}" \
+            --header="Authorization: Bearer ${secret}" "$url"
+    else
+        return 1
+    fi
+}
+
+refresh_connection_snapshot() {
+    local snapshot
+    CONNECTION_SNAPSHOT_JSON=""
+    CONNECTION_SNAPSHOT_STATE="unavailable"
+    snapshot=$(fetch_clash_api_connections 2>/dev/null) || return 1
+    jq -e '.connections | type == "array"' <<< "$snapshot" >/dev/null 2>&1 || return 1
+    CONNECTION_SNAPSHOT_JSON=$(jq -c . <<< "$snapshot") || return 1
+    CONNECTION_SNAPSHOT_STATE="ready"
+}
+
+get_realtime_connection_count() {
+    [[ -n "$CONNECTION_SNAPSHOT_JSON" && -f "$NODES_FILE" ]] || return 1
+    jq -r --slurpfile nodes "$NODES_FILE" '
+        [($nodes[0].nodes // [])[] | "\(.protocol)-\(.port)"] as $tags
+        | [.connections[]?
+           | select((.metadata.type // "" | split("/") | last) as $tag
+                    | $tags | index($tag))]
+        | length' <<< "$CONNECTION_SNAPSHOT_JSON"
+}
+
+get_realtime_online_users_count() {
+    [[ -n "$CONNECTION_SNAPSHOT_JSON" && -f "$NODES_FILE" ]] || return 1
+    jq -r --slurpfile nodes "$NODES_FILE" '
+        [($nodes[0].nodes // [])[] | "\(.protocol)-\(.port)"] as $tags
+        | [.connections[]?
+           | select((.metadata.type // "" | split("/") | last) as $tag
+                    | $tags | index($tag))] as $connections
+        | if ($connections | length) == 0 then "0"
+          elif ($connections | all((.metadata // {}) | has("inboundUser"))) then
+            ([$connections[].metadata.inboundUser
+              | select(type == "string" and length > 0)] | unique | length | tostring)
+          else "UNAVAILABLE"
+          end' <<< "$CONNECTION_SNAPSHOT_JSON"
+}
+
+get_node_realtime_stats() {
+    local protocol port tag
+    protocol=$1
+    port=$2
+    tag="${protocol}-${port}"
+    [[ -n "$CONNECTION_SNAPSHOT_JSON" ]] || return 1
+    jq -r --arg tag "$tag" '
+        [.connections[]?
+         | select((.metadata.type // "" | split("/") | last) == $tag)] as $connections
+        | if ($connections | length) == 0 then "0|0"
+          elif ($connections | all((.metadata // {}) | has("inboundUser"))) then
+            (([$connections[].metadata.inboundUser
+               | select(type == "string" and length > 0)] | unique | length | tostring)
+             + "|" + (($connections | length) | tostring))
+          else "UNAVAILABLE|" + (($connections | length) | tostring)
+          end' <<< "$CONNECTION_SNAPSHOT_JSON"
+}
+
+get_user_online_status() {
+    local uuid=$1 username connection_count
+    case "$CONNECTION_SNAPSHOT_STATE" in
+        ready) ;;
+        unknown)
+            refresh_connection_snapshot || { echo "unavailable"; return 0; }
+            ;;
+        *) echo "unavailable"; return 0 ;;
+    esac
+    username=$(jq -r --arg id "$uuid" '.users[]? | select(.id == $id) | (.username // .id)' "$USERS_FILE" 2>/dev/null | head -n1)
+    [[ -n "$username" && "$username" != null ]] || { echo "unknown"; return 0; }
+
+    connection_count=$(get_realtime_connection_count 2>/dev/null) || { echo "unavailable"; return 0; }
+    if [[ "$connection_count" == "0" ]]; then
+        echo "offline"
+        return 0
+    fi
+    if ! jq -e --slurpfile nodes "$NODES_FILE" '
+        [($nodes[0].nodes // [])[] | "\(.protocol)-\(.port)"] as $tags
+        | [.connections[]?
+           | select((.metadata.type // "" | split("/") | last) as $tag
+                    | $tags | index($tag))] as $connections
+        | ($connections | length) > 0
+          and ($connections | all((.metadata // {}) | has("inboundUser")))' \
+        <<< "$CONNECTION_SNAPSHOT_JSON" >/dev/null 2>&1; then
+        echo "unavailable"
+        return 0
+    fi
+    if jq -e --arg user "$username" --slurpfile nodes "$NODES_FILE" '
+        [($nodes[0].nodes // [])[] | "\(.protocol)-\(.port)"] as $tags
+        | .connections[]?
+        | select((.metadata.type // "" | split("/") | last) as $tag
+                 | $tags | index($tag))
+        | select(.metadata.inboundUser == $user)' \
+        <<< "$CONNECTION_SNAPSHOT_JSON" >/dev/null 2>&1; then
+        echo "online"
+    else
+        echo "offline"
+    fi
+}
+
+render_realtime_node_connection_table() {
+    local node name protocol port stats online connections
+    printf "%-22s %-12s %-8s %-10s %-10s\n" "节点名称" "协议" "端口" "在线用户" "活动连接"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    while IFS= read -r node; do
+        name=$(echo "$node" | jq -r '.name // "未命名"')
+        protocol=$(echo "$node" | jq -r '.protocol // "unknown"')
+        port=$(echo "$node" | jq -r '.port // "N/A"')
+        [[ ${#name} -le 20 ]] || name="${name:0:17}..."
+        stats=$(get_node_realtime_stats "$protocol" "$port" 2>/dev/null || echo "N/A|N/A")
+        online=${stats%%|*}
+        connections=${stats##*|}
+        [[ "$online" != "UNAVAILABLE" ]] || online="--"
+        printf "%-22s %-12s %-8s %-10s %-10s\n" "$name" "$protocol" "$port" "$online" "$connections"
+    done < <(jq -c '.nodes[]?' "$NODES_FILE" 2>/dev/null)
+}
+
+get_realtime_online_user_rows() {
+    [[ -n "$CONNECTION_SNAPSHOT_JSON" && -f "$NODES_FILE" && -f "$USERS_FILE" ]] || return 1
+    jq -r --slurpfile nodes "$NODES_FILE" --slurpfile users "$USERS_FILE" '
+        ([($nodes[0].nodes // [])[]
+          | {key:"\(.protocol)-\(.port)",value:(.name // "\(.protocol)-\(.port)")}] | from_entries) as $node_names
+        | ([($users[0].users // [])[]
+            | {key:(.username // .id),value:(.email // "-")}] | from_entries) as $user_emails
+        | ($node_names | keys) as $tags
+        | [.connections[]?
+           | ((.metadata.type // "" | split("/") | last)) as $tag
+           | select($tags | index($tag))
+           | select((.metadata.inboundUser // "") != "")
+           | {user:.metadata.inboundUser,tag:$tag}]
+        | sort_by(.user) | group_by(.user)[]
+        | .[0].user as $user
+        | [ $user,
+            ($user_emails[$user] // "-"),
+            ([.[].tag | $node_names[.] // .] | unique | join(",")),
+            (length | tostring)]
+        | @tsv' <<< "$CONNECTION_SNAPSHOT_JSON"
+}
+
+show_online_users() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}        当前在线用户"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    if ! refresh_connection_snapshot; then
+        print_warning "实时连接数据暂不可用"
+        return 0
+    fi
+
+    local online_count online_rows
+    online_count=$(get_realtime_online_users_count 2>/dev/null || echo "N/A")
+    if [[ "$online_count" == "UNAVAILABLE" || "$online_count" == "N/A" ]]; then
+        print_warning "当前内核未返回连接用户信息"
+        print_info "请在 sing-box 管理中执行更新/修复内核"
+        return 0
+    fi
+    if [[ "$online_count" == "0" ]]; then
+        print_info "当前没有在线用户"
+        return 0
+    fi
+    online_rows=$(get_realtime_online_user_rows 2>/dev/null) || {
+        print_warning "在线用户明细解析失败"
+        return 0
+    }
+
+    printf "%-18s %-24s %-32s %-10s\n" "用户名" "邮箱" "连接节点" "活动连接"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    while IFS=$'\t' read -r username email node_tags connection_count; do
+        [[ -n "$username" ]] || continue
+        printf "%-18s %-24s %-32s %-10s\n" "$username" "$email" "$node_tags" "$connection_count"
+    done <<< "$online_rows"
+    echo ""
+    echo -e "${CYAN}在线用户数: ${GREEN}${online_count}${NC}"
 }

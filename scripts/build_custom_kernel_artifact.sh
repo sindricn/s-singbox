@@ -40,7 +40,7 @@ apply_clash_api_user_patch "$TMP_DIR/source"
 (cd "$TMP_DIR/source" && "$(command -v go)" fmt ./experimental/clashapi/trafficontrol >/dev/null)
 
 TAGS=$(normalize_singbox_build_tags "$TAGS_FILE" 'with_naive_outbound')
-LDFLAGS=$(tr '\n' ' ' < "$TMP_DIR/source/release/LDFLAGS")
+LDFLAGS=$(compose_singbox_build_ldflags "$TMP_DIR/source" "$VERSION")
 export GOOS="$TARGET_GOOS" GOARCH="$TARGET_GOARCH" CGO_ENABLED=0
 if [[ -n "$TARGET_GOARM" ]]; then
     export GOARM="$TARGET_GOARM"

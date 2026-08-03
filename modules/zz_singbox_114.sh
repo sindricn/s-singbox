@@ -833,6 +833,14 @@ normalize_singbox_build_tags() {
     printf '%s\n' "$result"
 }
 
+compose_singbox_build_ldflags() {
+    local source=$1 version=$2 base
+    [[ -f "$source/release/LDFLAGS" ]] || return 1
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || return 1
+    base=$(tr '\n' ' ' < "$source/release/LDFLAGS" | sed 's/[[:space:]]*$//') || return 1
+    printf '%s -X github.com/sagernet/sing-box/constant.Version=%s\n' "$base" "$version"
+}
+
 select_singbox_build_jobs() {
     local cpus=1 mem_kb=0 jobs
     if command -v nproc >/dev/null 2>&1; then
@@ -1113,7 +1121,11 @@ build_singbox_from_source_and_install() {
         print_error "无法解析官方 sing-box 构建标签"
         return 1
     }
-    ldflags=$(tr '\n' ' ' < "$source/release/LDFLAGS")
+    ldflags=$(compose_singbox_build_ldflags "$source" "$version") || {
+        rm -rf "$work"
+        print_error "无法生成 sing-box 构建版本参数"
+        return 1
+    }
     print_info "编译项目默认 sing-box 内核..."
     print_info "构建标签: $tags"
     if ! run_singbox_go_build "$source" "$go_bin" "$tags" "$ldflags" "$candidate"; then

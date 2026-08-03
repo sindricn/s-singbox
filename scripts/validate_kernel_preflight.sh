@@ -39,6 +39,9 @@ normalized_tags=$(normalize_singbox_build_tags "$TMP_DIR/build-tags")
 echo 'with_gvisor,with_naive_outbound,with_quic' > "$TMP_DIR/build-tags-full"
 safe_tags=$(normalize_singbox_build_tags "$TMP_DIR/build-tags-full" 'with_naive_outbound')
 [[ "$safe_tags" == 'with_gvisor,with_quic,with_v2ray_api,with_clash_api' ]]
+mkdir -p "$TMP_DIR/fake-release/release"
+echo '-s -w' > "$TMP_DIR/fake-release/release/LDFLAGS"
+[[ "$(compose_singbox_build_ldflags "$TMP_DIR/fake-release" '1.13.15')" == '-s -w -X github.com/sagernet/sing-box/constant.Version=1.13.15' ]]
 echo 'with_gvisor,@invalid' > "$TMP_DIR/invalid-build-tags"
 if normalize_singbox_build_tags "$TMP_DIR/invalid-build-tags" >/dev/null 2>&1; then
     echo "非法构建标签未被拒绝" >&2

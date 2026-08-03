@@ -33,12 +33,13 @@ apply_clash_api_user_patch "$TMP_DIR/source"
 grep -q '"inboundUser"' "$TMP_DIR/source/experimental/clashapi/trafficontrol/tracker.go"
 (cd "$TMP_DIR/source" && "$(command -v go)" fmt ./experimental/clashapi/trafficontrol >/dev/null)
 
-LDFLAGS=$(tr '\n' ' ' < "$TMP_DIR/source/release/LDFLAGS")
+LDFLAGS=$(compose_singbox_build_ldflags "$TMP_DIR/source" "$VERSION")
 echo "执行真实 Linux 编译，标签: $TAGS"
 run_singbox_go_build "$TMP_DIR/source" "$(command -v go)" "$TAGS" "$LDFLAGS" "$TMP_DIR/sing-box"
 
 VERSION_OUTPUT=$($TMP_DIR/sing-box version)
 echo "$VERSION_OUTPUT"
+grep -q "sing-box version ${VERSION}" <<< "$VERSION_OUTPUT"
 grep -q 'with_v2ray_api' <<< "$VERSION_OUTPUT"
 grep -q 'with_clash_api' <<< "$VERSION_OUTPUT"
 if [[ -n "${SINGBOX_BUILD_TEST_OUTPUT:-}" ]]; then

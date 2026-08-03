@@ -1,4 +1,4 @@
-name: Validate custom sing-box kernel
+name: Build and publish custom sing-box kernel
 
 on:
   workflow_dispatch:
@@ -6,29 +6,44 @@ on:
     branches:
       - dev
     paths:
-      - singbox-manager.sh
-      - install.sh
-      - README.md
-      - modules/monitor.sh
-      - modules/common.sh
-      - modules/firewall.sh
-      - modules/node.sh
-      - modules/subscription.sh
-      - modules/user.sh
       - modules/zz_singbox_114.sh
-      - scripts/diagnose.sh
+      - scripts/build_custom_kernel_artifact.sh
       - scripts/validate_all.sh
       - scripts/validate_custom_kernel_build.sh
       - scripts/validate_kernel_preflight.sh
       - .github/workflows/validate-custom-kernel.yml
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: custom-kernel-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SINGBOX_KERNEL_VERSION: 1.13.15
+  SINGBOX_KERNEL_REVISION: 1
 
 jobs:
-  linux-build:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - asset_arch: amd64
+            goarch: amd64
+            goarm: ""
+          - asset_arch: arm64
+            goarch: arm64
+            goarm: ""
+          - asset_arch: armv7
+            goarch: arm
+            goarm: "7"
+          - asset_arch: armv6
+            goarch: arm
+            goarm: "6"
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -37,16 +52,88 @@ jobs:
         with:
           go-version: 1.25.12
           cache: false
-      - name: Validate shell syntax and preflight
+      - name: Validate shell syntax
         run: |
           bash -n modules/zz_singbox_114.sh
+          bash -n scripts/build_custom_kernel_artifact.sh
+      - name: Build project kernel
+        env:
+          SINGBOX_BUILD_VERSION: ${{ env.SINGBOX_KERNEL_VERSION }}
+          SINGBOX_BUILD_GOOS: linux
+          SINGBOX_BUILD_GOARCH: ${{ matrix.goarch }}
+          SINGBOX_BUILD_GOARM: ${{ matrix.goarm }}
+          SINGBOX_BUILD_OUTPUT: ${{ runner.temp }}/package/sing-box
+        run: bash scripts/build_custom_kernel_artifact.sh
+      - name: Package kernel
+        env:
+          ASSET_NAME: s-singbox-kernel-v${{ env.SINGBOX_KERNEL_VERSION }}-r${{ env.SINGBOX_KERNEL_REVISION }}-linux-${{ matrix.asset_arch }}.tar.gz
+        run: |
+          mkdir -p dist
+          tar -C "${{ runner.temp }}/package" -czf "dist/${ASSET_NAME}" sing-box
+      - name: Upload kernel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ matrix.asset_arch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  validate:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Download amd64 kernel
+        uses: actions/download-artifact@v5
+        with:
+          name: kernel-amd64
+          path: ${{ runner.temp }}/kernel
+      - name: Extract amd64 kernel
+        run: |
+          mkdir -p "${{ runner.temp }}/bin"
+          tar -xzf "${{ runner.temp }}/kernel/"*.tar.gz -C "${{ runner.temp }}/bin"
+          chmod +x "${{ runner.temp }}/bin/sing-box"
+      - name: Validate preflight and runtime behavior
+        env:
+          SINGBOX_VALIDATION_BIN: ${{ runner.temp }}/bin/sing-box
+        run: |
           bash scripts/validate_kernel_preflight.sh
-      - name: Build real custom kernel
+          bash scripts/validate_all.sh
+
+  release:
+    needs:
+      - build
+      - validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all kernel artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: kernel-*
+          path: dist
+          merge-multiple: true
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+      - name: Publish rolling kernel release
         env:
-          SINGBOX_BUILD_TEST_VERSION: 1.13.15
-          SINGBOX_BUILD_TEST_OUTPUT: ${{ runner.temp }}/sing-box-custom
-        run: bash scripts/validate_custom_kernel_build.sh
-      - name: Validate ordinary and custom kernel behavior
-        env:
-          SINGBOX_VALIDATION_BIN: ${{ runner.temp }}/sing-box-custom
-        run: bash scripts/validate_all.sh
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: kernel-v${{ env.SINGBOX_KERNEL_VERSION }}-r${{ env.SINGBOX_KERNEL_REVISION }}
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "s-singbox kernel v${SINGBOX_KERNEL_VERSION} r${SINGBOX_KERNEL_REVISION}" \
+              --notes "Prebuilt s-singbox project kernel with traffic and realtime online-user support." \
+              --prerelease
+          else
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "s-singbox kernel v${SINGBOX_KERNEL_VERSION} r${SINGBOX_KERNEL_REVISION}" \
+              --notes "Prebuilt s-singbox project kernel with traffic and realtime online-user support." \
+              --prerelease
+          fi
+          gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber

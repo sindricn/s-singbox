@@ -65,14 +65,15 @@ WireGuard 按 sing-box 1.11+ 的新结构保存到顶层 `endpoints`，Selector/
 
 ### 🧩 默认内核与安全更新
 
-- 项目默认从官方 sing-box 源码构建内核，节点创建过程不会临时触发编译
+- 默认下载 GitHub Actions 预编译并经 SHA256 校验的项目内核，节点创建过程不会临时触发编译
+- 提供 AMD64、ARM64、ARMv7 和 ARMv6 构建；没有匹配产物时才询问是否本地编译
 - Clash API 连接数据增加认证用户字段，用于实时在线用户与节点连接统计
 - 内核或实时 API 暂不可用时显示“数据不可用”，不会错误显示为 `0`
-- 从官方 `SagerNet/sing-box` 对应版本标签构建
+- 发布流水线从官方 `SagerNet/sing-box` 对应版本标签构建
 - 按官方 `release/local/common.sh` 使用 `release/DEFAULT_BUILD_TAGS_OTHERS` 和 `release/LDFLAGS`
 - 额外启用 `with_v2ray_api`，供用户流量统计使用
-- 自动读取目标版本 `go.mod` 的 Go/toolchain 要求；本机版本不足时下载官方稳定工具链并校验 SHA256
-- 更新前先编译候选内核并检查现有配置；启动失败自动回滚二进制
+- 仅在明确选择本地编译时读取目标版本 `go.mod` 的 Go/toolchain 要求并准备工具链
+- 更新前校验候选内核版本、能力和现有配置；启动失败自动回滚二进制
 - 配置生成采用文件锁、临时文件、`sing-box check` 和原子替换
 - 节点、用户、绑定、出站、订阅和配置使用最后可用快照；服务健康检查成功后才提交事务，异常退出会在下次启动自动恢复
 - 节点创建后会检查实际 TCP/UDP 监听，并自动同步 UFW、firewalld 或 iptables 规则；监听或本机防火墙激活失败时自动回滚
@@ -144,6 +145,7 @@ singbox-manager
   - x86_64 (AMD64)
   - ARM64 (aarch64)
   - ARMv7
+  - ARMv6
 
 - **权限要求**: root 或 sudo 权限
 
@@ -155,7 +157,7 @@ singbox-manager
   - gzip、coreutils（SHA256 校验）、util-linux（文件锁）
   - systemctl (systemd)
 
-Go 工具链由安装流程根据目标 sing-box 源码要求自动检查和准备，无需手动安装。
+正常安装直接使用预编译内核，无需 Go 工具链；仅在明确选择本地源码编译时自动检查和准备 Go。
 
 ### 标准路径
 
@@ -198,7 +200,7 @@ bash scripts/validate_all.sh
 - 流量统计与节点创建解耦，监控异常不再影响节点使用
 - 完善服务器域名、节点连接地址和 Cloudflare 隧道逻辑
 - 增强配置检查、服务健康检查及失败自动回滚
-- 完善默认内核构建、进度提示和异常处理
+- 默认内核改为多架构预编译下载，并保留校验、回滚和手动本地构建兜底
 
 **已知问题：**
 

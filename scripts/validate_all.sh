@@ -127,6 +127,9 @@ source "$ROOT_DIR/modules/zz_singbox_114.sh"
 # shellcheck source=/dev/null
 source "$ROOT_DIR/modules/zzz_outbound_extended.sh"
 
+write_project_kernel_metadata "$SINGBOX_BIN" "1.13.15" "validation-fixture"
+singbox_has_online_user_capability
+
 mkdir -p "$TMP_DIR/patch-source/experimental/clashapi/trafficontrol"
 cat > "$TMP_DIR/patch-source/experimental/clashapi/trafficontrol/tracker.go" <<'GO'
 package trafficontrol
@@ -360,6 +363,14 @@ grep -q '当前内核不支持已启用的 Naive 出站' "$ROOT_DIR/modules/zz_s
 grep -q 'DEFAULT_BUILD_TAGS_OTHERS' "$ROOT_DIR/scripts/validate_custom_kernel_build.sh"
 grep -q 'run_singbox_go_build' "$ROOT_DIR/scripts/validate_custom_kernel_build.sh"
 grep -q '内核仍在编译' "$ROOT_DIR/modules/zz_singbox_114.sh"
+grep -q 'download_and_install_prebuilt_singbox' "$ROOT_DIR/modules/zz_singbox_114.sh"
+grep -q 'SINGBOX_LOCAL_BUILD_FALLBACK' "$ROOT_DIR/modules/zz_singbox_114.sh"
+grep -q 'SINGBOX_PROJECT_KERNEL_VERSION="${SINGBOX_PROJECT_KERNEL_VERSION:-1.13.15}"' "$ROOT_DIR/modules/zz_singbox_114.sh"
+grep -q 'SINGBOX_PROJECT_KERNEL_REVISION="${SINGBOX_PROJECT_KERNEL_REVISION:-1}"' "$ROOT_DIR/modules/zz_singbox_114.sh"
+grep -q 'SINGBOX_KERNEL_VERSION: 1.13.15' "$ROOT_DIR/.github/workflows/validate-custom-kernel.yml"
+grep -q 'SINGBOX_KERNEL_REVISION: 1' "$ROOT_DIR/.github/workflows/validate-custom-kernel.yml"
+grep -q 'asset_arch: amd64' "$ROOT_DIR/.github/workflows/validate-custom-kernel.yml"
+grep -q 'asset_arch: arm64' "$ROOT_DIR/.github/workflows/validate-custom-kernel.yml"
 grep -q 'warn_if_stats_capability_missing' "$ROOT_DIR/singbox-manager.sh"
 grep -q 'ensure_subscription_server_runtime' "$ROOT_DIR/singbox-manager.sh"
 (

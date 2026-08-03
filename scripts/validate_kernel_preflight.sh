@@ -78,7 +78,45 @@ cat > "$TMP_DIR/full-singbox" <<'EOF'
 #!/bin/sh
 echo 'sing-box version 1.13.15 Tags: with_v2ray_api,with_naive_outbound'
 EOF
-chmod +x "$TMP_DIR/plain-singbox" "$TMP_DIR/stats-singbox" "$TMP_DIR/full-singbox"
+cat > "$TMP_DIR/project-singbox" <<'EOF'
+#!/bin/sh
+echo 'sing-box version 1.13.15 Tags: with_v2ray_api,with_clash_api'
+EOF
+chmod +x "$TMP_DIR/plain-singbox" "$TMP_DIR/stats-singbox" "$TMP_DIR/full-singbox" "$TMP_DIR/project-singbox"
+
+(
+    uname() { echo x86_64; }
+    [[ "$(resolve_singbox_prebuilt_arch)" == amd64 ]]
+)
+(
+    uname() { echo aarch64; }
+    [[ "$(resolve_singbox_prebuilt_arch)" == arm64 ]]
+)
+
+get_singbox_bin() { echo "$TMP_DIR/project-singbox"; }
+SINGBOX_PROJECT_KERNEL_METADATA="$TMP_DIR/project-kernel.json"
+write_project_kernel_metadata "$TMP_DIR/project-singbox" '1.13.15' 'validation-fixture'
+singbox_has_online_user_capability
+printf '\n# changed\n' >> "$TMP_DIR/project-singbox"
+! singbox_has_online_user_capability
+
+(
+    download_and_install_prebuilt_singbox() { printf '%s' "$1|$2" > "$TMP_DIR/prebuilt-call"; }
+    build_singbox_from_source_and_install() { return 99; }
+    build_and_install_singbox '1.13.15' false
+    [[ "$(cat "$TMP_DIR/prebuilt-call")" == '1.13.15|false' ]]
+)
+(
+    local_build_called=0
+    download_and_install_prebuilt_singbox() { return 1; }
+    build_singbox_from_source_and_install() { local_build_called=1; }
+    SINGBOX_LOCAL_BUILD_FALLBACK=never
+    ! build_and_install_singbox '1.13.15' true >/dev/null 2>&1
+    [[ "$local_build_called" == 0 ]]
+    SINGBOX_LOCAL_BUILD_FALLBACK=always
+    build_and_install_singbox '1.13.15' true
+    [[ "$local_build_called" == 1 ]]
+)
 
 kernel_state=plain
 build_count=0

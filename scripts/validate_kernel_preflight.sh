@@ -95,6 +95,12 @@ chmod +x "$TMP_DIR/plain-singbox" "$TMP_DIR/stats-singbox" "$TMP_DIR/full-singbo
     uname() { echo aarch64; }
     [[ "$(resolve_singbox_prebuilt_arch)" == arm64 ]]
 )
+(
+    fetch_project_kernel_manifest() {
+        printf '%s\n' '{"schema":1,"singbox_version":"1.13.16","kernel_revision":"1","release_tag":"kernel-v1.13.16-r1","assets":{}}'
+    }
+    [[ "$(resolve_project_kernel_version)" == '1.13.16' ]]
+)
 
 get_singbox_bin() { echo "$TMP_DIR/project-singbox"; }
 SINGBOX_PROJECT_KERNEL_METADATA="$TMP_DIR/project-kernel.json"
@@ -119,6 +125,14 @@ printf '\n# changed\n' >> "$TMP_DIR/project-singbox"
     SINGBOX_LOCAL_BUILD_FALLBACK=always
     build_and_install_singbox '1.13.15' true
     [[ "$local_build_called" == 1 ]]
+)
+(
+    local_build_called=0
+    download_and_install_prebuilt_singbox() { return 30; }
+    build_singbox_from_source_and_install() { local_build_called=1; }
+    SINGBOX_LOCAL_BUILD_FALLBACK=always
+    ! build_and_install_singbox '1.13.16' true >/dev/null 2>&1
+    [[ "$local_build_called" == 0 ]]
 )
 
 kernel_state=plain

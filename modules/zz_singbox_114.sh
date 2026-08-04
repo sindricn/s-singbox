@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# sing-box 1.13.15 stable compatibility layer.
+# sing-box stable compatibility layer.
 # The legacy filename is retained to preserve module load order and upgrade compatibility.
 
 SINGBOX_API_ADDR="${SINGBOX_API_ADDR:-127.0.0.1:10085}"
@@ -15,7 +15,7 @@ TRAFFIC_COUNTERS_FILE="${TRAFFIC_COUNTERS_FILE:-${DATA_DIR}/traffic_counters.jso
 SINGBOX_BUILD_DIR="${SINGBOX_BUILD_DIR:-${DATA_DIR}/build}"
 SINGBOX_GO_DIR="${SINGBOX_GO_DIR:-${DATA_DIR}/toolchains/go}"
 SINGBOX_KERNEL_RELEASE_REPO="${SINGBOX_KERNEL_RELEASE_REPO:-sindricn/s-singbox}"
-SINGBOX_PROJECT_KERNEL_VERSION="${SINGBOX_PROJECT_KERNEL_VERSION:-1.13.15}"
+SINGBOX_KERNEL_CHANNEL_TAG="${SINGBOX_KERNEL_CHANNEL_TAG:-kernel-stable}"
 SINGBOX_PROJECT_KERNEL_REVISION="${SINGBOX_PROJECT_KERNEL_REVISION:-1}"
 SINGBOX_PROJECT_KERNEL_METADATA="${SINGBOX_PROJECT_KERNEL_METADATA:-${DATA_DIR}/project_kernel.json}"
 RUNTIME_STATE_DIR="${RUNTIME_STATE_DIR:-${DATA_DIR}/.last-known-good}"
@@ -123,7 +123,7 @@ singbox_has_online_user_capability() {
     recorded_revision=$(jq -r '.kernel_revision // empty' "$SINGBOX_PROJECT_KERNEL_METADATA" 2>/dev/null)
     recorded_sha=$(jq -r '.binary_sha256 // empty' "$SINGBOX_PROJECT_KERNEL_METADATA" 2>/dev/null)
     [[ "$recorded_version" == "$(get_singbox_version_number 2>/dev/null)" ]] || return 1
-    [[ "$recorded_revision" == "$SINGBOX_PROJECT_KERNEL_REVISION" ]] || return 1
+    [[ "$recorded_revision" =~ ^[1-9][0-9]*$ ]] || return 1
     [[ "$recorded_sha" =~ ^[a-f0-9]{64}$ ]] || return 1
     installed_sha=$(sha256sum "$bin" 2>/dev/null | awk '{print $1}')
     [[ "$installed_sha" == "$recorded_sha" ]]
@@ -168,7 +168,7 @@ ensure_singbox_stats_capability() {
     fi
 
     version=$(resolve_singbox_version stable) || {
-        print_error "无法解析最新 sing-box 稳定版本"
+        print_error "无法解析项目已验证的 sing-box 稳定版本"
         return 1
     }
     print_info "正在自动修复 sing-box 内核（目标版本: v${version}）..."
@@ -685,8 +685,12 @@ ensure_user_limits_timer() {
 }
 
 create_systemd_service() {
-    local bin
-    bin=$(get_singbox_bin)
+    local bin=${1:-}
+    [[ -n "$bin" ]] || bin=$(get_singbox_bin)
+    [[ -x "$bin" ]] || {
+        print_error "sing-box 服务二进制不可执行: ${bin:-empty}"
+        return 1
+    }
     mkdir -p "$(dirname "$SINGBOX_SERVICE")" "$DATA_DIR"
     local service="[Unit]
 Description=sing-box service
@@ -721,6 +725,42 @@ version_ge() {
     [[ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" == "$2" ]]
 }
 
+fetch_project_kernel_manifest() {
+    local output=${1:-} url
+    url="https://github.com/${SINGBOX_KERNEL_RELEASE_REPO}/releases/download/${SINGBOX_KERNEL_CHANNEL_TAG}/kernel-manifest.json"
+    if [[ -n "$output" ]]; then
+        curl -fsSL --retry 3 --connect-timeout 15 "$url" -o "$output" || return 1
+        jq -e '
+            .schema == 1
+            and (.singbox_version | type == "string")
+            and (.kernel_revision | type == "string")
+            and (.release_tag | type == "string")
+            and (.assets | type == "object")
+        ' "$output" >/dev/null 2>&1
+    else
+        local manifest
+        manifest=$(curl -fsSL --retry 3 --connect-timeout 15 "$url") || return 1
+        jq -e '
+            .schema == 1
+            and (.singbox_version | type == "string")
+            and (.kernel_revision | type == "string")
+            and (.release_tag | type == "string")
+            and (.assets | type == "object")
+        ' <<< "$manifest" >/dev/null 2>&1 || return 1
+        printf '%s\n' "$manifest"
+    fi
+}
+
+resolve_project_kernel_version() {
+    local manifest version revision
+    manifest=$(fetch_project_kernel_manifest) || return 1
+    version=$(jq -r '.singbox_version // empty' <<< "$manifest")
+    revision=$(jq -r '.kernel_revision // empty' <<< "$manifest")
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || return 1
+    [[ "$revision" =~ ^[1-9][0-9]*$ ]] || return 1
+    printf '%s\n' "$version"
+}
+
 resolve_singbox_version() {
     local channel=${1:-stable}
     local explicit=${2:-}
@@ -729,17 +769,17 @@ resolve_singbox_version() {
         echo "$explicit"
         return
     fi
+    if [[ "$channel" == "stable" ]]; then
+        resolve_project_kernel_version
+        return
+    fi
     local releases version auth_args=()
     [[ -n "${GITHUB_TOKEN:-}" ]] && auth_args=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
     releases=$(curl -fsSL --retry 3 --connect-timeout 15 "${auth_args[@]}" 'https://api.github.com/repos/SagerNet/sing-box/releases?per_page=30' 2>/dev/null || true)
-    if [[ "$channel" == "beta" ]]; then
-        version=$(echo "$releases" | jq -r '[.[] | select(.prerelease == true and .draft == false)][0].tag_name // empty' 2>/dev/null | sed 's/^v//')
-    else
-        version=$(echo "$releases" | jq -r '[.[] | select(.prerelease == false and .draft == false)][0].tag_name // empty' 2>/dev/null | sed 's/^v//')
-    fi
+    version=$(echo "$releases" | jq -r '[.[] | select(.prerelease == true and .draft == false)][0].tag_name // empty' 2>/dev/null | sed 's/^v//')
     if [[ -z "$version" ]]; then
         version=$(git ls-remote --tags --refs https://github.com/SagerNet/sing-box.git 'v*' 2>/dev/null | awk '{print $2}' | sed 's#refs/tags/v##' | {
-            if [[ "$channel" == beta ]]; then grep -E '[.-](alpha|beta|rc)[.-]?[0-9]+'; else grep -Ev '[.-](alpha|beta|rc)[.-]?[0-9]+'; fi
+            grep -E '[.-](alpha|beta|rc)[.-]?[0-9]+'
         } | sort -V | tail -n1)
     fi
     [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || return 1
@@ -951,7 +991,7 @@ resolve_singbox_prebuilt_arch() {
 }
 
 write_project_kernel_metadata() {
-    local bin=$1 version=$2 source_kind=${3:-unknown} binary_sha tmp
+    local bin=$1 version=$2 source_kind=${3:-unknown} revision=${4:-$SINGBOX_PROJECT_KERNEL_REVISION} binary_sha tmp
     [[ -x "$bin" ]] || return 1
     binary_sha=$(sha256sum "$bin" 2>/dev/null | awk '{print $1}')
     [[ "$binary_sha" =~ ^[a-f0-9]{64}$ ]] || return 1
@@ -959,7 +999,7 @@ write_project_kernel_metadata() {
     tmp=$(mktemp "${SINGBOX_PROJECT_KERNEL_METADATA}.tmp.XXXXXX") || return 1
     jq -n \
         --arg version "$version" \
-        --arg revision "$SINGBOX_PROJECT_KERNEL_REVISION" \
+        --arg revision "$revision" \
         --arg sha "$binary_sha" \
         --arg source "$source_kind" \
         --arg installed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -992,7 +1032,7 @@ validate_project_kernel_candidate() {
 }
 
 install_prebuilt_singbox_candidate() {
-    local candidate=$1 version=$2 start_after_install=${3:-true}
+    local candidate=$1 version=$2 start_after_install=${3:-true} revision=${4:-$SINGBOX_PROJECT_KERNEL_REVISION}
     local target backup was_active=false
     target="${SINGBOX_INSTALL_BIN:-/usr/local/bin/sing-box}"
     mkdir -p "$(dirname "$target")"
@@ -1005,7 +1045,8 @@ install_prebuilt_singbox_candidate() {
         $was_active && systemctl start sing-box 2>/dev/null || true
         return 1
     fi
-    if ! create_systemd_service; then
+    SINGBOX_BIN="$target"
+    if ! create_systemd_service "$target"; then
         print_error "systemd 服务文件创建失败，正在回滚内核"
         if [[ -f "$backup" ]]; then cp -a "$backup" "$target"; else rm -f "$target"; fi
         $was_active && systemctl start sing-box 2>/dev/null || true
@@ -1023,7 +1064,7 @@ install_prebuilt_singbox_candidate() {
             return 1
         fi
     fi
-    write_project_kernel_metadata "$target" "$version" "github-release" || {
+    write_project_kernel_metadata "$target" "$version" "github-release" "$revision" || {
         print_error "项目内核标识写入失败，正在回滚内核"
         systemctl stop sing-box 2>/dev/null || true
         if [[ -f "$backup" ]]; then cp -a "$backup" "$target"; else rm -f "$target"; fi
@@ -1037,47 +1078,67 @@ install_prebuilt_singbox_candidate() {
 
 download_and_install_prebuilt_singbox() {
     local version=$1 start_after_install=${2:-true}
-    local arch tag asset base_url work archive checksums expected candidate entries
+    local arch tag asset expected_tag expected_asset base_url work archive manifest expected candidate entries manifest_version manifest_revision
     mkdir -p "$SINGBOX_BUILD_DIR" || return 1
-    if [[ "$version" != "$SINGBOX_PROJECT_KERNEL_VERSION" ]]; then
-        print_warning "sing-box v${version} 暂无项目预编译内核（当前发布版本: v${SINGBOX_PROJECT_KERNEL_VERSION}）"
-        return 1
-    fi
     arch=$(resolve_singbox_prebuilt_arch) || {
         print_warning "当前架构没有预编译项目内核：$(uname -m)"
-        return 1
+        return 10
     }
-    tag="kernel-v${version}-r${SINGBOX_PROJECT_KERNEL_REVISION}"
-    asset="s-singbox-kernel-v${version}-r${SINGBOX_PROJECT_KERNEL_REVISION}-linux-${arch}.tar.gz"
-    base_url="https://github.com/${SINGBOX_KERNEL_RELEASE_REPO}/releases/download/${tag}"
     work=$(mktemp -d "${SINGBOX_BUILD_DIR}/download.XXXXXX") || return 1
+    manifest="$work/kernel-manifest.json"
+    if ! fetch_project_kernel_manifest "$manifest"; then
+        rm -rf "$work"
+        print_error "无法获取项目稳定内核清单"
+        return 10
+    fi
+    manifest_version=$(jq -r '.singbox_version // empty' "$manifest")
+    manifest_revision=$(jq -r '.kernel_revision // empty' "$manifest")
+    if [[ "$manifest_version" != "$version" ]]; then
+        rm -rf "$work"
+        print_error "项目稳定内核版本发生变化：请求 v${version}，清单为 v${manifest_version:-unknown}"
+        return 11
+    fi
+    if [[ ! "$manifest_revision" =~ ^[1-9][0-9]*$ ]]; then
+        rm -rf "$work"
+        print_error "项目稳定内核清单包含无效修订号：${manifest_revision:-unknown}"
+        return 11
+    fi
+    tag=$(jq -r '.release_tag // empty' "$manifest")
+    asset=$(jq -r --arg arch "$arch" '.assets[$arch].name // empty' "$manifest")
+    expected=$(jq -r --arg arch "$arch" '.assets[$arch].sha256 // empty' "$manifest")
+    expected_tag="kernel-v${manifest_version}-r${manifest_revision}"
+    expected_asset="s-singbox-kernel-v${manifest_version}-r${manifest_revision}-linux-${arch}.tar.gz"
+    if [[ "$tag" != "$expected_tag" \
+        || "$asset" != "$expected_asset" \
+        || ! "$expected" =~ ^[a-fA-F0-9]{64}$ ]]; then
+        rm -rf "$work"
+        print_error "项目稳定内核清单缺少 ${arch} 的有效资产"
+        return 10
+    fi
+    base_url="https://github.com/${SINGBOX_KERNEL_RELEASE_REPO}/releases/download/${tag}"
     archive="$work/$asset"
-    checksums="$work/SHA256SUMS"
     candidate="$work/sing-box"
 
     print_info "下载预编译 sing-box 项目内核：v${version} (${arch})"
-    if ! curl -fL --retry 3 --connect-timeout 15 "$base_url/$asset" -o "$archive" \
-        || ! curl -fL --retry 3 --connect-timeout 15 "$base_url/SHA256SUMS" -o "$checksums"; then
+    if ! curl -fL --retry 3 --connect-timeout 15 "$base_url/$asset" -o "$archive"; then
         rm -rf "$work"
-        print_warning "预编译内核下载失败或该版本尚未发布"
-        return 1
+        print_error "预编译内核资产下载失败：${asset}"
+        return 10
     fi
-    expected=$(awk -v file="$asset" '$2 == file || $2 == ("*" file) {print $1; exit}' "$checksums")
-    if [[ ! "$expected" =~ ^[a-fA-F0-9]{64}$ ]] \
-        || ! printf '%s  %s\n' "$expected" "$archive" | sha256sum -c - >/dev/null 2>&1; then
+    if ! printf '%s  %s\n' "$expected" "$archive" | sha256sum -c - >/dev/null 2>&1; then
         rm -rf "$work"
         print_error "预编译内核 SHA256 校验失败"
-        return 1
+        return 20
     fi
     entries=$(tar -tzf "$archive" 2>/dev/null | sed 's#^\./##')
     if [[ "$entries" != "sing-box" ]] || ! tar -xzf "$archive" -C "$work"; then
         rm -rf "$work"
         print_error "预编译内核压缩包结构无效"
-        return 1
+        return 21
     fi
     chmod 755 "$candidate"
-    validate_project_kernel_candidate "$candidate" "$version" || { rm -rf "$work"; return 1; }
-    install_prebuilt_singbox_candidate "$candidate" "$version" "$start_after_install" || { rm -rf "$work"; return 1; }
+    validate_project_kernel_candidate "$candidate" "$version" || { rm -rf "$work"; return 30; }
+    install_prebuilt_singbox_candidate "$candidate" "$version" "$start_after_install" "$manifest_revision" || { rm -rf "$work"; return 40; }
     rm -rf "$work"
 }
 
@@ -1147,7 +1208,8 @@ build_singbox_from_source_and_install() {
         $was_active && systemctl start sing-box 2>/dev/null || true
         rm -rf "$work"; return 1
     fi
-    if ! create_systemd_service; then
+    SINGBOX_BIN="$target"
+    if ! create_systemd_service "$target"; then
         print_error "systemd 服务文件创建失败，正在回滚内核"
         if [[ -f "$backup" ]]; then cp -a "$backup" "$target"; else rm -f "$target"; fi
         $was_active && systemctl start sing-box 2>/dev/null || true
@@ -1182,11 +1244,19 @@ build_singbox_from_source_and_install() {
 }
 
 build_and_install_singbox() {
-    local version=$1 start_after_install=${2:-true} fallback answer=""
+    local version=$1 start_after_install=${2:-true} fallback answer="" prebuilt_status=10
     mkdir -p "$SINGBOX_BUILD_DIR"
-    if [[ "${SINGBOX_SKIP_PREBUILT_KERNEL:-0}" != "1" ]] \
-        && download_and_install_prebuilt_singbox "$version" "$start_after_install"; then
-        return 0
+    if [[ "${SINGBOX_SKIP_PREBUILT_KERNEL:-0}" != "1" ]]; then
+        if download_and_install_prebuilt_singbox "$version" "$start_after_install"; then
+            return 0
+        else
+            prebuilt_status=$?
+        fi
+    fi
+    if (( prebuilt_status >= 20 )); then
+        print_error "预编译内核已获取，但在完整性校验、配置检查或安装阶段失败（阶段码: ${prebuilt_status}）"
+        print_info "本地编译无法解决该类问题，已停止更新并保留原内核"
+        return "$prebuilt_status"
     fi
 
     fallback=${SINGBOX_LOCAL_BUILD_FALLBACK:-prompt}
@@ -1223,7 +1293,7 @@ prepare_singbox_storage() {
 
 install_sing-box() {
     prepare_singbox_storage || return 1
-    echo -e "${CYAN}1.${NC} 最新稳定版（推荐）"
+    echo -e "${CYAN}1.${NC} 项目稳定版（已预编译验证，推荐）"
     echo -e "${CYAN}2.${NC} 最新测试版"
     echo -e "${CYAN}3.${NC} 指定版本"
     read -p "请选择 [1-3，默认1]: " choice
@@ -1245,7 +1315,7 @@ install_sing-box() {
 
 update_sing-box() {
     prepare_singbox_storage || return 1
-    echo -e "${CYAN}1.${NC} 最新稳定版（推荐）"
+    echo -e "${CYAN}1.${NC} 项目稳定版（已预编译验证，推荐）"
     echo -e "${CYAN}2.${NC} 最新测试版"
     echo -e "${CYAN}3.${NC} 指定版本"
     read -p "请选择 [1-3，默认1]: " choice

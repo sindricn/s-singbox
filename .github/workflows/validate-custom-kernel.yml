@@ -2,6 +2,13 @@ name: Build and publish custom sing-box kernel
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: Optional sing-box version without the v prefix; empty uses latest stable
+        required: false
+        type: string
+  schedule:
+    - cron: "17 */6 * * *"
   push:
     branches:
       - dev
@@ -17,15 +24,67 @@ permissions:
   contents: write
 
 concurrency:
-  group: custom-kernel-${{ github.ref }}
-  cancel-in-progress: true
+  group: custom-kernel-release
+  cancel-in-progress: false
 
 env:
-  SINGBOX_KERNEL_VERSION: 1.13.15
   SINGBOX_KERNEL_REVISION: 1
 
 jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      revision: ${{ steps.metadata.outputs.revision }}
+      release_tag: ${{ steps.metadata.outputs.release_tag }}
+      should_build: ${{ steps.metadata.outputs.should_build }}
+    steps:
+      - name: Resolve upstream stable version
+        id: metadata
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$REQUESTED_VERSION"
+          if [ -z "$version" ]; then
+            version=$(curl -fsSL --retry 3 \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              https://api.github.com/repos/SagerNet/sing-box/releases/latest \
+              | jq -r '.tag_name // empty' | sed 's/^v//')
+          fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid sing-box version: $version" >&2
+            exit 1
+          fi
+          release=$(curl -fsSL --retry 3 \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/SagerNet/sing-box/releases/tags/v${version}")
+          if [ "$(jq -r '.draft or .prerelease' <<< "$release")" != false ]; then
+            echo "sing-box v${version} is not a stable release" >&2
+            exit 1
+          fi
+          should_build=true
+          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+            current=$(curl -fsSL --retry 2 \
+              "https://github.com/${GITHUB_REPOSITORY}/releases/download/kernel-stable/kernel-manifest.json" \
+              2>/dev/null || true)
+            current_version=$(jq -r '.singbox_version // empty' <<< "$current" 2>/dev/null || true)
+            current_revision=$(jq -r '.kernel_revision // empty' <<< "$current" 2>/dev/null || true)
+            if [ "$current_version" = "$version" ] && [ "$current_revision" = "$SINGBOX_KERNEL_REVISION" ]; then
+              should_build=false
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "revision=$SINGBOX_KERNEL_REVISION" >> "$GITHUB_OUTPUT"
+          echo "release_tag=kernel-v${version}-r${SINGBOX_KERNEL_REVISION}" >> "$GITHUB_OUTPUT"
+          echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
+          echo "Resolved sing-box v${version}, kernel revision r${SINGBOX_KERNEL_REVISION}"
+
   build:
+    needs: resolve
+    if: needs.resolve.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     strategy:
@@ -58,7 +117,7 @@ jobs:
           bash -n scripts/build_custom_kernel_artifact.sh
       - name: Build project kernel
         env:
-          SINGBOX_BUILD_VERSION: ${{ env.SINGBOX_KERNEL_VERSION }}
+          SINGBOX_BUILD_VERSION: ${{ needs.resolve.outputs.version }}
           SINGBOX_BUILD_GOOS: linux
           SINGBOX_BUILD_GOARCH: ${{ matrix.goarch }}
           SINGBOX_BUILD_GOARM: ${{ matrix.goarm }}
@@ -66,7 +125,7 @@ jobs:
         run: bash scripts/build_custom_kernel_artifact.sh
       - name: Package kernel
         env:
-          ASSET_NAME: s-singbox-kernel-v${{ env.SINGBOX_KERNEL_VERSION }}-r${{ env.SINGBOX_KERNEL_REVISION }}-linux-${{ matrix.asset_arch }}.tar.gz
+          ASSET_NAME: s-singbox-kernel-v${{ needs.resolve.outputs.version }}-r${{ needs.resolve.outputs.revision }}-linux-${{ matrix.asset_arch }}.tar.gz
         run: |
           mkdir -p dist
           tar -C "${{ runner.temp }}/package" -czf "dist/${ASSET_NAME}" sing-box
@@ -79,7 +138,10 @@ jobs:
           retention-days: 7
 
   validate:
-    needs: build
+    needs:
+      - resolve
+      - build
+    if: needs.resolve.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -98,14 +160,18 @@ jobs:
       - name: Validate preflight and runtime behavior
         env:
           SINGBOX_VALIDATION_BIN: ${{ runner.temp }}/bin/sing-box
+          SINGBOX_EXPECTED_VERSION: ${{ needs.resolve.outputs.version }}
         run: |
+          "${SINGBOX_VALIDATION_BIN}" version | grep -q "sing-box version ${SINGBOX_EXPECTED_VERSION}"
           bash scripts/validate_kernel_preflight.sh
           bash scripts/validate_all.sh
 
   release:
     needs:
+      - resolve
       - build
       - validate
+    if: needs.resolve.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Download all kernel artifacts
@@ -114,26 +180,68 @@ jobs:
           pattern: kernel-*
           path: dist
           merge-multiple: true
-      - name: Generate checksums
+      - name: Generate checksums and stable manifest
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          REVISION: ${{ needs.resolve.outputs.revision }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
         run: |
           cd dist
           sha256sum *.tar.gz > SHA256SUMS
-          cat SHA256SUMS
-      - name: Publish rolling kernel release
+          assets='{}'
+          for arch in amd64 arm64 armv7 armv6; do
+            name="s-singbox-kernel-v${VERSION}-r${REVISION}-linux-${arch}.tar.gz"
+            sha=$(awk -v file="$name" '$2 == file {print $1; exit}' SHA256SUMS)
+            if ! [[ "$sha" =~ ^[a-f0-9]{64}$ ]]; then
+              echo "Missing checksum for $name" >&2
+              exit 1
+            fi
+            assets=$(jq --arg arch "$arch" --arg name "$name" --arg sha "$sha" \
+              '. + {($arch):{name:$name,sha256:$sha}}' <<< "$assets")
+          done
+          jq -n \
+            --arg version "$VERSION" \
+            --arg revision "$REVISION" \
+            --arg tag "$RELEASE_TAG" \
+            --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson assets "$assets" \
+            '{schema:1,singbox_version:$version,kernel_revision:$revision,release_tag:$tag,generated_at:$generated_at,assets:$assets}' \
+            > kernel-manifest.json
+          jq . kernel-manifest.json
+      - name: Publish versioned and stable releases
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: kernel-v${{ env.SINGBOX_KERNEL_VERSION }}-r${{ env.SINGBOX_KERNEL_REVISION }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+          REVISION: ${{ needs.resolve.outputs.revision }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+          STABLE_TAG: kernel-stable
         run: |
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-              --title "s-singbox kernel v${SINGBOX_KERNEL_VERSION} r${SINGBOX_KERNEL_REVISION}" \
-              --notes "Prebuilt s-singbox project kernel with traffic and realtime online-user support." \
+              --title "s-singbox kernel v${VERSION} r${REVISION}" \
+              --notes "Prebuilt project kernel with traffic and realtime online-user support." \
               --prerelease
           else
             gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
-              --title "s-singbox kernel v${SINGBOX_KERNEL_VERSION} r${SINGBOX_KERNEL_REVISION}" \
-              --notes "Prebuilt s-singbox project kernel with traffic and realtime online-user support." \
+              --title "s-singbox kernel v${VERSION} r${REVISION}" \
+              --notes "Prebuilt project kernel with traffic and realtime online-user support." \
               --prerelease
           fi
-          gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/SHA256SUMS dist/kernel-manifest.json \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+          if gh release view "$STABLE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$STABLE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "s-singbox verified stable kernel" \
+              --notes "Current verified kernel: sing-box v${VERSION} r${REVISION}." \
+              --prerelease
+          else
+            gh release create "$STABLE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "s-singbox verified stable kernel" \
+              --notes "Current verified kernel: sing-box v${VERSION} r${REVISION}." \
+              --prerelease
+          fi
+          gh release upload "$STABLE_TAG" dist/kernel-manifest.json \
+            --repo "$GITHUB_REPOSITORY" --clobber

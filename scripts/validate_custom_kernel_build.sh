@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-VERSION=${SINGBOX_BUILD_TEST_VERSION:-1.13.15}
+VERSION=${SINGBOX_BUILD_TEST_VERSION:?SINGBOX_BUILD_TEST_VERSION is required}
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 

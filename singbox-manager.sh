@@ -38,10 +38,10 @@ readonly SUBSCRIPTION_DIR="${DATA_DIR}/subscriptions"
 # 优先使用系统中实际安装的位置，而不是固定路径
 if command -v sing-box &>/dev/null; then
     # sing-box 已安装，获取实际路径
-    readonly SINGBOX_BIN="$(command -v sing-box)"
+    SINGBOX_BIN="$(command -v sing-box)"
 else
     # 未安装，使用默认路径（用于安装过程）
-    readonly SINGBOX_BIN="/usr/local/bin/sing-box"
+    SINGBOX_BIN="/usr/local/bin/sing-box"
 fi
 
 # 日志配置

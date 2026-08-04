@@ -9,7 +9,7 @@
 
 ## 🎯 核心特性
 
-**一键搭建、校验并管理适配 sing-box 1.13.15 稳定版的代理节点。**
+**一键搭建、校验并管理适配 sing-box 官方稳定版的代理节点。**
 
 > TLS 必选协议（Trojan、Hysteria2、TUIC、Naive、AnyTLS）必须提供有效证书，或由脚本生成自签名证书。
 
@@ -30,7 +30,7 @@
 - **Hysteria v1** - QUIC 高性能经典协议
 - **ShadowTLS v3** - TLS 流量伪装协议
 
-> Snell 入站仅存在于 sing-box 1.14 测试版本，未纳入当前 1.13.15 稳定版节点菜单；Snell v4/v6 出站仍按稳定内核能力保留。
+> Snell 入站仅存在于 sing-box 1.14 测试版本，未纳入当前稳定版节点菜单；Snell v4/v6 出站仍按稳定内核能力保留。
 
 **默认内核出站协议与策略**（19 类）：HTTP、SOCKS、VLESS、VMess、Trojan、Shadowsocks、Hysteria v1、Hysteria2、TUIC、AnyTLS、ShadowTLS、SSH、Snell v4/v6、Tor、WireGuard Endpoint、Selector、URLTest、Direct、Block
 
@@ -67,6 +67,7 @@ WireGuard 按 sing-box 1.11+ 的新结构保存到顶层 `endpoints`，Selector/
 
 - 默认下载 GitHub Actions 预编译并经 SHA256 校验的项目内核，节点创建过程不会临时触发编译
 - 提供 AMD64、ARM64、ARMv7 和 ARMv6 构建；没有匹配产物时才询问是否本地编译
+- CI 每 6 小时检查官方最新稳定版；仅在版本变化时构建，回归测试成功后才更新项目稳定内核清单，服务器无需随版本修改脚本
 - Clash API 连接数据增加认证用户字段，用于实时在线用户与节点连接统计
 - 内核或实时 API 暂不可用时显示“数据不可用”，不会错误显示为 `0`
 - 发布流水线从官方 `SagerNet/sing-box` 对应版本标签构建

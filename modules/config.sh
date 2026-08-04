@@ -69,7 +69,7 @@ restore_port_hopping_rules_from_nodes_file() {
     declare -f apply_port_hopping_rules >/dev/null 2>&1 || return 1
     while IFS='|' read -r port port_hopping; do
         [[ -n "$port" && -n "$port_hopping" ]] || continue
-        apply_port_hopping_rules "$port" "$port_hopping" || return 1
+        apply_port_hopping_rules "$port" "$port_hopping" false || return 1
     done < <(jq -r '.nodes[] | select(.protocol == "hysteria2") | select(.extra.port_hopping != null and .extra.port_hopping != "") | "\(.port)|\(.extra.port_hopping)"' "$nodes_source" 2>/dev/null)
 }
 

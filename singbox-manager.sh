@@ -1121,6 +1121,11 @@ main() {
         init_data_dir
     fi
 
+    if [[ "$run_mode" == "--restore-port-hopping" ]]; then
+        restore_port_hopping_rules_from_nodes_file "$NODES_FILE"
+        return $?
+    fi
+
     # 初始化默认admin用户
     init_admin_user
 

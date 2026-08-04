@@ -98,7 +98,7 @@ print_info "检查并安装必要依赖..."
 
 case $OS in
     ubuntu|debian)
-        DEPS="curl:curl wget:wget unzip:unzip jq:jq git:git openssl:openssl update-ca-certificates:ca-certificates tar:tar gzip:gzip sha256sum:coreutils flock:util-linux"
+        DEPS="curl:curl wget:wget unzip:unzip jq:jq git:git openssl:openssl update-ca-certificates:ca-certificates tar:tar gzip:gzip sha256sum:coreutils flock:util-linux python3:python3 iptables:iptables"
         missing_deps=()
 
         for entry in $DEPS; do
@@ -132,7 +132,7 @@ case $OS in
         fi
         ;;
     centos|rhel|fedora)
-        DEPS="curl:curl wget:wget unzip:unzip jq:jq git:git openssl:openssl update-ca-trust:ca-certificates tar:tar gzip:gzip sha256sum:coreutils flock:util-linux"
+        DEPS="curl:curl wget:wget unzip:unzip jq:jq git:git openssl:openssl update-ca-trust:ca-certificates tar:tar gzip:gzip sha256sum:coreutils flock:util-linux python3:python3 iptables:iptables-services"
         missing_deps=()
 
         for entry in $DEPS; do
@@ -160,7 +160,7 @@ case $OS in
         fi
         ;;
     arch|manjaro)
-        DEPS="curl:curl wget:wget unzip:unzip jq:jq git:git openssl:openssl update-ca-trust:ca-certificates tar:tar gzip:gzip sha256sum:coreutils flock:util-linux"
+        DEPS="curl:curl wget:wget unzip:unzip jq:jq git:git openssl:openssl update-ca-trust:ca-certificates tar:tar gzip:gzip sha256sum:coreutils flock:util-linux python3:python iptables:iptables"
         missing_deps=()
         for entry in $DEPS; do
             cmd=${entry%%:*}

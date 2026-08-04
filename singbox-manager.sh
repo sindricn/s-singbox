@@ -21,7 +21,7 @@ GRAY='\033[0;90m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
-readonly APP_VERSION="1.1.0"
+readonly APP_VERSION="1.1.1"
 
 # 全局变量（使用官方标准路径）
 # 官方标准路径参考: https://sing-box.sagernet.org/

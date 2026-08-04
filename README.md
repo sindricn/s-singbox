@@ -3,7 +3,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Shell](https://img.shields.io/badge/shell-bash-green.svg)](https://www.gnu.org/software/bash/)
 [![sing-box](https://img.shields.io/badge/sing--box-compatible-orange.svg)](https://sing-box.sagernet.org/)
-[![Version](https://img.shields.io/badge/version-V1.1.0-brightgreen.svg)](https://github.com/sindricn/s-singbox)
+[![Version](https://img.shields.io/badge/version-V1.1.1-brightgreen.svg)](https://github.com/sindricn/s-singbox)
 
 基于 sing-box 的开源代理服务管理脚本，提供完整的协议支持和用户管理能力。
 
@@ -190,6 +190,21 @@ bash scripts/validate_all.sh
 
 ## 📜 更新日志
 
+### V1.1.1 (2026-08-04)
+
+本次版本重点完善实时连接监控和 sing-box 内核自动更新能力。
+
+- 新增实时在线用户、节点在线用户及活动连接统计
+- 默认下载 AMD64、ARM64、ARMv7、ARMv6 预编译内核，避免服务器现场长时间编译
+- 自动跟踪官方最新稳定版，构建与回归测试通过后滚动发布
+- 增强内核清单、SHA256 校验、版本检查、服务启动及失败回滚
+- 监控能力与节点创建解耦，数据不可用时不再错误显示为 `0`
+- 修复内核安装路径与 systemd 实际执行路径不一致的问题
+
+**已知问题：**
+
+- 用户流量累计统计仍在持续完善中。
+
 ### V1.1.0 (2026-07-31)
 
 本次版本全面适配 sing-box 1.13.15 稳定版，重点提升节点可用性、订阅兼容性和管理稳定性。
@@ -197,15 +212,14 @@ bash scripts/validate_all.sh
 - 完善 13 种入站协议及常用出站协议支持
 - 修复 VLESS Reality、TUIC 等节点连接问题
 - Clash 与 sing-box 订阅新增自动测速选择
-- 新增实时在线用户与节点活动连接统计
-- 流量统计与节点创建解耦，监控异常不再影响节点使用
+- 流量统计改为可选增强功能，不再影响节点创建
 - 完善服务器域名、节点连接地址和 Cloudflare 隧道逻辑
 - 增强配置检查、服务健康检查及失败自动回滚
-- 默认内核改为多架构预编译下载，并保留校验、回滚和手动本地构建兜底
+- 完善定制内核构建、进度提示和异常处理
 
 **已知问题：**
 
-- 用户流量累计统计仍在持续完善中。
+- 用户在线状态和流量累计统计暂时不可用，将在后续版本修复。
 
 ### V1.0.0 (2025-11-25)
 

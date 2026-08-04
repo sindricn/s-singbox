@@ -25,7 +25,7 @@ if grep -RInE 'local[[:space:]]+[A-Za-z_][A-Za-z0-9_]*=\$\(read_menu_choice|loca
     exit 1
 fi
 
-grep -q 'readonly APP_VERSION="1.1.0"' "$ROOT_DIR/singbox-manager.sh"
+grep -q 'readonly APP_VERSION="1.1.1"' "$ROOT_DIR/singbox-manager.sh"
 ! grep -qE 'V1\.0\.0|V2\.0\.0|get_online_users_count' "$ROOT_DIR/singbox-manager.sh"
 grep -q 'get_realtime_online_users_count' "$ROOT_DIR/singbox-manager.sh"
 grep -q '在线用户' "$ROOT_DIR/singbox-manager.sh"

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-VERSION=${SINGBOX_BUILD_TEST_VERSION:-1.13.15}
+VERSION=${SINGBOX_BUILD_TEST_VERSION:?SINGBOX_BUILD_TEST_VERSION is required}
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
@@ -27,15 +27,21 @@ TAGS_FILE="$TMP_DIR/source/release/DEFAULT_BUILD_TAGS_OTHERS"
     exit 1
 }
 TAGS=$(normalize_singbox_build_tags "$TAGS_FILE" 'with_naive_outbound')
-[[ "$TAGS" == *with_v2ray_api* && "$TAGS" != *with_naive_outbound* && "$TAGS" != *' '* ]]
+[[ "$TAGS" == *with_v2ray_api* && "$TAGS" == *with_clash_api* && "$TAGS" != *with_naive_outbound* && "$TAGS" != *' '* ]]
 
-LDFLAGS=$(tr '\n' ' ' < "$TMP_DIR/source/release/LDFLAGS")
+apply_clash_api_user_patch "$TMP_DIR/source"
+grep -q '"inboundUser"' "$TMP_DIR/source/experimental/clashapi/trafficontrol/tracker.go"
+(cd "$TMP_DIR/source" && "$(command -v go)" fmt ./experimental/clashapi/trafficontrol >/dev/null)
+
+LDFLAGS=$(compose_singbox_build_ldflags "$TMP_DIR/source" "$VERSION")
 echo "执行真实 Linux 编译，标签: $TAGS"
 run_singbox_go_build "$TMP_DIR/source" "$(command -v go)" "$TAGS" "$LDFLAGS" "$TMP_DIR/sing-box"
 
 VERSION_OUTPUT=$($TMP_DIR/sing-box version)
 echo "$VERSION_OUTPUT"
+grep -q "sing-box version ${VERSION}" <<< "$VERSION_OUTPUT"
 grep -q 'with_v2ray_api' <<< "$VERSION_OUTPUT"
+grep -q 'with_clash_api' <<< "$VERSION_OUTPUT"
 if [[ -n "${SINGBOX_BUILD_TEST_OUTPUT:-}" ]]; then
     install -m 0755 "$TMP_DIR/sing-box" "$SINGBOX_BUILD_TEST_OUTPUT"
 fi

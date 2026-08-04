@@ -95,9 +95,13 @@ list_global_users() {
         return 0
     fi
 
+    if declare -f refresh_connection_snapshot >/dev/null 2>&1; then
+        refresh_connection_snapshot || CONNECTION_SNAPSHOT_JSON=""
+    fi
+
     echo -e "${CYAN}╔════════════════════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
     # 表头：镂空设计，移除右边框
-    echo -e "${CYAN}║${NC} 用户名      密码              邮箱                  UUID                                  状态    最近活跃"
+    echo -e "${CYAN}║${NC} 用户名      密码              邮箱                  UUID                                  状态    在线状态"
     echo -e "${CYAN}╠════════════════════════════════════════════════════════════════════════════════════════════════════════════╣${NC}"
 
     while IFS= read -r user; do
@@ -142,36 +146,25 @@ list_global_users() {
         if [[ "$enabled" == "true" ]]; then
             local port=$(get_user_first_port "$uuid")
             if [[ -n "$port" ]]; then
-                # 从配置文件中获取实际使用的email(可能与用户文件中的不同)
-                local config_email=$(get_user_email_from_config "$uuid")
-                if [[ -n "$config_email" && "$config_email" != "null" ]]; then
-                    local user_status=$(get_user_online_status "$uuid" "$port")
-                    case $user_status in
-                        online)
-                            online_text="刚活跃"
-                            online_display="${GREEN}刚活跃${NC}"
-                            ;;
-                        offline)
-                            online_text="不活跃"
-                            online_display="${YELLOW}不活跃${NC}"
-                            ;;
-                        never)
-                            online_text="未使用"
-                            online_display="${GRAY}未使用${NC}"
-                            ;;
-                        unavailable)
-                            online_text="不可用"
-                            online_display="${GRAY}不可用${NC}"
-                            ;;
-                        *)
-                            online_text="未知"
-                            online_display="${GRAY}未知${NC}"
-                            ;;
-                    esac
-                else
-                    online_text="不活跃"
-                    online_display="${GRAY}不活跃${NC}"
-                fi
+                local user_status=$(get_user_online_status "$uuid")
+                case $user_status in
+                    online)
+                        online_text="在线"
+                        online_display="${GREEN}在线${NC}"
+                        ;;
+                    offline)
+                        online_text="离线"
+                        online_display="${YELLOW}离线${NC}"
+                        ;;
+                    unavailable)
+                        online_text="不可用"
+                        online_display="${GRAY}不可用${NC}"
+                        ;;
+                    *)
+                        online_text="未知"
+                        online_display="${GRAY}未知${NC}"
+                        ;;
+                esac
             else
                 online_text="未绑定"
                 online_display="${GRAY}未绑定${NC}"
@@ -348,11 +341,11 @@ show_user_detail() {
     local traffic_limit=$(echo "$user" | jq -r '.traffic_limit_gb // "unlimited"')
     local expire_date=$(echo "$user" | jq -r '.expire_date // "unlimited"')
 
-    # 实时更新流量使用情况；普通官方内核不提供 Stats API。
+    # 实时更新流量使用情况；缺少 Stats API 时明确显示不可用。
     local traffic_used
     if declare -f singbox_has_stats_capability >/dev/null 2>&1 \
         && ! singbox_has_stats_capability; then
-        traffic_used="不可用（普通内核）"
+        traffic_used="数据不可用"
     else
         echo -e "${GRAY}正在获取实时流量统计...${NC}"
         local updated_gb
@@ -715,128 +708,6 @@ update_user_level() {
 # 用户在线状态检测
 #================================================================
 
-# 检查用户是否有流量记录
-check_user_has_traffic() {
-    local email=$1
-    local api_addr="127.0.0.1:10085"
-    local singbox_bin="$(command -v sing-box 2>/dev/null || echo /usr/local/bin/sing-box)"
-
-    # 检查 API 端口是否在监听
-    if ! ss -lnt 2>/dev/null | grep -q ":10085 " && ! netstat -lnt 2>/dev/null | grep -q ":10085 "; then
-        echo "unknown"
-        return
-    fi
-
-    # 检查 sing-box 命令是否可用
-    if [[ ! -x "$singbox_bin" ]]; then
-        echo "unknown"
-        return
-    fi
-
-    # 查询流量（使用 -pattern 参数返回 JSON，然后用 jq 解析）
-    local stats_json=$($singbox_bin api statsquery --server=$api_addr -pattern "user>>>${email}>>>traffic" 2>/dev/null)
-
-    # 从 JSON 中提取上行流量
-    local uplink=$(echo "$stats_json" | jq -r ".stat[]? | select(.name == \"user>>>${email}>>>traffic>>>uplink\") | .value // 0" 2>/dev/null)
-    uplink=${uplink:-0}
-    # 确保是数字
-    [[ ! "$uplink" =~ ^[0-9]+$ ]] && uplink=0
-
-    # 从 JSON 中提取下行流量
-    local downlink=$(echo "$stats_json" | jq -r ".stat[]? | select(.name == \"user>>>${email}>>>traffic>>>downlink\") | .value // 0" 2>/dev/null)
-    downlink=${downlink:-0}
-    # 确保是数字
-    [[ ! "$downlink" =~ ^[0-9]+$ ]] && downlink=0
-
-    # 检查是否有流量数据
-    if [[ "$uplink" -gt 0 ]] || [[ "$downlink" -gt 0 ]]; then
-        echo "yes"
-        return
-    fi
-
-    echo "no"
-}
-
-# 检查端口是否有活跃连接
-check_port_has_connections() {
-    local port=$1
-
-    # 使用 ss 或 netstat 检查
-    if command -v ss &>/dev/null; then
-        # ss 显示 ESTAB 而不是 ESTABLISHED
-        # 使用空格确保端口号完全匹配(避免443匹配到4430)
-        if ss -tn 2>/dev/null | grep -q "ESTAB.*:${port} "; then
-            echo "yes"
-            return
-        fi
-    elif command -v netstat &>/dev/null; then
-        # netstat 显示 ESTABLISHED
-        if netstat -tn 2>/dev/null | grep -q ":${port}.*ESTABLISHED"; then
-            echo "yes"
-            return
-        fi
-    fi
-
-    echo "no"
-}
-
-# 获取用户最近活跃状态。sing-box Stats API 不提供精确在线连接数，
-# 因此以流量账本最近一次变化时间作为可验证的活跃信号。
-get_user_recent_activity_status() {
-    local uuid=$1
-    local active_window="${USER_ACTIVE_WINDOW_SECONDS:-180}"
-    local state_file="${TRAFFIC_COUNTERS_FILE:-${DATA_DIR}/traffic_counters.json}"
-    local last_change total_bytes last_epoch now_epoch age
-
-    if declare -f singbox_has_stats_capability >/dev/null 2>&1 \
-        && ! singbox_has_stats_capability; then
-        echo "unavailable"
-        return 0
-    fi
-
-    [[ "$active_window" =~ ^[0-9]+$ && "$active_window" -ge 30 ]] || active_window=180
-
-    if ! update_user_traffic_usage "$uuid" >/dev/null 2>&1; then
-        echo "unknown"
-        return
-    fi
-    [[ -f "$state_file" ]] || { echo "unknown"; return; }
-
-    total_bytes=$(jq -r --arg id "$uuid" '.users[$id].total_bytes // 0' "$state_file" 2>/dev/null)
-    last_change=$(jq -r --arg id "$uuid" '.users[$id].last_change // empty' "$state_file" 2>/dev/null)
-    [[ "$total_bytes" =~ ^[0-9]+$ ]] || { echo "unknown"; return; }
-    if [[ "$total_bytes" -eq 0 ]]; then
-        echo "never"
-        return
-    fi
-    [[ -n "$last_change" ]] || { echo "offline"; return; }
-
-    last_epoch=$(date -d "$last_change" +%s 2>/dev/null) || { echo "unknown"; return; }
-    now_epoch=$(date +%s)
-    age=$((now_epoch - last_epoch))
-    if [[ "$age" -ge 0 && "$age" -le "$active_window" ]]; then
-        echo "online"
-    else
-        echo "offline"
-    fi
-}
-
-# 兼容旧调用名称；返回值含义为最近活跃，而非精确在线会话。
-get_user_online_status() {
-    local uuid=$1
-    get_user_recent_activity_status "$uuid"
-}
-
-# 检测用户在所有绑定端口上的在线状态，返回"状态:端口"
-get_user_online_status_with_port() {
-    local email=$1
-    local uuid=$2
-    local status first_port
-    status=$(get_user_recent_activity_status "$uuid")
-    first_port=$(get_user_all_ports "$uuid" | head -n1)
-    echo "${status}:${first_port}"
-}
-
 # 获取用户绑定的第一个节点端口
 get_user_first_port() {
     local uuid=$1
@@ -977,7 +848,7 @@ update_all_users_traffic() {
     if declare -f singbox_has_stats_capability >/dev/null 2>&1 \
         && ! singbox_has_stats_capability; then
         print_warning "当前内核未启用 with_v2ray_api，无法更新用户流量统计"
-        print_info "节点创建与代理功能不受影响；可在 sing-box 管理中手动安装定制内核"
+        print_info "节点创建与代理功能不受影响；可在 sing-box 管理中更新/修复内核"
         return 0
     fi
 
@@ -1187,129 +1058,6 @@ check_all_user_limits() {
 
     echo -e "${CYAN}═══════════════════════════════════════${NC}"
     echo -e "${GREEN}提示: 用户状态已写入数据文件，并通过配置重载或服务重启生效${NC}"
-}
-
-# 查看最近活跃用户
-show_online_users() {
-    local debug_mode=${1:-false}  # 可选的调试模式参数
-
-    clear
-    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${NC}      最近活跃用户列表"
-    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
-    echo ""
-
-    # 获取所有用户
-    if [[ ! -f "$USERS_FILE" ]]; then
-        print_warning "用户文件不存在"
-        return 1
-    fi
-
-    local total_users=$(jq '.users | length' "$USERS_FILE" 2>/dev/null)
-    if [[ "$total_users" -eq 0 ]]; then
-        print_warning "没有用户"
-        return 0
-    fi
-
-    if declare -f singbox_has_stats_capability >/dev/null 2>&1 \
-        && ! singbox_has_stats_capability; then
-        print_warning "当前内核未启用 with_v2ray_api，最近活跃状态不可用"
-        print_info "节点创建与代理功能不受影响；此列表不会把用户误报为离线或零流量"
-        return 0
-    fi
-
-    local online_count=0
-    local checked_count=0
-
-    if [[ "$debug_mode" == "true" ]]; then
-        echo -e "${YELLOW}=== 调试模式 ===${NC}"
-        echo ""
-    fi
-
-    echo -e "${CYAN}╔═════════════════════════════════════════════════════════════════════════════╗${NC}"
-    printf "${CYAN}║${NC} %-15s %-20s %-10s %-20s %-12s\n" "用户名" "邮箱" "绑定端口" "流量统计" "活跃状态"
-    echo -e "${CYAN}╠═════════════════════════════════════════════════════════════════════════════╣${NC}"
-
-    while IFS= read -r user; do
-        local username=$(echo "$user" | jq -r '.username')
-        local email=$(echo "$user" | jq -r '.email')
-        local uuid=$(echo "$user" | jq -r '.id')
-        local enabled=$(echo "$user" | jq -r '.enabled // true')
-
-        ((checked_count++))
-
-        if [[ "$debug_mode" == "true" ]]; then
-            echo "  UUID: $uuid"
-            echo "  Enabled: $enabled"
-        fi
-
-        # 只显示启用的用户
-        if [[ "$enabled" != "true" ]]; then
-            [[ "$debug_mode" == "true" ]] && echo "  ${GRAY}跳过: 用户未启用${NC}"
-            continue
-        fi
-
-        # 检查用户是否有绑定的端口
-        local all_ports=$(get_user_all_ports "$uuid")
-        if [[ "$debug_mode" == "true" ]]; then
-            echo "  绑定端口: ${all_ports:-未绑定}"
-        fi
-
-        if [[ -z "$all_ports" ]]; then
-            [[ "$debug_mode" == "true" ]] && echo "  ${GRAY}跳过: 未绑定节点${NC}"
-            continue
-        fi
-
-        # 从配置文件中获取实际使用的email
-        local config_email=$(get_user_email_from_config "$uuid")
-        if [[ "$debug_mode" == "true" ]]; then
-            echo "  配置Email: ${config_email:-未找到}"
-        fi
-
-        if [[ -z "$config_email" || "$config_email" == "null" ]]; then
-            [[ "$debug_mode" == "true" ]] && echo "  ${GRAY}跳过: 配置中无Email${NC}"
-            continue
-        fi
-
-        # 检测最近流量活跃状态；Stats API 无法提供精确的用户连接会话。
-        local status_port=$(get_user_online_status_with_port "$config_email" "$uuid")
-        local status=$(echo "$status_port" | cut -d: -f1)
-        local active_port=$(echo "$status_port" | cut -d: -f2)
-
-        if [[ "$debug_mode" == "true" ]]; then
-            echo "  活跃状态: $status"
-            echo "  绑定端口: ${active_port:-无}"
-        fi
-
-        # 只显示在线或可能在线的用户
-        if [[ "$status" == "online" ]]; then
-            ((online_count++))
-
-            # 获取流量统计
-            local traffic=$(get_user_traffic_summary "$config_email")
-
-            # 截断显示
-            local short_username="${username:0:15}"
-            local short_email="${email:0:20}"
-            local short_traffic="${traffic:0:20}"
-
-            printf "${CYAN}║${NC} %-15s %-20s %-10s %-20s ${GREEN}%-12s${NC}\n" \
-                "$short_username" "$short_email" "$active_port" "$short_traffic" "刚活跃"
-
-            [[ "$debug_mode" == "true" ]] && echo "  ${GREEN}✅ 最近有流量变化 (绑定端口: $active_port)${NC}"
-        else
-            [[ "$debug_mode" == "true" ]] && echo "  ${GRAY}未显示: status=$status${NC}"
-        fi
-    done < <(jq -c '.users[]' "$USERS_FILE" 2>/dev/null)
-
-    echo -e "${CYAN}╚═════════════════════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e "${CYAN}最近活跃用户数: ${GREEN}${online_count}${NC}${GRAY} / 已检查: $checked_count${NC}"
-
-    if [[ "$debug_mode" == "true" ]]; then
-        echo ""
-        echo -e "${YELLOW}提示: 要使用调试模式,请运行: show_online_users true${NC}"
-    fi
 }
 
 # ============================================================================
@@ -2005,5 +1753,3 @@ delete_users_batch() {
         rollback_data_transaction
     fi
 }
-
-

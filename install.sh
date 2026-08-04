@@ -8,9 +8,10 @@
 set -e
 umask 077
 
-# 当前安装入口所属分支。dev/install.sh 必须默认安装 dev，避免在线执行时
-# 因无法从进程替换文件描述符反推出 curl URL 而错误回退到 main。
-DEFAULT_BRANCH="dev"
+# 当前安装入口所属分支。main/install.sh 必须默认安装 main，避免在线执行时
+# 因无法从进程替换文件描述符反推出 curl URL 而选择错误分支。
+DEFAULT_BRANCH="main"
+PROJECT_KERNEL_REVISION="1"
 
 # 在后续给 BRANCH 赋值前保留调用方显式传入的环境变量。
 # 推荐使用 S_SINGBOX_BRANCH；同时兼容已有的 BRANCH 用法。
@@ -353,10 +354,20 @@ if [[ -d "${SCRIPT_DIR}/.git" ]]; then
     echo -e "  代码版本: ${YELLOW}${INSTALLED_BRANCH}@${INSTALLED_COMMIT}${NC}"
 fi
 echo -e "  全局命令: ${YELLOW}s-singbox${NC} / ${YELLOW}singbox-manager${NC}"
-if command -v sing-box >/dev/null 2>&1 && ! sing-box version 2>/dev/null | grep -q 'with_v2ray_api'; then
-    echo -e "  内核状态: ${YELLOW}检测到普通内核，首次创建配置时将提示自动修复${NC}"
-elif ! command -v sing-box >/dev/null 2>&1; then
-    echo -e "  内核状态: ${YELLOW}尚未安装，首次创建配置时将提示自动安装${NC}"
+if command -v sing-box >/dev/null 2>&1; then
+    KERNEL_INFO=$(sing-box version 2>/dev/null || true)
+    KERNEL_BIN=$(command -v sing-box)
+    KERNEL_METADATA="/var/lib/sing-box/project_kernel.json"
+    KERNEL_SHA=$(sha256sum "$KERNEL_BIN" 2>/dev/null | awk '{print $1}')
+    RECORDED_SHA=$(jq -r '.binary_sha256 // empty' "$KERNEL_METADATA" 2>/dev/null || true)
+    RECORDED_REVISION=$(jq -r '.kernel_revision // empty' "$KERNEL_METADATA" 2>/dev/null || true)
+    if ! grep -q 'with_v2ray_api' <<< "$KERNEL_INFO" \
+        || ! grep -q 'with_clash_api' <<< "$KERNEL_INFO" \
+        || [[ "$RECORDED_REVISION" != "$PROJECT_KERNEL_REVISION" || "$RECORDED_SHA" != "$KERNEL_SHA" ]]; then
+        echo -e "  内核状态: ${YELLOW}当前内核不符合项目默认构建，可在管理菜单中更新/修复${NC}"
+    fi
+else
+    echo -e "  内核状态: ${YELLOW}尚未安装，请在管理菜单中安装 sing-box 内核${NC}"
 fi
 echo ""
 echo -e "${CYAN}快速开始：${NC}"
@@ -369,7 +380,7 @@ echo -e "     或"
 echo -e "     ${YELLOW}${SCRIPT_DIR}/singbox-manager.sh${NC}"
 echo ""
 echo -e "  2. 首次使用建议："
-echo -e "     - 安装 sing-box 内核（官方普通内核可正常创建节点；定制内核额外提供流量统计）"
+echo -e "     - 安装项目默认的 sing-box 内核"
 echo -e "     - 添加节点"
 echo -e "     - 添加用户"
 echo -e "     - 生成订阅"

@@ -3,13 +3,13 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Shell](https://img.shields.io/badge/shell-bash-green.svg)](https://www.gnu.org/software/bash/)
 [![sing-box](https://img.shields.io/badge/sing--box-compatible-orange.svg)](https://sing-box.sagernet.org/)
-[![Version](https://img.shields.io/badge/version-V1.1.0-brightgreen.svg)](https://github.com/sindricn/s-singbox)
+[![Version](https://img.shields.io/badge/version-V1.1.1-brightgreen.svg)](https://github.com/sindricn/s-singbox)
 
 基于 sing-box 的开源代理服务管理脚本，提供完整的协议支持和用户管理能力。
 
 ## 🎯 核心特性
 
-**一键搭建、校验并管理适配 sing-box 1.13.15 稳定版的代理节点。**
+**一键搭建、校验并管理适配 sing-box 官方稳定版的代理节点。**
 
 > TLS 必选协议（Trojan、Hysteria2、TUIC、Naive、AnyTLS）必须提供有效证书，或由脚本生成自签名证书。
 
@@ -30,9 +30,9 @@
 - **Hysteria v1** - QUIC 高性能经典协议
 - **ShadowTLS v3** - TLS 流量伪装协议
 
-> Snell 入站仅存在于 sing-box 1.14 测试版本，未纳入当前 1.13.15 稳定版节点菜单；Snell v4/v6 出站仍按稳定内核能力保留。
+> Snell 入站仅存在于 sing-box 1.14 测试版本，未纳入当前稳定版节点菜单；Snell v4/v6 出站仍按稳定内核能力保留。
 
-**默认定制内核出站协议与策略**（19 类）：HTTP、SOCKS、VLESS、VMess、Trojan、Shadowsocks、Hysteria v1、Hysteria2、TUIC、AnyTLS、ShadowTLS、SSH、Snell v4/v6、Tor、WireGuard Endpoint、Selector、URLTest、Direct、Block
+**默认内核出站协议与策略**（19 类）：HTTP、SOCKS、VLESS、VMess、Trojan、Shadowsocks、Hysteria v1、Hysteria2、TUIC、AnyTLS、ShadowTLS、SSH、Snell v4/v6、Tor、WireGuard Endpoint、Selector、URLTest、Direct、Block
 
 > Naive 入站可正常使用。Naive 出站依赖上游独立 Chromium/Cronet 工具链和 `libcronet.so`，不属于官方本地构建标签集合；仅在外部内核包含 `with_naive_outbound` 时开放。
 
@@ -45,9 +45,11 @@ WireGuard 按 sing-box 1.11+ 的新结构保存到顶层 `endpoints`，Selector/
 ### 🔐 用户管理
 
 - 全局用户系统，支持多用户共享节点
-- 流量限制和到期时间设置（普通内核保留到期限制，定制内核额外执行流量限额）
+- 流量限制和到期时间设置
 - 灵活的用户-节点绑定关系
-- 可选的定制内核 V2Ray Stats API 实时流量统计
+- 实时显示当前在线用户、节点在线用户数和活动连接数
+- Clash API 仅监听本机，并使用随机密钥保护连接数据
+- V2Ray Stats API 用户流量统计
 - 使用持久化累计账本，内核重启后流量不会归零
 - systemd 定时器每分钟检查流量额度与有效期，超限用户自动停用
 
@@ -61,16 +63,18 @@ WireGuard 按 sing-box 1.11+ 的新结构保存到顶层 `endpoints`，Selector/
 - **证书策略**：仅自签名节点生成 `insecure/skip-cert-verify`，受信任证书保持严格校验
 - **连接地址策略**：需要 TLS 域名时优先检测已配置的服务器域名，展示 DNS 核对结果并由用户确认；TLS/SNI 域名与客户端实际连接地址分开保存，避免把伪装域名误当成服务器地址
 
-### 🧩 定制内核与安全更新
+### 🧩 默认内核与安全更新
 
-- 官方普通 sing-box 内核可正常创建、校验和运行全部受支持节点，不要求 `with_v2ray_api`
-- 普通内核下自动省略 Stats API 配置，仅停用用户流量统计、流量限额和最近活跃状态
-- 定制内核由用户在“sing-box 管理 → 更新/修复定制内核”中手动安装，不再由节点创建流程强制触发
-- 从官方 `SagerNet/sing-box` 对应版本标签构建
+- 默认下载 GitHub Actions 预编译并经 SHA256 校验的项目内核，节点创建过程不会临时触发编译
+- 提供 AMD64、ARM64、ARMv7 和 ARMv6 构建；没有匹配产物时才询问是否本地编译
+- CI 每 6 小时检查官方最新稳定版；仅在版本变化时构建，回归测试成功后才更新项目稳定内核清单，服务器无需随版本修改脚本
+- Clash API 连接数据增加认证用户字段，用于实时在线用户与节点连接统计
+- 内核或实时 API 暂不可用时显示“数据不可用”，不会错误显示为 `0`
+- 发布流水线从官方 `SagerNet/sing-box` 对应版本标签构建
 - 按官方 `release/local/common.sh` 使用 `release/DEFAULT_BUILD_TAGS_OTHERS` 和 `release/LDFLAGS`
 - 额外启用 `with_v2ray_api`，供用户流量统计使用
-- 自动读取目标版本 `go.mod` 的 Go/toolchain 要求；本机版本不足时下载官方稳定工具链并校验 SHA256
-- 更新前先编译候选内核并检查现有配置；启动失败自动回滚二进制
+- 仅在明确选择本地编译时读取目标版本 `go.mod` 的 Go/toolchain 要求并准备工具链
+- 更新前校验候选内核版本、能力和现有配置；启动失败自动回滚二进制
 - 配置生成采用文件锁、临时文件、`sing-box check` 和原子替换
 - 节点、用户、绑定、出站、订阅和配置使用最后可用快照；服务健康检查成功后才提交事务，异常退出会在下次启动自动恢复
 - 节点创建后会检查实际 TCP/UDP 监听，并自动同步 UFW、firewalld 或 iptables 规则；监听或本机防火墙激活失败时自动回滚
@@ -142,6 +146,7 @@ singbox-manager
   - x86_64 (AMD64)
   - ARM64 (aarch64)
   - ARMv7
+  - ARMv6
 
 - **权限要求**: root 或 sudo 权限
 
@@ -153,7 +158,7 @@ singbox-manager
   - gzip、coreutils（SHA256 校验）、util-linux（文件锁）
   - systemctl (systemd)
 
-Go 工具链由安装流程根据目标 sing-box 源码要求自动检查和准备，无需手动安装。
+正常安装直接使用预编译内核，无需 Go 工具链；仅在明确选择本地源码编译时自动检查和准备 Go。
 
 ### 标准路径
 
@@ -170,7 +175,7 @@ Go 工具链由安装流程根据目标 sing-box 源码要求自动检查和准�
 bash scripts/validate_all.sh
 ```
 
-验证项包括 Bash 语法、废弃字段/旧路径扫描、入站协议配置矩阵、出站/策略结构、WireGuard Endpoint、Selector/URLTest 依赖闭包、旧 Xray 出站迁移、绑定调用链、首次安装顺序、IPv6/隧道 URL、服务器域名与连接地址选择、TCP/UDP 实际监听、本机防火墙与端口跳跃范围、分享链接特殊字符、Clash/SingBox 协议字段、V2Ray Stats API，以及真实定制内核的 `sing-box check`。
+验证项包括 Bash 语法、废弃字段/旧路径扫描、入站协议配置矩阵、出站/策略结构、WireGuard Endpoint、Selector/URLTest 依赖闭包、旧 Xray 出站迁移、绑定调用链、首次安装顺序、IPv6/隧道 URL、服务器域名与连接地址选择、TCP/UDP 实际监听、本机防火墙与端口跳跃范围、分享链接特殊字符、Clash/SingBox 协议字段、实时连接 API、V2Ray Stats API，以及项目默认内核的 `sing-box check`。
 
 
 ## 🤝 贡献指南
@@ -184,6 +189,21 @@ bash scripts/validate_all.sh
 5. 开启 Pull Request
 
 ## 📜 更新日志
+
+### V1.1.1 (2026-08-04)
+
+本次版本重点完善实时连接监控和 sing-box 内核自动更新能力。
+
+- 新增实时在线用户、节点在线用户及活动连接统计
+- 默认下载 AMD64、ARM64、ARMv7、ARMv6 预编译内核，避免服务器现场长时间编译
+- 自动跟踪官方最新稳定版，构建与回归测试通过后滚动发布
+- 增强内核清单、SHA256 校验、版本检查、服务启动及失败回滚
+- 监控能力与节点创建解耦，数据不可用时不再错误显示为 `0`
+- 修复内核安装路径与 systemd 实际执行路径不一致的问题
+
+**已知问题：**
+
+- 用户流量累计统计仍在持续完善中。
 
 ### V1.1.0 (2026-07-31)
 

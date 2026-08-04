@@ -1,12 +1,23 @@
 #!/bin/bash
 
-# sing-box 1.13.15 stable compatibility layer.
+# sing-box stable compatibility layer.
 # The legacy filename is retained to preserve module load order and upgrade compatibility.
 
 SINGBOX_API_ADDR="${SINGBOX_API_ADDR:-127.0.0.1:10085}"
+CLASH_API_ADDR="${CLASH_API_ADDR:-127.0.0.1:9090}"
+CLASH_API_SECRET_FILE="${CLASH_API_SECRET_FILE:-${DATA_DIR}/clash_api.secret}"
+if [[ ! "$CLASH_API_ADDR" =~ ^(127\.0\.0\.1|localhost|\[::1\]):([0-9]{1,5})$ ]]; then
+    CLASH_API_ADDR="127.0.0.1:9090"
+elif (( 10#${BASH_REMATCH[2]} < 1 || 10#${BASH_REMATCH[2]} > 65535 )); then
+    CLASH_API_ADDR="127.0.0.1:9090"
+fi
 TRAFFIC_COUNTERS_FILE="${TRAFFIC_COUNTERS_FILE:-${DATA_DIR}/traffic_counters.json}"
 SINGBOX_BUILD_DIR="${SINGBOX_BUILD_DIR:-${DATA_DIR}/build}"
 SINGBOX_GO_DIR="${SINGBOX_GO_DIR:-${DATA_DIR}/toolchains/go}"
+SINGBOX_KERNEL_RELEASE_REPO="${SINGBOX_KERNEL_RELEASE_REPO:-sindricn/s-singbox}"
+SINGBOX_KERNEL_CHANNEL_TAG="${SINGBOX_KERNEL_CHANNEL_TAG:-kernel-stable}"
+SINGBOX_PROJECT_KERNEL_REVISION="${SINGBOX_PROJECT_KERNEL_REVISION:-1}"
+SINGBOX_PROJECT_KERNEL_METADATA="${SINGBOX_PROJECT_KERNEL_METADATA:-${DATA_DIR}/project_kernel.json}"
 RUNTIME_STATE_DIR="${RUNTIME_STATE_DIR:-${DATA_DIR}/.last-known-good}"
 RUNTIME_TX_DIR="${RUNTIME_TX_DIR:-${DATA_DIR}/.pending-transaction}"
 MANAGER_SCRIPT="${MANAGER_SCRIPT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/singbox-manager.sh}"
@@ -21,6 +32,41 @@ get_singbox_bin() {
     else
         printf '%s\n' "/usr/local/bin/sing-box"
     fi
+}
+
+ensure_clash_api_secret() {
+    local secret="" stored_secret="" tmp
+
+    # 当前有效配置优先，避免服务回滚后密钥文件与运行配置不一致。
+    if [[ -f "${SINGBOX_CONFIG:-}" ]]; then
+        secret=$(jq -r '.experimental.clash_api.secret // empty' "$SINGBOX_CONFIG" 2>/dev/null)
+        [[ "$secret" =~ ^[A-Za-z0-9_-]{32,128}$ ]] || secret=""
+    fi
+    if [[ -s "$CLASH_API_SECRET_FILE" ]]; then
+        stored_secret=$(tr -d '\r\n' < "$CLASH_API_SECRET_FILE")
+        [[ "$stored_secret" =~ ^[A-Za-z0-9_-]{32,128}$ ]] || stored_secret=""
+    fi
+    if [[ -z "$secret" && -n "$stored_secret" ]]; then
+        chmod 600 "$CLASH_API_SECRET_FILE" || return 1
+        printf '%s\n' "$stored_secret"
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$CLASH_API_SECRET_FILE")" || return 1
+    if [[ -n "$secret" ]]; then
+        :
+    elif command -v openssl >/dev/null 2>&1; then
+        secret=$(openssl rand -hex 24 2>/dev/null) || return 1
+    else
+        secret=$(printf '%s:%s:%s\n' "$(date +%s%N)" "$$" "$RANDOM" | sha256sum | awk '{print $1}') || return 1
+    fi
+    [[ "$secret" =~ ^[A-Za-z0-9_-]{32,128}$ ]] || return 1
+
+    tmp=$(mktemp "${CLASH_API_SECRET_FILE}.tmp.XXXXXX") || return 1
+    printf '%s\n' "$secret" > "$tmp" || { rm -f "$tmp"; return 1; }
+    chmod 600 "$tmp"
+    mv -f "$tmp" "$CLASH_API_SECRET_FILE" || { rm -f "$tmp"; return 1; }
+    printf '%s\n' "$secret"
 }
 
 get_singbox_version_number() {
@@ -46,9 +92,9 @@ warn_if_stats_capability_missing() {
     local bin
     bin=$(get_singbox_bin)
     [[ -x "$bin" ]] || return 0
-    if ! "$bin" version 2>/dev/null | grep -q 'with_v2ray_api'; then
-        print_warning "当前为官方普通 sing-box 内核：节点创建与代理功能正常"
-        print_info "用户流量统计、流量限额和最近活跃状态不可用；可在内核管理中手动安装定制内核"
+    if ! singbox_has_project_kernel_capability; then
+        print_warning "当前 sing-box 内核不符合项目默认构建"
+        print_info "节点功能正常；实时连接或流量统计可能不可用，可在内核管理中执行更新/修复"
         return 1
     fi
 }
@@ -64,6 +110,29 @@ singbox_has_stats_capability() {
     singbox_has_build_tag with_v2ray_api
 }
 
+singbox_has_connection_api_capability() {
+    singbox_has_build_tag with_clash_api
+}
+
+singbox_has_online_user_capability() {
+    local bin installed_sha recorded_sha recorded_version recorded_revision
+    bin=$(get_singbox_bin)
+    [[ -x "$bin" && -f "$SINGBOX_PROJECT_KERNEL_METADATA" ]] || return 1
+    singbox_has_stats_capability && singbox_has_connection_api_capability || return 1
+    recorded_version=$(jq -r '.singbox_version // empty' "$SINGBOX_PROJECT_KERNEL_METADATA" 2>/dev/null)
+    recorded_revision=$(jq -r '.kernel_revision // empty' "$SINGBOX_PROJECT_KERNEL_METADATA" 2>/dev/null)
+    recorded_sha=$(jq -r '.binary_sha256 // empty' "$SINGBOX_PROJECT_KERNEL_METADATA" 2>/dev/null)
+    [[ "$recorded_version" == "$(get_singbox_version_number 2>/dev/null)" ]] || return 1
+    [[ "$recorded_revision" =~ ^[1-9][0-9]*$ ]] || return 1
+    [[ "$recorded_sha" =~ ^[a-f0-9]{64}$ ]] || return 1
+    installed_sha=$(sha256sum "$bin" 2>/dev/null | awk '{print $1}')
+    [[ "$installed_sha" == "$recorded_sha" ]]
+}
+
+singbox_has_project_kernel_capability() {
+    singbox_has_online_user_capability
+}
+
 ensure_singbox_stats_capability() {
     [[ "${SINGBOX_SKIP_KERNEL_PREFLIGHT:-0}" == "1" ]] && return 0
     singbox_has_stats_capability && return 0
@@ -71,9 +140,9 @@ ensure_singbox_stats_capability() {
     local bin answer="" version start_after_install=true
     bin=$(get_singbox_bin)
     if [[ -x "$bin" ]]; then
-        print_warning "检测到普通 sing-box 内核，缺少 with_v2ray_api 流量统计能力"
+        print_warning "当前 sing-box 内核缺少项目默认的流量统计组件"
     else
-        print_warning "尚未安装 sing-box 定制内核"
+        print_warning "尚未安装 sing-box 内核"
     fi
 
     case "${SINGBOX_AUTO_REPAIR_STATS_KERNEL:-prompt}" in
@@ -81,35 +150,35 @@ ensure_singbox_stats_capability() {
         0|no|false) answer="n" ;;
         *)
             if [[ -t 0 ]]; then
-                echo -e "${YELLOW}脚本将从官方源码构建带 with_v2ray_api 的内核，首次执行可能需要数分钟。${NC}"
-                read -r -p "是否立即安装/修复定制内核并继续? [Y/n]: " answer
+                echo -e "${YELLOW}脚本将从官方源码构建项目默认内核，首次执行可能需要数分钟。${NC}"
+                read -r -p "是否立即安装/修复 sing-box 内核并继续? [Y/n]: " answer
                 answer=${answer:-y}
             else
                 print_error "非交互任务无法自动确认内核安装"
-                print_info "请运行 s-singbox，进入【sing-box 管理 → 更新/修复定制内核】"
+                print_info "请运行 s-singbox，进入【sing-box 管理 → 更新/修复 sing-box 内核】"
                 return 1
             fi
             ;;
     esac
 
     if [[ ! "$answer" =~ ^[Yy]$ ]]; then
-        print_error "当前配置需要带 with_v2ray_api 的 sing-box 定制内核"
-        print_info "可进入【sing-box 管理 → 更新/修复定制内核】后重试"
+        print_error "当前操作需要项目默认的 sing-box 内核"
+        print_info "可进入【sing-box 管理 → 更新/修复 sing-box 内核】后重试"
         return 1
     fi
 
     version=$(resolve_singbox_version stable) || {
-        print_error "无法解析最新 sing-box 稳定版本"
+        print_error "无法解析项目已验证的 sing-box 稳定版本"
         return 1
     }
-    print_info "正在自动修复 sing-box 定制内核（目标版本: v${version}）..."
+    print_info "正在自动修复 sing-box 内核（目标版本: v${version}）..."
     [[ -f "$SINGBOX_CONFIG" ]] || start_after_install=false
     build_and_install_singbox "$version" "$start_after_install" || return 1
     if ! singbox_has_stats_capability; then
-        print_error "定制内核安装后能力校验仍未通过"
+        print_error "sing-box 内核安装后能力校验仍未通过"
         return 1
     fi
-    print_success "with_v2ray_api 能力已就绪，继续原操作"
+    print_success "sing-box 内核已就绪，继续原操作"
 }
 
 atomic_write_json() {
@@ -505,7 +574,7 @@ _generate_singbox_config_114() (
         print_info "请移除该出站引用，或安装同时提供 Cronet/libcronet.so 的外部定制内核"
         return 1
     fi
-    local outbound_tags full route_rules='[]' endpoints warp_config='{}'
+    local outbound_tags full route_rules='[]' endpoints warp_config='{}' clash_api_secret=""
     endpoints="$custom_endpoints"
     outbound_tags=$(jq -n --argjson o "$custom_outbounds" --argjson e "$custom_endpoints" '([$o[].tag] + [$e[].tag] + ["direct-out"]) | unique')
     while IFS= read -r node; do
@@ -535,12 +604,25 @@ _generate_singbox_config_114() (
     full=$(jq -n --argjson inbounds "$inbounds" --argjson custom "$custom_outbounds" --argjson rules "$route_rules" --argjson endpoints "$endpoints" \
         '{log:{level:"info",timestamp:true},dns:{servers:[{type:"https",tag:"dns-remote",server:"1.1.1.1",server_port:443,path:"/dns-query",domain_resolver:"dns-local"},{type:"local",tag:"dns-local"}],final:"dns-remote"},inbounds:$inbounds,endpoints:$endpoints,outbounds:([{type:"direct",tag:"direct-out"}] + $custom),route:{default_domain_resolver:"dns-local",rules:([{protocol:"dns",action:"route",outbound:"direct-out"}] + $rules),final:"direct-out",auto_detect_interface:true}}') || return 1
 
+    if singbox_has_connection_api_capability; then
+        clash_api_secret=$(ensure_clash_api_secret) || {
+            print_warning "无法生成 Clash API 本地访问密钥：实时连接统计将暂时停用"
+            clash_api_secret=""
+        }
+        if [[ -n "$clash_api_secret" ]]; then
+            full=$(echo "$full" | jq --arg controller "$CLASH_API_ADDR" --arg secret "$clash_api_secret" \
+                '.experimental.clash_api={external_controller:$controller,secret:$secret}') || return 1
+        fi
+    else
+        print_warning "当前内核缺少 Clash API：节点配置仍将正常生成，实时连接统计暂不可用"
+    fi
+
     if singbox_has_stats_capability; then
         full=$(echo "$full" | jq --argjson in_tags "$inbound_tags" --argjson out_tags "$outbound_tags" \
             --argjson users "$active_names" --arg listen "$SINGBOX_API_ADDR" \
             '.experimental.v2ray_api={listen:$listen,stats:{enabled:true,inbounds:$in_tags,outbounds:$out_tags,users:$users}}') || return 1
     else
-        print_warning "当前为官方普通内核：节点配置将正常生成，流量统计增强功能已停用"
+        print_warning "当前内核缺少流量统计组件：节点配置仍将正常生成"
     fi
 
     local candidate bin
@@ -603,8 +685,12 @@ ensure_user_limits_timer() {
 }
 
 create_systemd_service() {
-    local bin
-    bin=$(get_singbox_bin)
+    local bin=${1:-}
+    [[ -n "$bin" ]] || bin=$(get_singbox_bin)
+    [[ -x "$bin" ]] || {
+        print_error "sing-box 服务二进制不可执行: ${bin:-empty}"
+        return 1
+    }
     mkdir -p "$(dirname "$SINGBOX_SERVICE")" "$DATA_DIR"
     local service="[Unit]
 Description=sing-box service
@@ -639,6 +725,42 @@ version_ge() {
     [[ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" == "$2" ]]
 }
 
+fetch_project_kernel_manifest() {
+    local output=${1:-} url
+    url="https://github.com/${SINGBOX_KERNEL_RELEASE_REPO}/releases/download/${SINGBOX_KERNEL_CHANNEL_TAG}/kernel-manifest.json"
+    if [[ -n "$output" ]]; then
+        curl -fsSL --retry 3 --connect-timeout 15 "$url" -o "$output" || return 1
+        jq -e '
+            .schema == 1
+            and (.singbox_version | type == "string")
+            and (.kernel_revision | type == "string")
+            and (.release_tag | type == "string")
+            and (.assets | type == "object")
+        ' "$output" >/dev/null 2>&1
+    else
+        local manifest
+        manifest=$(curl -fsSL --retry 3 --connect-timeout 15 "$url") || return 1
+        jq -e '
+            .schema == 1
+            and (.singbox_version | type == "string")
+            and (.kernel_revision | type == "string")
+            and (.release_tag | type == "string")
+            and (.assets | type == "object")
+        ' <<< "$manifest" >/dev/null 2>&1 || return 1
+        printf '%s\n' "$manifest"
+    fi
+}
+
+resolve_project_kernel_version() {
+    local manifest version revision
+    manifest=$(fetch_project_kernel_manifest) || return 1
+    version=$(jq -r '.singbox_version // empty' <<< "$manifest")
+    revision=$(jq -r '.kernel_revision // empty' <<< "$manifest")
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || return 1
+    [[ "$revision" =~ ^[1-9][0-9]*$ ]] || return 1
+    printf '%s\n' "$version"
+}
+
 resolve_singbox_version() {
     local channel=${1:-stable}
     local explicit=${2:-}
@@ -647,17 +769,17 @@ resolve_singbox_version() {
         echo "$explicit"
         return
     fi
+    if [[ "$channel" == "stable" ]]; then
+        resolve_project_kernel_version
+        return
+    fi
     local releases version auth_args=()
     [[ -n "${GITHUB_TOKEN:-}" ]] && auth_args=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
     releases=$(curl -fsSL --retry 3 --connect-timeout 15 "${auth_args[@]}" 'https://api.github.com/repos/SagerNet/sing-box/releases?per_page=30' 2>/dev/null || true)
-    if [[ "$channel" == "beta" ]]; then
-        version=$(echo "$releases" | jq -r '[.[] | select(.prerelease == true and .draft == false)][0].tag_name // empty' 2>/dev/null | sed 's/^v//')
-    else
-        version=$(echo "$releases" | jq -r '[.[] | select(.prerelease == false and .draft == false)][0].tag_name // empty' 2>/dev/null | sed 's/^v//')
-    fi
+    version=$(echo "$releases" | jq -r '[.[] | select(.prerelease == true and .draft == false)][0].tag_name // empty' 2>/dev/null | sed 's/^v//')
     if [[ -z "$version" ]]; then
         version=$(git ls-remote --tags --refs https://github.com/SagerNet/sing-box.git 'v*' 2>/dev/null | awk '{print $2}' | sed 's#refs/tags/v##' | {
-            if [[ "$channel" == beta ]]; then grep -E '[.-](alpha|beta|rc)[.-]?[0-9]+'; else grep -Ev '[.-](alpha|beta|rc)[.-]?[0-9]+'; fi
+            grep -E '[.-](alpha|beta|rc)[.-]?[0-9]+'
         } | sort -V | tail -n1)
     fi
     [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || return 1
@@ -732,7 +854,7 @@ normalize_singbox_build_tags() {
     # 官方不同版本可能使用逗号、空格或换行分隔；Go 1.25 不接受逗号与空格混用。
     raw=$(tr ',\r\n\t' '    ' < "$tags_file") || return 1
     excluded_tags=${excluded_tags//,/ }
-    for token in $raw with_v2ray_api; do
+    for token in $raw with_v2ray_api with_clash_api; do
         if [[ ! "$token" =~ ^[A-Za-z0-9_.-]+$ ]]; then
             print_error "发现非法 Go 构建标签: $token" >&2
             return 1
@@ -749,6 +871,14 @@ normalize_singbox_build_tags() {
     done
     [[ -n "$result" ]] || return 1
     printf '%s\n' "$result"
+}
+
+compose_singbox_build_ldflags() {
+    local source=$1 version=$2 base
+    [[ -f "$source/release/LDFLAGS" ]] || return 1
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || return 1
+    base=$(tr '\n' ' ' < "$source/release/LDFLAGS" | sed 's/[[:space:]]*$//') || return 1
+    printf '%s -X github.com/sagernet/sing-box/constant.Version=%s\n' "$base" "$version"
 }
 
 select_singbox_build_jobs() {
@@ -827,7 +957,192 @@ run_singbox_go_build() {
     print_success "sing-box 编译完成，用时 $((SECONDS - start_time)) 秒"
 }
 
-build_and_install_singbox() {
+apply_clash_api_user_patch() {
+    local source=$1 tracker_file
+    tracker_file="$source/experimental/clashapi/trafficontrol/tracker.go"
+    [[ -f "$tracker_file" ]] || {
+        print_error "Clash API 连接跟踪源码不存在，无法加入在线用户字段"
+        return 1
+    }
+    grep -q '"inboundUser":[[:space:]]*t.Metadata.User' "$tracker_file" && return 0
+    if grep -q '"inboundUser"' "$tracker_file"; then
+        print_error "Clash API 已存在未知的 inboundUser 实现，拒绝重复修改"
+        return 1
+    fi
+    grep -q '"processPath":[[:space:]]*processPath,' "$tracker_file" || {
+        print_error "Clash API 源码结构已变化，无法安全应用在线用户补丁"
+        return 1
+    }
+    sed -i '/"processPath":[[:space:]]*processPath,/a\            "inboundUser":     t.Metadata.User,' "$tracker_file" || return 1
+    grep -q '"inboundUser":[[:space:]]*t.Metadata.User' "$tracker_file" || {
+        print_error "在线用户字段补丁应用失败"
+        return 1
+    }
+}
+
+resolve_singbox_prebuilt_arch() {
+    case "$(uname -m)" in
+        x86_64|amd64) echo "amd64" ;;
+        aarch64|arm64) echo "arm64" ;;
+        armv7l) echo "armv7" ;;
+        armv6l) echo "armv6" ;;
+        *) return 1 ;;
+    esac
+}
+
+write_project_kernel_metadata() {
+    local bin=$1 version=$2 source_kind=${3:-unknown} revision=${4:-$SINGBOX_PROJECT_KERNEL_REVISION} binary_sha tmp
+    [[ -x "$bin" ]] || return 1
+    binary_sha=$(sha256sum "$bin" 2>/dev/null | awk '{print $1}')
+    [[ "$binary_sha" =~ ^[a-f0-9]{64}$ ]] || return 1
+    mkdir -p "$(dirname "$SINGBOX_PROJECT_KERNEL_METADATA")" || return 1
+    tmp=$(mktemp "${SINGBOX_PROJECT_KERNEL_METADATA}.tmp.XXXXXX") || return 1
+    jq -n \
+        --arg version "$version" \
+        --arg revision "$revision" \
+        --arg sha "$binary_sha" \
+        --arg source "$source_kind" \
+        --arg installed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '{singbox_version:$version,kernel_revision:$revision,binary_sha256:$sha,source:$source,features:["v2ray_api","clash_api","clash_api_inbound_user"],installed_at:$installed_at}' \
+        > "$tmp" || { rm -f "$tmp"; return 1; }
+    chmod 600 "$tmp"
+    mv -f "$tmp" "$SINGBOX_PROJECT_KERNEL_METADATA"
+}
+
+validate_project_kernel_candidate() {
+    local candidate=$1 expected_version=$2 actual_version
+    [[ -x "$candidate" ]] || return 1
+    actual_version=$("$candidate" version 2>/dev/null | sed -n 's/^sing-box version[[:space:]]\+v\?\([^[:space:]]\+\).*/\1/p' | head -1)
+    [[ "$actual_version" == "$expected_version" ]] || {
+        print_error "预编译内核版本不匹配：期望 ${expected_version}，实际 ${actual_version:-unknown}"
+        return 1
+    }
+    "$candidate" version 2>/dev/null | grep -q 'with_v2ray_api' || {
+        print_error "候选内核缺少 with_v2ray_api 构建标签"
+        return 1
+    }
+    "$candidate" version 2>/dev/null | grep -q 'with_clash_api' || {
+        print_error "候选内核缺少 with_clash_api 构建标签"
+        return 1
+    }
+    [[ ! -f "$SINGBOX_CONFIG" ]] || "$candidate" check -c "$SINGBOX_CONFIG" || {
+        print_error "候选内核无法加载当前配置"
+        return 1
+    }
+}
+
+install_prebuilt_singbox_candidate() {
+    local candidate=$1 version=$2 start_after_install=${3:-true} revision=${4:-$SINGBOX_PROJECT_KERNEL_REVISION}
+    local target backup was_active=false
+    target="${SINGBOX_INSTALL_BIN:-/usr/local/bin/sing-box}"
+    mkdir -p "$(dirname "$target")"
+    backup="${target}.backup.$(date +%Y%m%d_%H%M%S)"
+    systemctl is-active --quiet sing-box 2>/dev/null && was_active=true
+    [[ -f "$target" ]] && cp -a "$target" "$backup"
+    systemctl stop sing-box 2>/dev/null || true
+    if ! install -m 0755 "$candidate" "${target}.new" || ! mv -f "${target}.new" "$target"; then
+        if [[ -f "$backup" ]]; then cp -a "$backup" "$target"; else rm -f "$target"; fi
+        $was_active && systemctl start sing-box 2>/dev/null || true
+        return 1
+    fi
+    SINGBOX_BIN="$target"
+    if ! create_systemd_service "$target"; then
+        print_error "systemd 服务文件创建失败，正在回滚内核"
+        if [[ -f "$backup" ]]; then cp -a "$backup" "$target"; else rm -f "$target"; fi
+        $was_active && systemctl start sing-box 2>/dev/null || true
+        return 1
+    fi
+    systemctl daemon-reload
+    systemctl enable sing-box >/dev/null 2>&1 || true
+    systemctl enable --now sing-box-user-limits.timer >/dev/null 2>&1 || print_warning "用户限制定时器启用失败"
+    if [[ "$start_after_install" == true ]]; then
+        if ! systemctl restart sing-box || { sleep 2; ! systemctl is-active --quiet sing-box; }; then
+            print_error "新内核启动失败，正在自动回滚"
+            if [[ -f "$backup" ]]; then cp -a "$backup" "$target"; else rm -f "$target"; fi
+            systemctl daemon-reload
+            $was_active && systemctl restart sing-box 2>/dev/null || true
+            return 1
+        fi
+    fi
+    write_project_kernel_metadata "$target" "$version" "github-release" "$revision" || {
+        print_error "项目内核标识写入失败，正在回滚内核"
+        systemctl stop sing-box 2>/dev/null || true
+        if [[ -f "$backup" ]]; then cp -a "$backup" "$target"; else rm -f "$target"; fi
+        $was_active && systemctl restart sing-box 2>/dev/null || true
+        return 1
+    }
+    printf '%s\n' "$version" > "${DATA_DIR}/installed_version"
+    chmod 600 "${DATA_DIR}/installed_version"
+    print_success "sing-box v${version} 项目内核安装成功"
+}
+
+download_and_install_prebuilt_singbox() {
+    local version=$1 start_after_install=${2:-true}
+    local arch tag asset expected_tag expected_asset base_url work archive manifest expected candidate entries manifest_version manifest_revision
+    mkdir -p "$SINGBOX_BUILD_DIR" || return 1
+    arch=$(resolve_singbox_prebuilt_arch) || {
+        print_warning "当前架构没有预编译项目内核：$(uname -m)"
+        return 10
+    }
+    work=$(mktemp -d "${SINGBOX_BUILD_DIR}/download.XXXXXX") || return 1
+    manifest="$work/kernel-manifest.json"
+    if ! fetch_project_kernel_manifest "$manifest"; then
+        rm -rf "$work"
+        print_error "无法获取项目稳定内核清单"
+        return 10
+    fi
+    manifest_version=$(jq -r '.singbox_version // empty' "$manifest")
+    manifest_revision=$(jq -r '.kernel_revision // empty' "$manifest")
+    if [[ "$manifest_version" != "$version" ]]; then
+        rm -rf "$work"
+        print_error "项目稳定内核版本发生变化：请求 v${version}，清单为 v${manifest_version:-unknown}"
+        return 11
+    fi
+    if [[ ! "$manifest_revision" =~ ^[1-9][0-9]*$ ]]; then
+        rm -rf "$work"
+        print_error "项目稳定内核清单包含无效修订号：${manifest_revision:-unknown}"
+        return 11
+    fi
+    tag=$(jq -r '.release_tag // empty' "$manifest")
+    asset=$(jq -r --arg arch "$arch" '.assets[$arch].name // empty' "$manifest")
+    expected=$(jq -r --arg arch "$arch" '.assets[$arch].sha256 // empty' "$manifest")
+    expected_tag="kernel-v${manifest_version}-r${manifest_revision}"
+    expected_asset="s-singbox-kernel-v${manifest_version}-r${manifest_revision}-linux-${arch}.tar.gz"
+    if [[ "$tag" != "$expected_tag" \
+        || "$asset" != "$expected_asset" \
+        || ! "$expected" =~ ^[a-fA-F0-9]{64}$ ]]; then
+        rm -rf "$work"
+        print_error "项目稳定内核清单缺少 ${arch} 的有效资产"
+        return 10
+    fi
+    base_url="https://github.com/${SINGBOX_KERNEL_RELEASE_REPO}/releases/download/${tag}"
+    archive="$work/$asset"
+    candidate="$work/sing-box"
+
+    print_info "下载预编译 sing-box 项目内核：v${version} (${arch})"
+    if ! curl -fL --retry 3 --connect-timeout 15 "$base_url/$asset" -o "$archive"; then
+        rm -rf "$work"
+        print_error "预编译内核资产下载失败：${asset}"
+        return 10
+    fi
+    if ! printf '%s  %s\n' "$expected" "$archive" | sha256sum -c - >/dev/null 2>&1; then
+        rm -rf "$work"
+        print_error "预编译内核 SHA256 校验失败"
+        return 20
+    fi
+    entries=$(tar -tzf "$archive" 2>/dev/null | sed 's#^\./##')
+    if [[ "$entries" != "sing-box" ]] || ! tar -xzf "$archive" -C "$work"; then
+        rm -rf "$work"
+        print_error "预编译内核压缩包结构无效"
+        return 21
+    fi
+    chmod 755 "$candidate"
+    validate_project_kernel_candidate "$candidate" "$version" || { rm -rf "$work"; return 30; }
+    install_prebuilt_singbox_candidate "$candidate" "$version" "$start_after_install" "$manifest_revision" || { rm -rf "$work"; return 40; }
+    rm -rf "$work"
+}
+
+build_singbox_from_source_and_install() {
     local version=$1 start_after_install=${2:-true} go_bin work source tags tags_file ldflags candidate target backup required_go was_active=false
     [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || { print_error "非法版本号: $version"; return 1; }
     mkdir -p "$SINGBOX_BUILD_DIR"
@@ -856,13 +1171,23 @@ build_and_install_singbox() {
         print_error "Go 工具链路径无效: ${go_bin//$'\n'/, }"
         return 1
     fi
+    apply_clash_api_user_patch "$source" || { rm -rf "$work"; return 1; }
+    (cd "$source" && "$go_bin" fmt ./experimental/clashapi/trafficontrol >/dev/null) || {
+        rm -rf "$work"
+        print_error "在线用户字段补丁格式化失败"
+        return 1
+    }
     tags=$(normalize_singbox_build_tags "$tags_file" "with_naive_outbound") || {
         rm -rf "$work"
         print_error "无法解析官方 sing-box 构建标签"
         return 1
     }
-    ldflags=$(tr '\n' ' ' < "$source/release/LDFLAGS")
-    print_info "编译 sing-box（启用 with_v2ray_api）..."
+    ldflags=$(compose_singbox_build_ldflags "$source" "$version") || {
+        rm -rf "$work"
+        print_error "无法生成 sing-box 构建版本参数"
+        return 1
+    }
+    print_info "编译项目默认 sing-box 内核..."
     print_info "构建标签: $tags"
     if ! run_singbox_go_build "$source" "$go_bin" "$tags" "$ldflags" "$candidate"; then
         rm -rf "$work"; print_error "sing-box 编译失败"; return 1
@@ -870,6 +1195,7 @@ build_and_install_singbox() {
     chmod 755 "$candidate"
     "$candidate" version || { rm -rf "$work"; return 1; }
     "$candidate" version | grep -q 'with_v2ray_api' || { rm -rf "$work"; print_error "候选内核缺少 with_v2ray_api 构建标签"; return 1; }
+    "$candidate" version | grep -q 'with_clash_api' || { rm -rf "$work"; print_error "候选内核缺少 with_clash_api 构建标签"; return 1; }
     [[ ! -f "$SINGBOX_CONFIG" ]] || "$candidate" check -c "$SINGBOX_CONFIG" || { rm -rf "$work"; print_error "候选内核无法加载当前配置"; return 1; }
     target="${SINGBOX_INSTALL_BIN:-/usr/local/bin/sing-box}"
     mkdir -p "$(dirname "$target")"
@@ -882,7 +1208,8 @@ build_and_install_singbox() {
         $was_active && systemctl start sing-box 2>/dev/null || true
         rm -rf "$work"; return 1
     fi
-    if ! create_systemd_service; then
+    SINGBOX_BIN="$target"
+    if ! create_systemd_service "$target"; then
         print_error "systemd 服务文件创建失败，正在回滚内核"
         if [[ -f "$backup" ]]; then cp -a "$backup" "$target"; else rm -f "$target"; fi
         $was_active && systemctl start sing-box 2>/dev/null || true
@@ -901,10 +1228,57 @@ build_and_install_singbox() {
             rm -rf "$work"; return 1
         fi
     fi
+    if ! write_project_kernel_metadata "$target" "$version" "source-build"; then
+        print_error "项目内核标识写入失败，正在自动回滚"
+        systemctl stop sing-box 2>/dev/null || true
+        if [[ -f "$backup" ]]; then cp -a "$backup" "$target"; else rm -f "$target"; fi
+        systemctl daemon-reload
+        $was_active && systemctl restart sing-box 2>/dev/null || true
+        rm -rf "$work"
+        return 1
+    fi
     printf '%s\n' "$version" > "${DATA_DIR}/installed_version"
     chmod 600 "${DATA_DIR}/installed_version"
     rm -rf "$work"
-    print_success "sing-box v${version} 定制内核安装成功（with_v2ray_api）"
+    print_success "sing-box v${version} 内核安装成功"
+}
+
+build_and_install_singbox() {
+    local version=$1 start_after_install=${2:-true} fallback answer="" prebuilt_status=10
+    mkdir -p "$SINGBOX_BUILD_DIR"
+    if [[ "${SINGBOX_SKIP_PREBUILT_KERNEL:-0}" != "1" ]]; then
+        if download_and_install_prebuilt_singbox "$version" "$start_after_install"; then
+            return 0
+        else
+            prebuilt_status=$?
+        fi
+    fi
+    if (( prebuilt_status >= 20 )); then
+        print_error "预编译内核已获取，但在完整性校验、配置检查或安装阶段失败（阶段码: ${prebuilt_status}）"
+        print_info "本地编译无法解决该类问题，已停止更新并保留原内核"
+        return "$prebuilt_status"
+    fi
+
+    fallback=${SINGBOX_LOCAL_BUILD_FALLBACK:-prompt}
+    case "$fallback" in
+        1|yes|true|always) answer="y" ;;
+        0|no|false|never) answer="n" ;;
+        *)
+            if [[ -t 0 ]]; then
+                print_warning "没有可用的预编译内核，本地源码编译可能耗时 10-30 分钟"
+                read -r -p "是否继续在当前服务器本地编译? [y/N]: " answer
+                answer=${answer:-n}
+            else
+                answer="n"
+            fi
+            ;;
+    esac
+    if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+        print_error "预编译项目内核不可用，已取消本地编译"
+        print_info "请稍后重试，或设置 SINGBOX_LOCAL_BUILD_FALLBACK=always 后手动启用本地编译"
+        return 1
+    fi
+    build_singbox_from_source_and_install "$version" "$start_after_install"
 }
 
 prepare_singbox_storage() {
@@ -919,7 +1293,7 @@ prepare_singbox_storage() {
 
 install_sing-box() {
     prepare_singbox_storage || return 1
-    echo -e "${CYAN}1.${NC} 最新稳定版（推荐）"
+    echo -e "${CYAN}1.${NC} 项目稳定版（已预编译验证，推荐）"
     echo -e "${CYAN}2.${NC} 最新测试版"
     echo -e "${CYAN}3.${NC} 指定版本"
     read -p "请选择 [1-3，默认1]: " choice
@@ -941,7 +1315,7 @@ install_sing-box() {
 
 update_sing-box() {
     prepare_singbox_storage || return 1
-    echo -e "${CYAN}1.${NC} 最新稳定版（推荐）"
+    echo -e "${CYAN}1.${NC} 项目稳定版（已预编译验证，推荐）"
     echo -e "${CYAN}2.${NC} 最新测试版"
     echo -e "${CYAN}3.${NC} 指定版本"
     read -p "请选择 [1-3，默认1]: " choice
@@ -954,7 +1328,12 @@ update_sing-box() {
         *) return 1 ;;
     esac
     version=$(resolve_singbox_version "$channel" "$explicit") || return 1
-    build_and_install_singbox "$version"
+    build_and_install_singbox "$version" || return 1
+    generate_singbox_config || {
+        print_warning "内核已更新，但实时监控配置生成失败；现有节点仍保持运行"
+        return 1
+    }
+    restart_sing-box
 }
 
 resolve_tunnel_endpoint() {
@@ -1520,7 +1899,7 @@ add_trojan_outbound() {
 add_naive_outbound() {
     local tag server port username password sni insecure=false outbound
     if ! singbox_has_build_tag with_naive_outbound; then
-        print_error "当前定制内核不包含 with_naive_outbound，无法添加 Naive 出站"
+        print_error "当前内核不包含 with_naive_outbound，无法添加 Naive 出站"
         print_info "上游 Naive 出站需要独立 Chromium/Cronet 工具链和 libcronet.so，不属于官方本地构建能力"
         return 1
     fi
@@ -2103,4 +2482,205 @@ restart_sing-box() {
     systemctl restart sing-box 2>/dev/null || true
     systemctl is-active --quiet sing-box 2>/dev/null || print_error "回滚后服务仍未恢复，请检查 journalctl -u sing-box"
     return 1
+}
+
+# Clash API 实时连接快照。该 API 只监听本机，节点连接与在线用户共用一次查询结果。
+CONNECTION_SNAPSHOT_JSON=""
+CONNECTION_SNAPSHOT_STATE="unknown"
+
+fetch_clash_api_connections() {
+    local secret url="http://${CLASH_API_ADDR}/connections"
+    if [[ -f "${SINGBOX_CONFIG:-}" ]]; then
+        secret=$(jq -r '.experimental.clash_api.secret // empty' "$SINGBOX_CONFIG" 2>/dev/null)
+    fi
+    if [[ -z "${secret:-}" && -s "$CLASH_API_SECRET_FILE" ]]; then
+        secret=$(tr -d '\r\n' < "$CLASH_API_SECRET_FILE")
+    fi
+    [[ -n "$secret" ]] || return 1
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsS --max-time "${CLASH_API_TIMEOUT_SECONDS:-1}" \
+            -H "Authorization: Bearer ${secret}" "$url"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO- --timeout="${CLASH_API_TIMEOUT_SECONDS:-1}" \
+            --header="Authorization: Bearer ${secret}" "$url"
+    else
+        return 1
+    fi
+}
+
+refresh_connection_snapshot() {
+    local snapshot
+    CONNECTION_SNAPSHOT_JSON=""
+    CONNECTION_SNAPSHOT_STATE="unavailable"
+    snapshot=$(fetch_clash_api_connections 2>/dev/null) || return 1
+    jq -e '.connections | type == "array"' <<< "$snapshot" >/dev/null 2>&1 || return 1
+    CONNECTION_SNAPSHOT_JSON=$(jq -c . <<< "$snapshot") || return 1
+    CONNECTION_SNAPSHOT_STATE="ready"
+}
+
+get_realtime_connection_count() {
+    [[ -n "$CONNECTION_SNAPSHOT_JSON" && -f "$NODES_FILE" ]] || return 1
+    jq -r --slurpfile nodes "$NODES_FILE" '
+        [($nodes[0].nodes // [])[] | "\(.protocol)-\(.port)"] as $tags
+        | [.connections[]?
+           | select((.metadata.type // "" | split("/") | last) as $tag
+                    | $tags | index($tag))]
+        | length' <<< "$CONNECTION_SNAPSHOT_JSON"
+}
+
+get_realtime_online_users_count() {
+    [[ -n "$CONNECTION_SNAPSHOT_JSON" && -f "$NODES_FILE" ]] || return 1
+    if ! singbox_has_online_user_capability; then
+        echo "UNAVAILABLE"
+        return 0
+    fi
+    jq -r --slurpfile nodes "$NODES_FILE" '
+        [($nodes[0].nodes // [])[] | "\(.protocol)-\(.port)"] as $tags
+        | [.connections[]?
+           | select((.metadata.type // "" | split("/") | last) as $tag
+                    | $tags | index($tag))] as $connections
+        | if ($connections | length) == 0 then "0"
+          elif ($connections | all((.metadata // {}) | has("inboundUser"))) then
+            ([$connections[].metadata.inboundUser
+              | select(type == "string" and length > 0)] | unique | length | tostring)
+          else "UNAVAILABLE"
+          end' <<< "$CONNECTION_SNAPSHOT_JSON"
+}
+
+get_node_realtime_stats() {
+    local protocol port tag
+    protocol=$1
+    port=$2
+    tag="${protocol}-${port}"
+    [[ -n "$CONNECTION_SNAPSHOT_JSON" ]] || return 1
+    jq -r --arg tag "$tag" '
+        [.connections[]?
+         | select((.metadata.type // "" | split("/") | last) == $tag)] as $connections
+        | if ($connections | length) == 0 then "0|0"
+          elif ($connections | all((.metadata // {}) | has("inboundUser"))) then
+            (([$connections[].metadata.inboundUser
+               | select(type == "string" and length > 0)] | unique | length | tostring)
+             + "|" + (($connections | length) | tostring))
+          else "UNAVAILABLE|" + (($connections | length) | tostring)
+          end' <<< "$CONNECTION_SNAPSHOT_JSON"
+}
+
+get_user_online_status() {
+    local uuid=$1 username connection_count
+    case "$CONNECTION_SNAPSHOT_STATE" in
+        ready) ;;
+        unknown)
+            refresh_connection_snapshot || { echo "unavailable"; return 0; }
+            ;;
+        *) echo "unavailable"; return 0 ;;
+    esac
+    singbox_has_online_user_capability || { echo "unavailable"; return 0; }
+    username=$(jq -r --arg id "$uuid" '.users[]? | select(.id == $id) | (.username // .id)' "$USERS_FILE" 2>/dev/null | head -n1)
+    [[ -n "$username" && "$username" != null ]] || { echo "unknown"; return 0; }
+
+    connection_count=$(get_realtime_connection_count 2>/dev/null) || { echo "unavailable"; return 0; }
+    if [[ "$connection_count" == "0" ]]; then
+        echo "offline"
+        return 0
+    fi
+    if ! jq -e --slurpfile nodes "$NODES_FILE" '
+        [($nodes[0].nodes // [])[] | "\(.protocol)-\(.port)"] as $tags
+        | [.connections[]?
+           | select((.metadata.type // "" | split("/") | last) as $tag
+                    | $tags | index($tag))] as $connections
+        | ($connections | length) > 0
+          and ($connections | all((.metadata // {}) | has("inboundUser")))' \
+        <<< "$CONNECTION_SNAPSHOT_JSON" >/dev/null 2>&1; then
+        echo "unavailable"
+        return 0
+    fi
+    if jq -e --arg user "$username" --slurpfile nodes "$NODES_FILE" '
+        [($nodes[0].nodes // [])[] | "\(.protocol)-\(.port)"] as $tags
+        | .connections[]?
+        | select((.metadata.type // "" | split("/") | last) as $tag
+                 | $tags | index($tag))
+        | select(.metadata.inboundUser == $user)' \
+        <<< "$CONNECTION_SNAPSHOT_JSON" >/dev/null 2>&1; then
+        echo "online"
+    else
+        echo "offline"
+    fi
+}
+
+render_realtime_node_connection_table() {
+    local node name protocol port stats online connections
+    printf "%-22s %-12s %-8s %-10s %-10s\n" "节点名称" "协议" "端口" "在线用户" "活动连接"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    while IFS= read -r node; do
+        name=$(echo "$node" | jq -r '.name // "未命名"')
+        protocol=$(echo "$node" | jq -r '.protocol // "unknown"')
+        port=$(echo "$node" | jq -r '.port // "N/A"')
+        [[ ${#name} -le 20 ]] || name="${name:0:17}..."
+        stats=$(get_node_realtime_stats "$protocol" "$port" 2>/dev/null || echo "N/A|N/A")
+        online=${stats%%|*}
+        connections=${stats##*|}
+        [[ "$online" != "UNAVAILABLE" ]] || online="--"
+        printf "%-22s %-12s %-8s %-10s %-10s\n" "$name" "$protocol" "$port" "$online" "$connections"
+    done < <(jq -c '.nodes[]?' "$NODES_FILE" 2>/dev/null)
+}
+
+get_realtime_online_user_rows() {
+    [[ -n "$CONNECTION_SNAPSHOT_JSON" && -f "$NODES_FILE" && -f "$USERS_FILE" ]] || return 1
+    jq -r --slurpfile nodes "$NODES_FILE" --slurpfile users "$USERS_FILE" '
+        ([($nodes[0].nodes // [])[]
+          | {key:"\(.protocol)-\(.port)",value:(.name // "\(.protocol)-\(.port)")}] | from_entries) as $node_names
+        | ([($users[0].users // [])[]
+            | {key:(.username // .id),value:(.email // "-")}] | from_entries) as $user_emails
+        | ($node_names | keys) as $tags
+        | [.connections[]?
+           | ((.metadata.type // "" | split("/") | last)) as $tag
+           | select($tags | index($tag))
+           | select((.metadata.inboundUser // "") != "")
+           | {user:.metadata.inboundUser,tag:$tag}]
+        | sort_by(.user) | group_by(.user)[]
+        | .[0].user as $user
+        | [ $user,
+            ($user_emails[$user] // "-"),
+            ([.[].tag | $node_names[.] // .] | unique | join(",")),
+            (length | tostring)]
+        | @tsv' <<< "$CONNECTION_SNAPSHOT_JSON"
+}
+
+show_online_users() {
+    clear
+    echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}        当前在线用户"
+    echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+
+    if ! refresh_connection_snapshot; then
+        print_warning "实时连接数据暂不可用"
+        return 0
+    fi
+
+    local online_count online_rows
+    online_count=$(get_realtime_online_users_count 2>/dev/null || echo "N/A")
+    if [[ "$online_count" == "UNAVAILABLE" || "$online_count" == "N/A" ]]; then
+        print_warning "当前内核未返回连接用户信息"
+        print_info "请在 sing-box 管理中执行更新/修复内核"
+        return 0
+    fi
+    if [[ "$online_count" == "0" ]]; then
+        print_info "当前没有在线用户"
+        return 0
+    fi
+    online_rows=$(get_realtime_online_user_rows 2>/dev/null) || {
+        print_warning "在线用户明细解析失败"
+        return 0
+    }
+
+    printf "%-18s %-24s %-32s %-10s\n" "用户名" "邮箱" "连接节点" "活动连接"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    while IFS=$'\t' read -r username email node_tags connection_count; do
+        [[ -n "$username" ]] || continue
+        printf "%-18s %-24s %-32s %-10s\n" "$username" "$email" "$node_tags" "$connection_count"
+    done <<< "$online_rows"
+    echo ""
+    echo -e "${CYAN}在线用户数: ${GREEN}${online_count}${NC}"
 }

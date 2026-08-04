@@ -1565,8 +1565,12 @@ list_nodes() {
         return 0
     fi
 
-    printf "%-5s %-20s %-12s %-8s %-12s %-15s\n" "序号" "节点名称" "协议" "端口" "传输" "安全"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    if declare -f refresh_connection_snapshot >/dev/null 2>&1; then
+        refresh_connection_snapshot || CONNECTION_SNAPSHOT_JSON=""
+    fi
+
+    printf "%-5s %-20s %-12s %-8s %-12s %-12s %-10s %-10s\n" "序号" "节点名称" "协议" "端口" "传输" "安全" "在线用户" "活动连接"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
     local index=1
     while IFS= read -r node; do
@@ -1575,13 +1579,21 @@ list_nodes() {
         local port=$(echo "$node" | jq -r '.port // "N/A"')
         local transport=$(echo "$node" | jq -r '.transport // "N/A"')
         local security=$(echo "$node" | jq -r '.security // "N/A"')
+        local realtime_stats="N/A|N/A" online_users="N/A" active_connections="N/A"
+
+        if [[ -n "${CONNECTION_SNAPSHOT_JSON:-}" ]] && declare -f get_node_realtime_stats >/dev/null 2>&1; then
+            realtime_stats=$(get_node_realtime_stats "$protocol" "$port" 2>/dev/null || echo "N/A|N/A")
+            online_users=${realtime_stats%%|*}
+            active_connections=${realtime_stats##*|}
+            [[ "$online_users" != "UNAVAILABLE" ]] || online_users="--"
+        fi
 
         # 截断过长的名称
         if [[ ${#name} -gt 18 ]]; then
             name="${name:0:15}..."
         fi
 
-        printf "%-5s %-20s %-12s %-8s %-12s %-15s\n" "$index" "$name" "$protocol" "$port" "$transport" "$security"
+        printf "%-5s %-20s %-12s %-8s %-12s %-12s %-10s %-10s\n" "$index" "$name" "$protocol" "$port" "$transport" "$security" "$online_users" "$active_connections"
         ((index++))
     done < <(jq -c '.nodes[]' "$NODES_FILE" 2>/dev/null)
 

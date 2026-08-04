@@ -34,11 +34,14 @@ with_gvisor,with_quic
 with_dhcp with_gvisor
 EOF
 normalized_tags=$(normalize_singbox_build_tags "$TMP_DIR/build-tags")
-[[ "$normalized_tags" == 'with_gvisor,with_quic,with_dhcp,with_v2ray_api' ]]
+[[ "$normalized_tags" == 'with_gvisor,with_quic,with_dhcp,with_v2ray_api,with_clash_api' ]]
 [[ "$normalized_tags" != *' '* ]]
 echo 'with_gvisor,with_naive_outbound,with_quic' > "$TMP_DIR/build-tags-full"
 safe_tags=$(normalize_singbox_build_tags "$TMP_DIR/build-tags-full" 'with_naive_outbound')
-[[ "$safe_tags" == 'with_gvisor,with_quic,with_v2ray_api' ]]
+[[ "$safe_tags" == 'with_gvisor,with_quic,with_v2ray_api,with_clash_api' ]]
+mkdir -p "$TMP_DIR/fake-release/release"
+echo '-s -w' > "$TMP_DIR/fake-release/release/LDFLAGS"
+[[ "$(compose_singbox_build_ldflags "$TMP_DIR/fake-release" '1.13.15')" == '-s -w -X github.com/sagernet/sing-box/constant.Version=1.13.15' ]]
 echo 'with_gvisor,@invalid' > "$TMP_DIR/invalid-build-tags"
 if normalize_singbox_build_tags "$TMP_DIR/invalid-build-tags" >/dev/null 2>&1; then
     echo "非法构建标签未被拒绝" >&2
@@ -78,7 +81,59 @@ cat > "$TMP_DIR/full-singbox" <<'EOF'
 #!/bin/sh
 echo 'sing-box version 1.13.15 Tags: with_v2ray_api,with_naive_outbound'
 EOF
-chmod +x "$TMP_DIR/plain-singbox" "$TMP_DIR/stats-singbox" "$TMP_DIR/full-singbox"
+cat > "$TMP_DIR/project-singbox" <<'EOF'
+#!/bin/sh
+echo 'sing-box version 1.13.15 Tags: with_v2ray_api,with_clash_api'
+EOF
+chmod +x "$TMP_DIR/plain-singbox" "$TMP_DIR/stats-singbox" "$TMP_DIR/full-singbox" "$TMP_DIR/project-singbox"
+
+(
+    uname() { echo x86_64; }
+    [[ "$(resolve_singbox_prebuilt_arch)" == amd64 ]]
+)
+(
+    uname() { echo aarch64; }
+    [[ "$(resolve_singbox_prebuilt_arch)" == arm64 ]]
+)
+(
+    fetch_project_kernel_manifest() {
+        printf '%s\n' '{"schema":1,"singbox_version":"1.13.16","kernel_revision":"1","release_tag":"kernel-v1.13.16-r1","assets":{}}'
+    }
+    [[ "$(resolve_project_kernel_version)" == '1.13.16' ]]
+)
+
+get_singbox_bin() { echo "$TMP_DIR/project-singbox"; }
+SINGBOX_PROJECT_KERNEL_METADATA="$TMP_DIR/project-kernel.json"
+write_project_kernel_metadata "$TMP_DIR/project-singbox" '1.13.15' 'validation-fixture'
+singbox_has_online_user_capability
+printf '\n# changed\n' >> "$TMP_DIR/project-singbox"
+! singbox_has_online_user_capability
+
+(
+    download_and_install_prebuilt_singbox() { printf '%s' "$1|$2" > "$TMP_DIR/prebuilt-call"; }
+    build_singbox_from_source_and_install() { return 99; }
+    build_and_install_singbox '1.13.15' false
+    [[ "$(cat "$TMP_DIR/prebuilt-call")" == '1.13.15|false' ]]
+)
+(
+    local_build_called=0
+    download_and_install_prebuilt_singbox() { return 1; }
+    build_singbox_from_source_and_install() { local_build_called=1; }
+    SINGBOX_LOCAL_BUILD_FALLBACK=never
+    ! build_and_install_singbox '1.13.15' true >/dev/null 2>&1
+    [[ "$local_build_called" == 0 ]]
+    SINGBOX_LOCAL_BUILD_FALLBACK=always
+    build_and_install_singbox '1.13.15' true
+    [[ "$local_build_called" == 1 ]]
+)
+(
+    local_build_called=0
+    download_and_install_prebuilt_singbox() { return 30; }
+    build_singbox_from_source_and_install() { local_build_called=1; }
+    SINGBOX_LOCAL_BUILD_FALLBACK=always
+    ! build_and_install_singbox '1.13.16' true >/dev/null 2>&1
+    [[ "$local_build_called" == 0 ]]
+)
 
 kernel_state=plain
 build_count=0
@@ -130,7 +185,7 @@ ensure_singbox_stats_capability
 kernel_state=plain
 SINGBOX_AUTO_REPAIR_STATS_KERNEL=0
 if ensure_singbox_stats_capability >/dev/null 2>&1; then
-    echo "禁用自动修复后仍错误放行普通内核" >&2
+    echo "禁用自动修复后仍错误放行不兼容内核" >&2
     exit 1
 fi
 

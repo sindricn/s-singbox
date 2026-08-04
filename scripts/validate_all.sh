@@ -348,6 +348,9 @@ grep -q 'verify_configured_inbound_listeners' "$ROOT_DIR/modules/zz_singbox_114.
 grep -q 'sync_runtime_subscriptions' "$ROOT_DIR/modules/zz_singbox_114.sh"
 grep -q 'api statsquery' "$ROOT_DIR/modules/monitor.sh"
 ! grep -q 'http://.*\/stats' "$ROOT_DIR/modules/monitor.sh"
+[[ "$(grep -Rhc '^get_user_email_from_config()' "$ROOT_DIR/modules"/*.sh | awk '{s+=$1} END {print s+0}')" == 1 ]]
+[[ "$(grep -Rhc '^get_user_traffic_summary()' "$ROOT_DIR/modules"/*.sh | awk '{s+=$1} END {print s+0}')" == 1 ]]
+[[ "$(grep -Rhc '^update_user_traffic_usage()' "$ROOT_DIR/modules"/*.sh | awk '{s+=$1} END {print s+0}')" == 1 ]]
 grep -q 'if ! singbox_has_project_kernel_capability; then' "$ROOT_DIR/modules/zz_singbox_114.sh"
 grep -q '节点功能正常；实时连接或流量统计可能不可用' "$ROOT_DIR/modules/zz_singbox_114.sh"
 grep -q 'ensure_singbox_stats_capability' "$ROOT_DIR/modules/zz_singbox_114.sh"

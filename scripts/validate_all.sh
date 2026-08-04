@@ -602,6 +602,8 @@ tunnel_node='{"port":"21001","tunnel_domain":"https://[2001:db8::8]:8443/proxy?t
     grep -q -- '--dport 22000:22100 -j REDIRECT --to-ports 21005' "$TMP_DIR/iptables-calls"
 )
 (
+    # shellcheck source=/dev/null
+    source "$ROOT_DIR/modules/config.sh"
     restore_nodes="$TMP_DIR/restore-port-hopping.json"
     printf '%s\n' '{"nodes":[{"protocol":"hysteria2","port":"21005","extra":{"port_hopping":"22000:22100"}}]}' > "$restore_nodes"
     : > "$TMP_DIR/restore-port-hopping-calls"

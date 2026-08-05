@@ -6,6 +6,11 @@
 # 三层架构：协议层 - 传输层 - 加密层（TLS/Reality）
 #================================================================
 
+PORT_HOPPING_SERVICE_FILE="${PORT_HOPPING_SERVICE_FILE:-/etc/systemd/system/sing-box-port-hopping.service}"
+PORT_HOPPING_SYSTEMD_RUNTIME_DIR="${PORT_HOPPING_SYSTEMD_RUNTIME_DIR:-/run/systemd/system}"
+PORT_HOPPING_IPTABLES_DIR="${PORT_HOPPING_IPTABLES_DIR:-/etc/iptables}"
+PORT_HOPPING_SYSCONFIG_DIR="${PORT_HOPPING_SYSCONFIG_DIR:-/etc/sysconfig}"
+
 # 检查端口是否已被占用
 check_port_exists() {
     local port=$1
@@ -123,27 +128,53 @@ select_node_tls_domain() {
     NODE_SERVER_ADDRESS="$fallback_address"
 }
 
-# 持久化端口跳跃规则。没有可靠持久化后端时返回失败，避免重启后规则静默丢失。
+# 原生防火墙持久化不可用时，使用项目自己的 systemd 服务在开机后恢复规则。
+ensure_port_hopping_restore_service() {
+    command -v systemctl >/dev/null 2>&1 || return 1
+    [[ -d "$PORT_HOPPING_SYSTEMD_RUNTIME_DIR" && -x "${MANAGER_SCRIPT:-}" ]] || return 1
+
+    mkdir -p "$(dirname "$PORT_HOPPING_SERVICE_FILE")" || return 1
+    cat > "$PORT_HOPPING_SERVICE_FILE" <<EOF
+[Unit]
+Description=Restore sing-box Hysteria2 port hopping rules
+After=network-online.target
+Wants=network-online.target
+Before=sing-box.service
+
+[Service]
+Type=oneshot
+ExecStart=${MANAGER_SCRIPT} --restore-port-hopping
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    chmod 644 "$PORT_HOPPING_SERVICE_FILE" || return 1
+    systemctl daemon-reload >/dev/null 2>&1 || return 1
+    systemctl enable "$(basename "$PORT_HOPPING_SERVICE_FILE")" >/dev/null 2>&1
+}
+
+# 持久化端口跳跃规则。优先使用系统后端，否则部署项目恢复服务。
 persist_port_hopping_rules() {
     if command -v netfilter-persistent >/dev/null 2>&1; then
-        netfilter-persistent save >/dev/null 2>&1
-        return $?
+        netfilter-persistent save >/dev/null 2>&1 && return 0
     fi
-    if [[ -d /etc/iptables ]] && command -v iptables-save >/dev/null 2>&1; then
-        iptables-save > /etc/iptables/rules.v4 2>/dev/null || return 1
-        if command -v ip6tables-save >/dev/null 2>&1; then
-            ip6tables-save > /etc/iptables/rules.v6 2>/dev/null || return 1
+    if [[ -d "$PORT_HOPPING_IPTABLES_DIR" ]] && command -v iptables-save >/dev/null 2>&1; then
+        if iptables-save > "${PORT_HOPPING_IPTABLES_DIR}/rules.v4" 2>/dev/null; then
+            if ! command -v ip6tables-save >/dev/null 2>&1 \
+                || ip6tables-save > "${PORT_HOPPING_IPTABLES_DIR}/rules.v6" 2>/dev/null; then
+                return 0
+            fi
         fi
-        return 0
     fi
-    if [[ -d /etc/sysconfig ]] && command -v iptables-save >/dev/null 2>&1; then
-        iptables-save > /etc/sysconfig/iptables 2>/dev/null || return 1
-        if command -v ip6tables-save >/dev/null 2>&1; then
-            ip6tables-save > /etc/sysconfig/ip6tables 2>/dev/null || return 1
+    if [[ -d "$PORT_HOPPING_SYSCONFIG_DIR" ]] && command -v iptables-save >/dev/null 2>&1; then
+        if iptables-save > "${PORT_HOPPING_SYSCONFIG_DIR}/iptables" 2>/dev/null; then
+            if ! command -v ip6tables-save >/dev/null 2>&1 \
+                || ip6tables-save > "${PORT_HOPPING_SYSCONFIG_DIR}/ip6tables" 2>/dev/null; then
+                return 0
+            fi
         fi
-        return 0
     fi
-    return 1
+    ensure_port_hopping_restore_service
 }
 
 # 清理端口跳跃的iptables规则
@@ -267,7 +298,7 @@ validate_port_hopping_range() {
 
 # 安装 Hysteria2 UDP 端口跳跃规则。IPv4 为必需项，IPv6 尽力配置。
 apply_port_hopping_rules() {
-    local target_port=$1 port_range=$2
+    local target_port=$1 port_range=$2 persist_rules=${3:-true}
     local start_port="${port_range%%:*}" end_port="${port_range##*:}" main_interface=""
     validate_port_hopping_range "$port_range" "$target_port" || {
         print_error "无效或冲突的端口跳跃范围: $port_range"
@@ -300,7 +331,7 @@ apply_port_hopping_rules() {
         fi
     fi
 
-    if ! persist_port_hopping_rules; then
+    if [[ "$persist_rules" == true ]] && ! persist_port_hopping_rules; then
         [[ "$ipv6_added" == true ]] && ip6tables -t nat -D PREROUTING -i "$main_interface" -p udp --dport "${start_port}:${end_port}" -j REDIRECT --to-ports "$target_port" 2>/dev/null || true
         [[ "$ipv4_added" == true ]] && iptables -t nat -D PREROUTING -i "$main_interface" -p udp --dport "${start_port}:${end_port}" -j REDIRECT --to-ports "$target_port" 2>/dev/null || true
         persist_port_hopping_rules >/dev/null 2>&1 || true

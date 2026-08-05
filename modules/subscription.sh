@@ -340,6 +340,37 @@ get_subscription_domain_hint() {
     echo ""
 }
 
+# 独立 HTTP 订阅服务优先使用公网 IP，避免误用开启 CDN 代理的全局域名。
+get_subscription_access_host_hint() {
+    local public_ip
+    public_ip=$(get_public_ip 2>/dev/null || true)
+    if [[ -n "$public_ip" ]]; then
+        echo "$public_ip"
+        return 0
+    fi
+    get_subscription_domain_hint
+}
+
+format_subscription_url_host() {
+    local host=$1
+    if [[ "$host" == *:* && "$host" != \[*\] ]]; then
+        printf '[%s]\n' "$host"
+    else
+        printf '%s\n' "$host"
+    fi
+}
+
+warn_if_subscription_host_is_proxied() {
+    local host=$1 public_ip resolved_ips
+    validate_domain "$host" >/dev/null 2>&1 || return 0
+    public_ip=$(get_public_ip 2>/dev/null || true)
+    resolved_ips=$(resolve_domain_ipv4 "$host" 2>/dev/null || true)
+    if [[ -n "$public_ip" && -n "$resolved_ips" && " $resolved_ips " != *" $public_ip "* ]]; then
+        print_warning "订阅域名未直连本服务器，可能开启了 Cloudflare/CDN 代理"
+        print_warning "独立订阅服务使用普通 HTTP；请确认代理支持所选端口，或改用服务器公网 IP"
+    fi
+}
+
 # 根据节点配置解析分享链接所需主机
 resolve_subscription_host() {
     local node_json="$1"
@@ -2406,12 +2437,9 @@ generate_subscription_with_user() {
     echo -e "${CYAN}订阅访问配置：${NC}"
     echo ""
 
-    # 获取默认域名提示
+    # 独立订阅服务默认直连公网 IP；用户仍可手动填写未代理的服务器域名。
     local default_domain
-    default_domain=$(get_subscription_domain_hint)
-    if [[ -z "$default_domain" ]]; then
-        default_domain=$(get_public_ip 2>/dev/null || true)
-    fi
+    default_domain=$(get_subscription_access_host_hint)
     if [[ -z "$default_domain" ]]; then
         print_error "无法确定订阅公网访问地址，请先配置服务器域名或确认服务器可获取公网 IPv4"
         return 1
@@ -2421,6 +2449,11 @@ generate_subscription_with_user() {
     if [[ -z "$sub_domain" ]]; then
         sub_domain="$default_domain"
     fi
+    if ! validate_domain "$sub_domain" >/dev/null 2>&1 && ! validate_ip "$sub_domain" >/dev/null 2>&1; then
+        print_error "订阅访问地址格式不正确: $sub_domain"
+        return 1
+    fi
+    warn_if_subscription_host_is_proxied "$sub_domain"
 
     # 获取已保存的端口，如果不存在则使用默认值
     local default_port=$(cat "${DATA_DIR}/subscription_port.txt" 2>/dev/null || echo "8080")
@@ -2429,7 +2462,8 @@ generate_subscription_with_user() {
 
     # 订阅路径
     local sub_filename=$(basename "$sub_file")
-    local sub_url="http://${sub_domain}:${sub_port}/sub/${sub_filename}"
+    local url_host=$(format_subscription_url_host "$sub_domain")
+    local sub_url="http://${url_host}:${sub_port}/sub/${sub_filename}"
 
     # 保存订阅信息到数据库
     save_subscription_info "$sub_name" "$sub_url" "$sub_file" "$sub_type" "$sub_user_email" || return 1
@@ -2439,6 +2473,10 @@ generate_subscription_with_user() {
 
     # 启动订阅服务
     setup_subscription_server "$sub_port" || return 1
+    if ! subscription_file_is_healthy "$sub_port" "$sub_filename"; then
+        print_error "订阅服务已启动，但 Clash 订阅文件无法通过本机 HTTP 下载"
+        return 1
+    fi
 
     # 显示结果
     echo ""
@@ -2650,7 +2688,7 @@ show_subscription_links() {
     fi
 
     # 获取服务器IP
-    local server_host=$(get_subscription_domain_hint)
+    local server_host=$(get_subscription_access_host_hint)
     if [[ -z "$server_host" ]]; then
         server_host=$(get_public_ip)
     fi
@@ -2699,7 +2737,8 @@ show_subscription_links() {
         local access_url=""
         if [[ -n "$resolved_file" && -f "$resolved_file" ]]; then
             local filename=$(basename "$resolved_file")
-            access_url="http://${server_host}:${sub_port}/sub/${filename}"
+            local url_host=$(format_subscription_url_host "$server_host")
+            access_url="http://${url_host}:${sub_port}/sub/${filename}"
         elif [[ -n "$url" ]]; then
             access_url="$url"
         fi
@@ -2944,7 +2983,7 @@ regenerate_subscription() {
     # 更新订阅信息（更新时间、文件路径和URL）
     local port=$(cat "${DATA_DIR}/subscription_port.txt" 2>/dev/null || echo "8080")
     local server_ip
-    server_ip=$(get_subscription_domain_hint)
+    server_ip=$(get_subscription_access_host_hint)
     if [[ -z "$server_ip" ]]; then
         server_ip=$(get_public_ip 2>/dev/null || true)
     fi
@@ -2953,7 +2992,8 @@ regenerate_subscription() {
         return 1
     fi
     local sub_filename=$(basename "$sub_file")
-    local sub_url="http://${server_ip}:${port}/sub/${sub_filename}"
+    local url_host=$(format_subscription_url_host "$server_ip")
+    local sub_url="http://${url_host}:${port}/sub/${sub_filename}"
 
     jq --arg name "$sub_name" --arg url "$sub_url" --arg file "$sub_file" \
        '(.subscriptions[] | select(.name == $name)) |= (. + {url: $url, file: $file, updated: (now|todate)})' \
@@ -2975,6 +3015,13 @@ regenerate_subscription() {
     echo ""
     echo -e "${YELLOW}${sub_url}${NC}"
     echo ""
+}
+
+subscription_file_is_healthy() {
+    local port=$1 filename=$2
+    [[ "$port" =~ ^[0-9]+$ && "$port" -ge 1 && "$port" -le 65535 ]] || return 1
+    [[ "$filename" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
+    curl -fsS --max-time 5 -o /dev/null "http://127.0.0.1:${port}/sub/${filename}" 2>/dev/null
 }
 
 # 订阅配置
@@ -3003,6 +3050,16 @@ PYEOF
     return 1
 }
 
+ensure_subscription_firewall_access() {
+    local port=$1
+    [[ "$port" =~ ^[0-9]+$ && "$port" -ge 1 && "$port" -le 65535 ]] || return 1
+    if declare -f ensure_firewall_port_rule >/dev/null 2>&1 \
+        && ! ensure_firewall_port_rule "$port" tcp; then
+        print_error "无法通过本机防火墙放行订阅 TCP 端口 $port"
+        return 1
+    fi
+}
+
 ensure_subscription_server_runtime() {
     local port_file="${DATA_DIR}/subscription_port.txt"
     local port
@@ -3014,6 +3071,7 @@ ensure_subscription_server_runtime() {
     }
 
     if subscription_server_is_healthy "$port"; then
+        ensure_subscription_firewall_access "$port" || return 1
         if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]] \
             && [[ ! -f /etc/systemd/system/sing-box-subscription-health.timer ]]; then
             print_warning "订阅服务健康巡检单元缺失，正在重新部署"
@@ -3095,6 +3153,12 @@ setup_subscription_server() {
         return 1
     fi
 
+    local python_bin
+    python_bin=$(command -v python3) || {
+        print_error "未找到 python3，无法启动订阅服务"
+        return 1
+    }
+
     mkdir -p "$SUBSCRIPTION_DIR" "$DATA_DIR" || return 1
     chmod 700 "$SUBSCRIPTION_DIR" "$DATA_DIR" 2>/dev/null || true
 
@@ -3103,7 +3167,7 @@ setup_subscription_server() {
         systemctl stop sing-box-subscription-health.timer >/dev/null 2>&1 || true
         systemctl stop sing-box-subscription.service >/dev/null 2>&1 || true
     fi
-    pkill -f "python.*subscription_server" 2>/dev/null
+    pkill -f "python.*subscription_server" 2>/dev/null || true
 
     # 保存订阅端口到文件
     echo "$port" > "${DATA_DIR}/subscription_port.txt"
@@ -3315,12 +3379,6 @@ PYEOF
 
     chmod 700 "${DATA_DIR}/subscription_server.py"
 
-    local python_bin
-    python_bin=$(command -v python3) || {
-        print_error "未找到 python3，无法启动订阅服务"
-        return 1
-    }
-
     if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
         local curl_bin systemctl_bin
         curl_bin=$(command -v curl) || {
@@ -3408,8 +3466,11 @@ EOF
         return 1
     fi
 
+    ensure_subscription_firewall_access "$port" || return 1
+
     print_success "订阅服务已启动并通过健康检查"
     print_info "监听端口: $port"
+    print_info "如使用云服务器，请同时在云厂商安全组中放行 TCP $port"
     return 0
 }
 
@@ -3709,7 +3770,7 @@ regenerate_subscription_content() {
     # 4. 更新数据库中的URL和时间戳
     local port=$(cat "${DATA_DIR}/subscription_port.txt" 2>/dev/null || echo "8080")
     local server_ip
-    server_ip=$(get_subscription_domain_hint)
+    server_ip=$(get_subscription_access_host_hint)
     [[ -n "$server_ip" ]] || server_ip=$(get_public_ip 2>/dev/null || true)
     if [[ -z "$server_ip" ]]; then
         print_error "无法确定订阅公网访问地址，请先配置服务器域名或确认服务器可获取公网 IPv4"
@@ -3717,7 +3778,8 @@ regenerate_subscription_content() {
     fi
 
     local sub_filename=$(basename "$sub_file")
-    local sub_url="http://${server_ip}:${port}/sub/${sub_filename}"
+    local url_host=$(format_subscription_url_host "$server_ip")
+    local sub_url="http://${url_host}:${port}/sub/${sub_filename}"
 
     # 同步更新两个订阅索引，避免内容已刷新但公开 URL 仍指向旧凭据文件。
     save_subscription_info "$sub_name" "$sub_url" "$sub_file" "$sub_type" "$sub_user_email" || return 1

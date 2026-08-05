@@ -321,6 +321,9 @@ grep -q 'os.path.commonpath' "$ROOT_DIR/modules/subscription.sh"
 grep -q 'sing-box-subscription.service' "$ROOT_DIR/modules/subscription.sh"
 grep -q 'sing-box-subscription-health.timer' "$ROOT_DIR/modules/subscription.sh"
 grep -q 'subscription_server_is_healthy' "$ROOT_DIR/modules/subscription.sh"
+grep -q 'subscription_file_is_healthy "$sub_port" "$sub_filename"' "$ROOT_DIR/modules/subscription.sh"
+grep -q 'ensure_subscription_firewall_access "$port"' "$ROOT_DIR/modules/subscription.sh"
+grep -q 'ensure_firewall_port_rule "$port" tcp' "$ROOT_DIR/modules/subscription.sh"
 grep -q 'ThreadingHTTPServer' "$ROOT_DIR/modules/subscription.sh"
 grep -q 'ProtectHome=true' "$ROOT_DIR/modules/subscription.sh"
 grep -q 'list_cf_http_compatible_nodes' "$ROOT_DIR/modules/cf_tunnel.sh"
@@ -340,6 +343,10 @@ grep -q 'local port="${1:-}"' "$ROOT_DIR/modules/user_node_binding.sh"
 ! grep -q 'local admin_info=$(bind_admin_to_node' "$ROOT_DIR/modules/node.sh"
 grep -q 'save_node_and_bind_admin' "$ROOT_DIR/modules/node.sh"
 grep -q 'persist_port_hopping_rules' "$ROOT_DIR/modules/node.sh"
+grep -q 'ensure_port_hopping_restore_service' "$ROOT_DIR/modules/node.sh"
+grep -q -- '--restore-port-hopping' "$ROOT_DIR/singbox-manager.sh"
+grep -q 'apply_port_hopping_rules "$port" "$port_hopping" false' "$ROOT_DIR/modules/config.sh"
+grep -q 'python3:python3 iptables:iptables' "$ROOT_DIR/install.sh"
 grep -q 'select_node_tls_domain' "$ROOT_DIR/modules/node.sh"
 grep -q 'sync_active_node_firewall_ports' "$ROOT_DIR/modules/firewall.sh"
 grep -q 'verify_configured_inbound_listeners' "$ROOT_DIR/modules/zz_singbox_114.sh"
@@ -464,6 +471,16 @@ jq -e '.reality.short_id == [""]' <<< "$empty_sid_tls" >/dev/null
 )
 [[ "$(split_host_port '[2001:db8::1]:8443' 443)" == '2001:db8::1|8443' ]]
 [[ "$(format_uri_host '2001:db8::1')" == '[2001:db8::1]' ]]
+(
+    get_public_ip() { echo '203.0.113.10'; }
+    get_subscription_domain_hint() { echo 'global.example.com'; }
+    [[ "$(get_subscription_access_host_hint)" == '203.0.113.10' ]]
+    [[ "$(format_subscription_url_host '2001:db8::10')" == '[2001:db8::10]' ]]
+    : > "$TMP_DIR/subscription-firewall-calls"
+    ensure_firewall_port_rule() { printf '%s\n' "$*" >> "$TMP_DIR/subscription-firewall-calls"; }
+    ensure_subscription_firewall_access 18080
+    grep -q '^18080 tcp$' "$TMP_DIR/subscription-firewall-calls"
+)
 tunnel_node='{"port":"21001","tunnel_domain":"https://[2001:db8::8]:8443/proxy?token=test"}'
 [[ "$(resolve_subscription_host "$tunnel_node")" == '2001:db8::8' ]]
 [[ "$(resolve_subscription_port "$tunnel_node")" == '8443' ]]
@@ -548,6 +565,51 @@ tunnel_node='{"port":"21001","tunnel_domain":"https://[2001:db8::8]:8443/proxy?t
     grep -q 'allow 22000:22100/udp' "$TMP_DIR/firewall-calls"
     grep -q 'allow 21007/tcp' "$TMP_DIR/firewall-calls"
     grep -q 'allow 21007/udp' "$TMP_DIR/firewall-calls"
+)
+(
+    PORT_HOPPING_SERVICE_FILE="$TMP_DIR/sing-box-port-hopping.service"
+    PORT_HOPPING_SYSTEMD_RUNTIME_DIR="$TMP_DIR/systemd-runtime"
+    PORT_HOPPING_IPTABLES_DIR="$TMP_DIR/no-iptables-dir"
+    PORT_HOPPING_SYSCONFIG_DIR="$TMP_DIR/no-sysconfig-dir"
+    MANAGER_SCRIPT="$TMP_DIR/mock-manager"
+    mkdir -p "$PORT_HOPPING_SYSTEMD_RUNTIME_DIR"
+    printf '#!/bin/sh\n' > "$MANAGER_SCRIPT"
+    chmod +x "$MANAGER_SCRIPT"
+    : > "$TMP_DIR/systemctl-calls"
+    netfilter-persistent() { return 1; }
+    systemctl() { printf '%s\n' "$*" >> "$TMP_DIR/systemctl-calls"; }
+    persist_port_hopping_rules
+    grep -q "ExecStart=${MANAGER_SCRIPT} --restore-port-hopping" "$PORT_HOPPING_SERVICE_FILE"
+    grep -q '^daemon-reload$' "$TMP_DIR/systemctl-calls"
+    grep -q '^enable sing-box-port-hopping.service$' "$TMP_DIR/systemctl-calls"
+)
+(
+    NODES_FILE="$TMP_DIR/port-hopping-nodes.json"
+    printf '%s\n' '{"nodes":[]}' > "$NODES_FILE"
+    : > "$TMP_DIR/iptables-calls"
+    rm -f "$TMP_DIR/persist-called"
+    ip() { printf '%s\n' 'default via 192.0.2.1 dev eth0'; }
+    iptables() {
+        printf '%s\n' "$*" >> "$TMP_DIR/iptables-calls"
+        [[ "$*" != *' -C '* ]]
+    }
+    ip6tables() {
+        [[ "$*" != *' -C '* ]]
+    }
+    persist_port_hopping_rules() { : > "$TMP_DIR/persist-called"; return 1; }
+    apply_port_hopping_rules 21005 22000:22100 false
+    [[ ! -e "$TMP_DIR/persist-called" ]]
+    grep -q -- '--dport 22000:22100 -j REDIRECT --to-ports 21005' "$TMP_DIR/iptables-calls"
+)
+(
+    # shellcheck source=/dev/null
+    source "$ROOT_DIR/modules/config.sh"
+    restore_nodes="$TMP_DIR/restore-port-hopping.json"
+    printf '%s\n' '{"nodes":[{"protocol":"hysteria2","port":"21005","extra":{"port_hopping":"22000:22100"}}]}' > "$restore_nodes"
+    : > "$TMP_DIR/restore-port-hopping-calls"
+    apply_port_hopping_rules() { printf '%s\n' "$*" >> "$TMP_DIR/restore-port-hopping-calls"; }
+    restore_port_hopping_rules_from_nodes_file "$restore_nodes"
+    grep -q '^21005 22000:22100 false$' "$TMP_DIR/restore-port-hopping-calls"
 )
 
 (
